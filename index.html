@@ -84,6 +84,8 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
 .chip{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:500;cursor:pointer;white-space:nowrap}
 .chip-shift{background:var(--pl);color:var(--pd);border:1px solid #CECBF6}
 .chip-shift:hover{background:#CECBF6}
+.chip-draft{background:var(--s3);color:var(--t2);border:1px dashed var(--border2)}
+.chip-draft:hover{background:var(--border);color:var(--text)}
 .chip-leave{background:var(--al);color:var(--ad);border:1px solid #FAC775}
 .chip-sick{background:var(--rl);color:var(--rd);border:1px solid #F7C1C1}
 .chip-ot{background:var(--gl);color:var(--gd);border:1px solid #C0DD97}
@@ -293,7 +295,8 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
       <div id="roster-pharma-alerts" style="margin-bottom:6px"></div>
       <div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:10px">
         <span style="color:var(--t2)">Legend:</span>
-        <span class="chip chip-shift" style="cursor:default">Shift</span>
+        <span class="chip chip-shift" style="cursor:default">Published shift</span>
+        <span class="chip chip-draft" style="cursor:default">Draft shift</span>
         <span class="chip chip-leave" style="cursor:default">Annual leave</span>
         <span class="chip chip-sick" style="cursor:default">Sick</span>
         <span class="chip chip-ot" style="cursor:default">OT</span>
@@ -586,12 +589,20 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
     </div>
     <div id="tmpl-create" style="display:none">
       <div class="fr"><label>Template name</label><input type="text" id="tmpl-name" placeholder="e.g. Standard week, Weekend crew"></div>
-      <p style="font-size:11px;color:var(--t2);margin-bottom:8px">Add shifts by day of week:</p>
+      <p style="font-size:11px;color:var(--t2);margin-bottom:6px">Add shifts by day of week. Break is in minutes.</p>
+      <div style="display:grid;grid-template-columns:80px 1fr 70px 70px 55px auto;gap:5px;margin-bottom:4px;padding:0 0 4px;border-bottom:1px solid var(--border)">
+        <span style="font-size:10px;font-weight:600;color:var(--t3)">Day</span>
+        <span style="font-size:10px;font-weight:600;color:var(--t3)">Staff member</span>
+        <span style="font-size:10px;font-weight:600;color:var(--t3)">Start</span>
+        <span style="font-size:10px;font-weight:600;color:var(--t3)">End</span>
+        <span style="font-size:10px;font-weight:600;color:var(--t3)">Break</span>
+        <span></span>
+      </div>
       <div id="tmpl-shift-list" style="margin-bottom:10px"></div>
       <button class="btn btn-sm" onclick="addTemplateShiftRow()">+ Add shift row</button>
       <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
         <button class="btn" onclick="CM('m-template')">Cancel</button>
-        <button class="btn btn-primary" onclick="saveTemplate()">Save template</button>
+        <button class="btn btn-primary" id="tmpl-save-btn" onclick="saveTemplate()">Save template</button>
       </div>
     </div>
     <div id="tmpl-manage" style="display:none">
@@ -1180,11 +1191,12 @@ function renderRoster(){
 
       // Shift chips — clicking opens the action popup instead of shift detail
       dayShifts.forEach(s=>{
-        const pubDot=s.published?'':'<span style="opacity:.5;margin-right:1px">·</span>';
+        const chipClass=s.published?'chip-shift':'chip-draft';
+        const pubDot=s.published?'':'';
         const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
         const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
         content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="openShiftPopup(event,'${s.id}')">
-          <span class="chip chip-shift" style="width:100%;justify-content:center" title="${s.published?'Published':'Draft — click to manage'}">${pubDot}${s.start}–${s.end}</span>
+          <span class="chip ${chipClass}" style="width:100%;justify-content:center" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">${s.start}–${s.end}</span>
           ${otBadge}
         </div>`;
       });
@@ -1732,16 +1744,27 @@ function confirmSickQuick(){
 }
 
 // TEMPLATES
+let editingTemplateId = null;
+
 function openTemplateModal(){
+  editingTemplateId = null;
   popTemplateSelect();
   document.getElementById('tmpl-week').value=FD(currentWeekStart);
   document.getElementById('tmpl-shift-list').innerHTML='';
+  document.getElementById('tmpl-name').value='';
   OM('m-template');
 }
 function tmplTab(t,el){
   document.querySelectorAll('#m-template .tab').forEach(x=>x.classList.remove('active'));el.classList.add('active');
   ['apply','create','manage'].forEach(x=>document.getElementById('tmpl-'+x).style.display=x===t?'block':'none');
   if(t==='manage') renderTemplateMgmt();
+  if(t==='create'&&!editingTemplateId){
+    // Reset form when switching to create tab fresh
+    document.getElementById('tmpl-name').value='';
+    document.getElementById('tmpl-shift-list').innerHTML='';
+    document.getElementById('tmpl-save-btn').textContent='Save template';
+    editingTemplateId=null;
+  }
 }
 function popTemplateSelect(){
   const tmpls=DB.get('rosterTemplates')||[];
@@ -1752,7 +1775,9 @@ function previewTemplate(){
   const id=document.getElementById('tmpl-select').value;
   const tmpls=DB.get('rosterTemplates')||[];const t=tmpls.find(x=>x.id===id);if(!t){document.getElementById('tmpl-preview').innerHTML='';return;}
   const staff=DB.get('staff')||[];
-  document.getElementById('tmpl-preview').innerHTML=`<p style="font-size:11px;color:var(--t2);margin-bottom:6px">This template contains ${t.shifts.length} shift(s):</p>`+t.shifts.map(s=>{const e=staff.find(x=>x.id===s.empId);return`<div style="font-size:11px;padding:4px 0;border-bottom:1px solid var(--border)">${DAYS[s.dayOfWeek]} · ${e?e.first+' '+e.last:'?'} · ${s.start}–${s.end}</div>`}).join('');
+  document.getElementById('tmpl-preview').innerHTML=
+    `<p style="font-size:11px;color:var(--t2);margin-bottom:6px">This template contains ${t.shifts.length} shift(s):</p>`+
+    t.shifts.map(s=>{const e=staff.find(x=>x.id===s.empId);return`<div style="font-size:11px;padding:4px 0;border-bottom:1px solid var(--border)">${DAYS[s.dayOfWeek]} · ${e?e.first+' '+e.last:'?'} · ${s.start}–${s.end}${s.breakMin?` · ${s.breakMin}m break`:''}</div>`;}).join('');
 }
 function applyTemplate(){
   const id=document.getElementById('tmpl-select').value;const weekDate=document.getElementById('tmpl-week').value;
@@ -1764,29 +1789,83 @@ function applyTemplate(){
     const emp=(DB.get('staff')||[]).find(e=>e.id===s.empId);
     shifts.push({id:'sh'+Date.now()+Math.random().toString(36).slice(2),empId:s.empId,date:FD(d),start:s.start,end:s.end,breakMin:s.breakMin||30,role:emp?emp.role:'',notes:'',published:false,status:'draft',templateId:id});
   });
-  DB.set('shifts',shifts);CM('m-template');renderRoster();alert(`Template "${t.name}" applied!`);
+  DB.set('shifts',shifts);CM('m-template');renderRoster();alert(`Template "${t.name}" applied as draft shifts.`);
 }
-function addTemplateShiftRow(){
+function addTemplateShiftRow(dayVal, empVal, startVal, endVal, breakVal){
   const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
   const div=document.createElement('div');
-  div.style.cssText='display:grid;grid-template-columns:auto 1fr auto auto auto;gap:6px;align-items:center;margin-bottom:6px';
-  div.innerHTML=`<select style="font-size:11px">${DAYS.map((d,i)=>`<option value="${i}">${d}</option>`).join('')}</select><select style="font-size:11px">${staff.map(s=>`<option value="${s.id}">${s.first} ${s.last}</option>`).join('')}</select><input type="time" value="09:00" style="width:75px"><input type="time" value="17:00" style="width:75px"><button onclick="this.parentNode.remove()" style="color:var(--rd);font-size:14px;cursor:pointer">×</button>`;
+  div.style.cssText='display:grid;grid-template-columns:80px 1fr 70px 70px 55px auto;gap:5px;align-items:center;margin-bottom:6px;padding:6px;background:var(--s2);border-radius:var(--rsm)';
+  div.innerHTML=`
+    <select style="font-size:11px">${DAYS.map((d,i)=>`<option value="${i}" ${i===(dayVal||0)?'selected':''}>${d}</option>`).join('')}</select>
+    <select style="font-size:11px">${staff.map(s=>`<option value="${s.id}" ${s.id===empVal?'selected':''}>${s.first} ${s.last}</option>`).join('')}</select>
+    <input type="time" value="${startVal||'09:00'}" style="font-size:11px">
+    <input type="time" value="${endVal||'17:00'}" style="font-size:11px">
+    <input type="number" value="${breakVal||30}" min="0" max="120" placeholder="Brk" style="font-size:11px" title="Break minutes">
+    <button onclick="this.closest('div').remove()" style="color:var(--rd);font-size:16px;cursor:pointer;border:none;background:none;line-height:1;flex-shrink:0">×</button>`;
   document.getElementById('tmpl-shift-list').appendChild(div);
 }
 function saveTemplate(){
-  const name=document.getElementById('tmpl-name').value.trim();if(!name){alert('Template name required');return;}
+  const name=document.getElementById('tmpl-name').value.trim();
+  if(!name){alert('Template name required.');return;}
   const rows=document.getElementById('tmpl-shift-list').querySelectorAll('div');
+  if(!rows.length){alert('Add at least one shift row.');return;}
   const shifts=[];
-  rows.forEach(r=>{const sels=r.querySelectorAll('select');const inps=r.querySelectorAll('input');shifts.push({dayOfWeek:parseInt(sels[0].value),empId:sels[1].value,start:inps[0].value,end:inps[1].value,breakMin:30});});
+  rows.forEach(r=>{
+    const sels=r.querySelectorAll('select');
+    const inps=r.querySelectorAll('input');
+    if(sels.length>=2&&inps.length>=2){
+      shifts.push({dayOfWeek:parseInt(sels[0].value),empId:sels[1].value,start:inps[0].value,end:inps[1].value,breakMin:parseInt(inps[2]?.value)||30});
+    }
+  });
   const tmpls=DB.get('rosterTemplates')||[];
-  tmpls.push({id:'t'+Date.now(),name,shifts});DB.set('rosterTemplates',tmpls);
-  CM('m-template');alert(`Template "${name}" saved!`);
+  if(editingTemplateId){
+    const idx=tmpls.findIndex(t=>t.id===editingTemplateId);
+    if(idx>=0) tmpls[idx]={...tmpls[idx],name,shifts};
+  } else {
+    tmpls.push({id:'t'+Date.now(),name,shifts});
+  }
+  DB.set('rosterTemplates',tmpls);
+  CM('m-template');
+  editingTemplateId=null;
+  alert(`Template "${name}" ${editingTemplateId?'updated':'saved'}!`);
+}
+function editTemplate(id){
+  const tmpls=DB.get('rosterTemplates')||[];
+  const t=tmpls.find(x=>x.id===id);if(!t)return;
+  editingTemplateId=id;
+  // Switch to create tab
+  const createTab=document.querySelector('#m-template .tab:nth-child(2)');
+  if(createTab) tmplTab('create',createTab);
+  document.getElementById('tmpl-name').value=t.name;
+  document.getElementById('tmpl-shift-list').innerHTML='';
+  t.shifts.forEach(s=>addTemplateShiftRow(s.dayOfWeek,s.empId,s.start,s.end,s.breakMin));
+  document.getElementById('tmpl-save-btn').textContent='Update template';
 }
 function renderTemplateMgmt(){
   const tmpls=DB.get('rosterTemplates')||[];
-  document.getElementById('tmpl-list').innerHTML=tmpls.length?tmpls.map(t=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:12px"><div><strong>${t.name}</strong><span style="color:var(--t2);margin-left:6px">${t.shifts.length} shifts</span></div><button class="btn btn-sm btn-danger" onclick="deleteTemplate('${t.id}')">Delete</button></div>`).join(''):'<p style="color:var(--t2);font-size:12px">No templates saved.</p>';
+  const staff=DB.get('staff')||[];
+  document.getElementById('tmpl-list').innerHTML=tmpls.length?tmpls.map(t=>`
+    <div style="border:1px solid var(--border);border-radius:var(--rsm);padding:10px;margin-bottom:8px;background:var(--surface)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div>
+          <strong style="font-size:13px">${t.name}</strong>
+          <span style="color:var(--t2);margin-left:8px;font-size:11px">${t.shifts.length} shift${t.shifts.length!==1?'s':''}</span>
+        </div>
+        <div style="display:flex;gap:5px">
+          <button class="btn btn-sm btn-primary" onclick="editTemplate('${t.id}')">✏️ Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteTemplate('${t.id}')">Delete</button>
+        </div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:6px">
+        ${t.shifts.map(s=>{const e=staff.find(x=>x.id===s.empId);return`<div style="font-size:11px;color:var(--t2);padding:2px 0">${DAYS[s.dayOfWeek]} · ${e?e.first+' '+e.last:'?'} · ${s.start}–${s.end} · ${s.breakMin||30}m break</div>`;}).join('')}
+      </div>
+    </div>`).join(''):'<p style="color:var(--t2);font-size:12px">No templates saved yet.</p>';
 }
-function deleteTemplate(id){if(!confirm('Delete this template?'))return;DB.set('rosterTemplates',(DB.get('rosterTemplates')||[]).filter(t=>t.id!==id));renderTemplateMgmt();}
+function deleteTemplate(id){
+  if(!confirm('Delete this template? This cannot be undone.'))return;
+  DB.set('rosterTemplates',(DB.get('rosterTemplates')||[]).filter(t=>t.id!==id));
+  renderTemplateMgmt();
+}
 
 // OT TRACKER
 let otFilter='pending';

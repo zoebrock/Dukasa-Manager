@@ -1189,9 +1189,10 @@ function renderRoster(){
         </div>`;
       });
 
-      // Status chips
-      if(isSick) content+=`<span class="chip chip-sick chip-small">🤒 Sick</span>`;
-      else if(onLeave&&!dayShifts.length) content+=`<span class="chip chip-leave chip-small">${onLeave.type.replace(' Leave','').replace(' leave','')}</span>`;
+      // Status chips — clickable for sick/leave management
+      if(isSick) content+=`<span class="chip chip-sick chip-small" style="cursor:pointer" onclick="openSickPopup(event,'${emp.id}','${ds}')" title="Click to manage sick day">🤒 Sick</span>`;
+      else if(onLeave&&!dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">${onLeave.type.replace(' Leave','').replace(' leave','')}</span>`;
+      else if(onLeave&&dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer;font-size:8px" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">🏖 Leave</span>`;
       if(showAvail&&!avail&&!dayShifts.length&&!onLeave&&!isSick) content+=`<span class="chip chip-unavail chip-small">Unavail.</span>`;
 
       // Only show + button if no shifts exist for this day
@@ -1223,62 +1224,65 @@ function openShiftPopup(event, shiftId) {
   const s=(DB.get('shifts')||[]).find(x=>x.id===shiftId); if(!s) return;
   const emp=(DB.get('staff')||[]).find(e=>e.id===s.empId);
   const sickDays=DB.get('sickDays')||[];
+  const leaveReqs=DB.get('leaveRequests')||[];
   const alreadySick=sickDays.find(sk=>sk.empId===s.empId&&sk.date===s.date);
+  const activeLeave=leaveReqs.find(l=>l.empId===s.empId&&l.status==='approved'&&l.from<=s.date&&l.to>=s.date);
   const otReqs=(DB.get('otRequests')||[]).filter(o=>o.empId===s.empId&&o.date===s.date&&o.approved);
   const empName=emp?emp.first+' '+emp.last:'?';
   const hrs=SH(s).toFixed(1);
+  const dow=new Date(s.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long'});
 
-  // Overlay to catch outside clicks
   const overlay=document.createElement('div');
   overlay.className='shift-popup-overlay';
   overlay.id='shift-popup-overlay';
   overlay.onclick=closeShiftPopup;
   document.body.appendChild(overlay);
 
-  // Build popup
   const popup=document.createElement('div');
   popup.className='shift-popup';
   popup.id='shift-popup';
 
-  const otInfo=otReqs.length?`<div style="margin-top:4px"><span class="chip chip-ot chip-small">OT: ${otReqs.map(o=>o.start+'–'+o.end).join(', ')}</span></div>`:'';
+  const otInfo=otReqs.length?`<div style="margin-top:4px">${otReqs.map(o=>`<span class="chip chip-ot chip-small">OT ${o.start}–${o.end}</span>`).join(' ')}</div>`:'';
   const pubBadge=s.published
-    ?`<span class="badge bg" style="font-size:9px">Published</span>`
-    :`<span class="badge ba" style="font-size:9px">Draft</span>`;
+    ?`<span class="badge bg" style="font-size:9px">✓ Published</span>`
+    :`<span class="badge ba" style="font-size:9px">· Draft</span>`;
+  const sickBanner=alreadySick?`<div style="margin-top:5px;padding:4px 8px;background:var(--rl);color:var(--rd);border-radius:4px;font-size:11px;font-weight:600">🤒 Sick day recorded</div>`:'';
+  const leaveBanner=activeLeave?`<div style="margin-top:5px;padding:4px 8px;background:var(--al);color:var(--ad);border-radius:4px;font-size:11px;font-weight:600">🏖 On approved leave</div>`:'';
 
   popup.innerHTML=`
-    <div class="shift-popup-title">${empName}</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="shift-popup-title" style="margin:0">${empName}</div>
+      <button onclick="closeShiftPopup()" style="color:var(--t3);font-size:16px;cursor:pointer;border:none;background:none;line-height:1">×</button>
+    </div>
     <div class="shift-popup-info">
-      <div>${FDS(s.date)} · ${FDOW(s.date)||new Date(s.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short'})}</div>
-      <div style="font-size:15px;margin:3px 0">${s.start} – ${s.end} <span style="font-size:11px;color:var(--t2)">(${hrs}h · ${s.breakMin}m break)</span></div>
-      <div style="margin-top:4px">${pubBadge}</div>
-      ${otInfo}
-      ${s.notes?`<div style="margin-top:5px;font-size:11px;color:var(--t2)">${s.notes}</div>`:''}
+      <div style="font-size:11px;color:var(--t2)">${dow}, ${FDS(s.date)}</div>
+      <div style="font-size:15px;font-weight:700;margin:3px 0">${s.start} – ${s.end}</div>
+      <div style="font-size:11px;color:var(--t2)">${hrs}h · ${s.breakMin||0}m break</div>
+      <div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">${pubBadge}</div>
+      ${otInfo}${sickBanner}${leaveBanner}
+      ${s.notes?`<div style="margin-top:5px;font-size:11px;color:var(--t2);font-style:italic">${s.notes}</div>`:''}
     </div>
     <div class="shift-popup-row">
       <button class="shift-popup-btn" onclick="closeShiftPopup();editShiftPopup('${shiftId}')">✏️ Edit shift</button>
-      ${!alreadySick?`<button class="shift-popup-btn" onclick="closeShiftPopup();openQuickSick('${shiftId}')">🤒 Mark as sick day</button>`:''}
-      ${s.published?`<button class="shift-popup-btn" onclick="closeShiftPopup();openAddOTModal(null,'${s.empId}','${s.date}')">⏰ Add OT to this shift</button>`:''}
+      ${!alreadySick
+        ?`<button class="shift-popup-btn" onclick="closeShiftPopup();openQuickSick('${shiftId}')">🤒 Mark as sick day</button>`
+        :`<button class="shift-popup-btn" onclick="closeShiftPopup();deleteSickDay('${s.empId}','${s.date}')">↩ Remove sick day (revert to rostered)</button>`
+      }
+      ${!activeLeave
+        ?`<button class="shift-popup-btn" onclick="closeShiftPopup();openLeaveFromShift('${s.empId}','${s.date}')">🏖 Record as leave</button>`
+        :`<button class="shift-popup-btn" onclick="closeShiftPopup();removeLeaveFromShift('${activeLeave.id}')">↩ Remove leave record</button>`
+      }
+      ${s.published?`<button class="shift-popup-btn" onclick="closeShiftPopup();openAddOTModal(null,'${s.empId}','${s.date}')">⏰ Add / manage OT</button>`:''}
       <button class="shift-popup-btn danger" onclick="closeShiftPopup();deleteShiftConfirm('${shiftId}')">🗑 Delete shift</button>
     </div>`;
 
   document.body.appendChild(popup);
-
-  // Position popup near click, keeping within viewport
-  const vw=window.innerWidth, vh=window.innerHeight;
-  const pw=280, ph=240;
-  let left=event.clientX+8, top=event.clientY+8;
-  if(left+pw>vw-8) left=event.clientX-pw-8;
-  if(top+ph>vh-8) top=event.clientY-ph-8;
-  if(top<8) top=8;
-  popup.style.left=left+'px';
-  popup.style.top=top+'px';
+  positionPopup(popup, event);
 }
 
 function closeShiftPopup() {
-  const p=document.getElementById('shift-popup');
-  const o=document.getElementById('shift-popup-overlay');
-  if(p) p.remove();
-  if(o) o.remove();
+  document.getElementById('shift-popup')?.remove();
+  document.getElementById('shift-popup-overlay')?.remove();
 }
 
 function editShiftPopup(shiftId) {
@@ -1292,10 +1296,203 @@ function deleteShiftConfirm(shiftId) {
   deleteShift();
 }
 
-// Close popup on Escape key (supplement to existing keydown handler)
-document.addEventListener('keydown', e=>{
-  if(e.key==='Escape') closeShiftPopup();
-});
+// ── DELETE SICK DAY — reverts staff member back to their rostered hours ──
+function deleteSickDay(empId, date) {
+  if(!confirm('Remove this sick day? The staff member will revert to their rostered hours.')) return;
+  let sickDays=DB.get('sickDays')||[];
+  sickDays=sickDays.filter(sk=>!(sk.empId===empId&&sk.date===date));
+  DB.set('sickDays',sickDays);
+  // Also remove any uploaded MC for this date
+  let mcs=DB.get('medCerts')||[];
+  mcs=mcs.filter(m=>!(m.empId===empId&&m.date===date));
+  DB.set('medCerts',mcs);
+  renderRoster();
+  renderDashboard();
+  // Notify staff their sick day was removed
+  const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
+  const shift=(DB.get('shifts')||[]).find(s=>s.empId===empId&&s.date===date&&s.published);
+  if(emp&&shift){
+    _gasPost({action:'sendEmail',fn:'sendShiftUpdateEmail',payload:{
+      empId,date,start:shift.start,end:shift.end,breakMin:shift.breakMin,
+      isNew:false,note:'Your sick day has been removed. You are rostered on as originally scheduled.'
+    }}).then(r=>console.log('Sick removal email sent:',r)).catch(err=>console.error('Sick removal email failed:',err));
+  }
+  const el=document.getElementById('pub-status');
+  if(el){el.style.display='block';el.textContent='Sick day removed — staff member notified.';setTimeout(()=>el.style.display='none',4000);}
+}
+
+// ── RECORD LEAVE FROM SHIFT POPUP ──
+function openLeaveFromShift(empId, date) {
+  const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
+  // Build a quick inline modal
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay open';
+  overlay.id='m-leave-from-shift';
+  overlay.innerHTML=`
+    <div class="modal">
+      <div class="mh">
+        <h2>Record leave — ${emp?emp.first+' '+emp.last:'?'}</h2>
+        <button class="xbtn" onclick="document.getElementById('m-leave-from-shift').remove()">×</button>
+      </div>
+      <div style="font-size:12px;color:var(--t2);margin-bottom:12px">Date: <strong>${FDL(date)}</strong></div>
+      <div class="fr">
+        <label>Leave type</label>
+        <select id="lfs-type" class="">
+          <option>Annual Leave</option>
+          <option>Sick Leave</option>
+          <option>Personal Leave</option>
+          <option>Carers Leave</option>
+          <option>Parental Leave</option>
+          <option>Unpaid Leave</option>
+        </select>
+      </div>
+      <div class="fg">
+        <div class="fr"><label>From</label><input type="date" id="lfs-from" value="${date}"></div>
+        <div class="fr"><label>To</label><input type="date" id="lfs-to" value="${date}"></div>
+      </div>
+      <div class="fr"><label>Notes (optional)</label><textarea id="lfs-notes" rows="2" placeholder="Reason or notes..."></textarea></div>
+      <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+        <button class="btn" onclick="document.getElementById('m-leave-from-shift').remove()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveLeaveFromShift('${empId}')">Save &amp; notify</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+function saveLeaveFromShift(empId) {
+  const type=document.getElementById('lfs-type')?.value;
+  const from=document.getElementById('lfs-from')?.value;
+  const to=document.getElementById('lfs-to')?.value;
+  const notes=(document.getElementById('lfs-notes')?.value||'').trim();
+  if(!from||!to||from>to){alert('Please enter valid dates.');return;}
+  const reqs=DB.get('leaveRequests')||[];
+  const newLeave={
+    id:'lr'+Date.now(),empId,type,from,to,notes,
+    status:'approved',
+    syncedToRoster:true,syncedToLeaveTracker:true,
+    submitted:new Date().toISOString(),
+    processedAt:new Date().toISOString()
+  };
+  reqs.push(newLeave);
+  DB.set('leaveRequests',reqs);
+  document.getElementById('m-leave-from-shift')?.remove();
+  renderRoster();renderDashboard();
+  // Notify staff member
+  _gasPost({action:'sendEmail',fn:'sendLeaveDecisionEmail',payload:{
+    empId,decision:'approved',type,from,to,notes,denialReason:''
+  }}).then(r=>console.log('Leave from shift email:',r)).catch(err=>console.error('Leave from shift email failed:',err));
+  // Also notify manager (in case they're logging this for someone else)
+  _gasPost({action:'sendEmail',fn:'sendLeaveAddedEmail',payload:{
+    empId,type,from,to,status:'approved',notes
+  }}).catch(()=>{});
+  const el=document.getElementById('pub-status');
+  if(el){el.style.display='block';el.textContent='Leave recorded and staff member notified.';setTimeout(()=>el.style.display='none',4000);}
+}
+
+function removeLeaveFromShift(leaveId) {
+  if(!confirm('Remove this leave record? The shift will revert to rostered. The staff member will be notified.')) return;
+  let reqs=DB.get('leaveRequests')||[];
+  const lr=reqs.find(l=>l.id===leaveId);
+  if(!lr) return;
+  reqs=reqs.filter(l=>l.id!==leaveId);
+  DB.set('leaveRequests',reqs);
+  renderRoster();renderDashboard();
+  // Notify staff
+  const emp=(DB.get('staff')||[]).find(s=>s.id===lr.empId);
+  const shift=(DB.get('shifts')||[]).find(s=>s.empId===lr.empId&&s.date>=lr.from&&s.date<=lr.to&&s.published);
+  if(emp&&shift){
+    _gasPost({action:'sendEmail',fn:'sendShiftUpdateEmail',payload:{
+      empId:lr.empId,date:lr.from,start:shift.start,end:shift.end,breakMin:shift.breakMin,
+      isNew:false,note:'Your leave record has been removed. You are rostered on as originally scheduled.'
+    }}).catch(()=>{});
+  }
+  const el=document.getElementById('pub-status');
+  if(el){el.style.display='block';el.textContent='Leave removed — staff member notified.';setTimeout(()=>el.style.display='none',4000);}
+}
+
+// ── SICK DAY POPUP (from roster chip) ──────────────────────────
+function openSickPopup(event, empId, date) {
+  event.stopPropagation();
+  closeShiftPopup();
+  const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
+  const sk=(DB.get('sickDays')||[]).find(s=>s.empId===empId&&s.date===date);
+  const mc=(DB.get('medCerts')||[]).find(m=>m.empId===empId&&m.date===date);
+  const shift=(DB.get('shifts')||[]).find(s=>s.empId===empId&&s.date===date&&s.published);
+  const empName=emp?emp.first+' '+emp.last:'?';
+
+  const overlay=document.createElement('div');
+  overlay.className='shift-popup-overlay';overlay.id='shift-popup-overlay';
+  overlay.onclick=closeShiftPopup;document.body.appendChild(overlay);
+
+  const popup=document.createElement('div');
+  popup.className='shift-popup';popup.id='shift-popup';
+  popup.innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="shift-popup-title" style="margin:0">${empName}</div>
+      <button onclick="closeShiftPopup()" style="color:var(--t3);font-size:16px;cursor:pointer;border:none;background:none">×</button>
+    </div>
+    <div class="shift-popup-info">
+      <div style="font-size:11px;color:var(--t2)">${new Date(date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long'})}</div>
+      <div style="margin:5px 0"><span class="chip chip-sick">🤒 Sick day recorded</span></div>
+      ${shift?`<div style="font-size:11px;color:var(--t2)">Rostered: ${shift.start}–${shift.end} (${SH(shift).toFixed(1)}h)</div>`:''}
+      ${mc?`<div style="margin-top:4px"><span class="badge bg" style="font-size:9px">✓ MC uploaded</span></div>`:`<div style="margin-top:4px"><span class="badge ba" style="font-size:9px">⚠ MC pending</span></div>`}
+      ${sk?.notes?`<div style="margin-top:5px;font-size:11px;color:var(--t2);font-style:italic">${sk.notes}</div>`:''}
+    </div>
+    <div class="shift-popup-row">
+      ${mc?`<button class="shift-popup-btn" onclick="closeShiftPopup();viewMC('${mc.id}')">📎 View medical certificate</button>`:''}
+      <button class="shift-popup-btn danger" onclick="closeShiftPopup();deleteSickDay('${empId}','${date}')">↩ Remove sick day (revert to rostered)</button>
+    </div>`;
+  document.body.appendChild(popup);
+  positionPopup(popup, event);
+}
+
+// ── LEAVE POPUP (from roster chip) ─────────────────────────────
+function openLeavePopup(event, leaveId) {
+  event.stopPropagation();
+  closeShiftPopup();
+  const lr=(DB.get('leaveRequests')||[]).find(l=>l.id===leaveId);
+  if(!lr) return;
+  const emp=(DB.get('staff')||[]).find(s=>s.id===lr.empId);
+  const empName=emp?emp.first+' '+emp.last:'?';
+
+  const overlay=document.createElement('div');
+  overlay.className='shift-popup-overlay';overlay.id='shift-popup-overlay';
+  overlay.onclick=closeShiftPopup;document.body.appendChild(overlay);
+
+  const popup=document.createElement('div');
+  popup.className='shift-popup';popup.id='shift-popup';
+  const bc={approved:'bg',pending:'ba',declined:'br'}[lr.status]||'ba';
+  popup.innerHTML=`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="shift-popup-title" style="margin:0">${empName}</div>
+      <button onclick="closeShiftPopup()" style="color:var(--t3);font-size:16px;cursor:pointer;border:none;background:none">×</button>
+    </div>
+    <div class="shift-popup-info">
+      <div style="font-size:12px;font-weight:600">${lr.type}</div>
+      <div style="font-size:11px;color:var(--t2);margin-top:2px">${FDS(lr.from)} – ${FDS(lr.to)}</div>
+      <div style="margin-top:5px"><span class="badge ${bc}" style="font-size:9px">${lr.status}</span></div>
+      ${lr.notes?`<div style="margin-top:5px;font-size:11px;color:var(--t2);font-style:italic">${lr.notes}</div>`:''}
+    </div>
+    <div class="shift-popup-row">
+      <button class="shift-popup-btn" onclick="closeShiftPopup();openEditLeaveModal('${leaveId}')">✏️ Edit leave record</button>
+      <button class="shift-popup-btn danger" onclick="closeShiftPopup();removeLeaveFromShift('${leaveId}')">↩ Remove leave (revert to rostered)</button>
+    </div>`;
+  document.body.appendChild(popup);
+  positionPopup(popup, event);
+}
+
+function positionPopup(popup, event) {
+  const vw=window.innerWidth, vh=window.innerHeight;
+  const pw=290, ph=350;
+  let left=event.clientX+10, top=event.clientY+10;
+  if(left+pw>vw-10) left=Math.max(10, event.clientX-pw-10);
+  if(top+ph>vh-10) top=Math.max(10, vh-ph-10);
+  popup.style.left=left+'px';
+  popup.style.top=top+'px';
+}
+
+// Close popup on Escape
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeShiftPopup(); });
 
 // SHIFTS
 function openAddShiftModal(){

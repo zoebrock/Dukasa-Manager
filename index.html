@@ -74,11 +74,13 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
 .sc{background:var(--s2);border-radius:var(--rsm);padding:12px}
 .sc .sl{font-size:10px;color:var(--t2);margin-bottom:4px}.sc .sv{font-size:21px;font-weight:600}
 .roster-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--r);background:var(--surface)}
-.rt{width:100%;border-collapse:collapse;min-width:950px}
-.rt th{padding:8px 9px;font-size:10px;font-weight:600;color:var(--t2);background:var(--s2);border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
-.rt td{padding:6px 9px;border-bottom:1px solid var(--border);vertical-align:middle}
+.rt{width:100%;border-collapse:collapse;table-layout:fixed}
+.rt th{padding:7px 6px;font-size:10px;font-weight:600;color:var(--t2);background:var(--s2);border-bottom:1px solid var(--border);text-align:center;white-space:nowrap;overflow:hidden}
+.rt th:first-child{text-align:left;width:130px}
+.rt td{padding:5px 6px;border-bottom:1px solid var(--border);vertical-align:top;text-align:center}
+.rt td:first-child{text-align:left;vertical-align:middle}
 .rt tr:last-child td{border-bottom:none}.rt tr:hover td{background:var(--bg)}
-.sc-cell{display:flex;flex-wrap:wrap;gap:3px;min-height:30px;align-items:center}
+.sc-cell{display:flex;flex-direction:column;gap:3px;min-height:28px;align-items:center;justify-content:center}
 .chip{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:500;cursor:pointer;white-space:nowrap}
 .chip-shift{background:var(--pl);color:var(--pd);border:1px solid #CECBF6}
 .chip-shift:hover{background:#CECBF6}
@@ -132,6 +134,15 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
 .avail-badge{font-size:9px;padding:1px 4px;border-radius:3px;display:inline-block}
 .avail-y{background:var(--gl);color:var(--gd)}.avail-n{background:var(--rl);color:var(--rd)}
 .chip-small{font-size:9px;padding:1px 5px}
+.shift-popup-overlay{position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.35)}
+.shift-popup{position:fixed;z-index:301;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);box-shadow:0 8px 32px rgba(0,0,0,.18);padding:14px;min-width:220px;max-width:280px}
+.shift-popup-title{font-size:12px;font-weight:700;color:var(--t2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}
+.shift-popup-info{font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px}
+.shift-popup-row{display:flex;flex-direction:column;gap:5px}
+.shift-popup-btn{width:100%;text-align:left;padding:7px 10px;border-radius:var(--rsm);font-size:12px;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--s2);color:var(--text);transition:background .1s}
+.shift-popup-btn:hover{background:var(--s3)}
+.shift-popup-btn.danger{color:var(--rd);border-color:#F7C1C1;background:var(--rl)}
+.shift-popup-btn.danger:hover{background:#F7C1C1}
 .mc-drop{border:2px dashed var(--border2);border-radius:var(--rsm);padding:12px;text-align:center;cursor:pointer;transition:border-color .15s}
 .mc-drop:hover{border-color:var(--purple)}.mc-drop.has-file{border-color:var(--teal);background:var(--tl)}
 .ot-row-approved{background:#f0fdf5!important}
@@ -1143,36 +1154,148 @@ function renderRoster(){
   const leaveReqs=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');
   const sickDays=DB.get('sickDays')||[];
   const otReqs=(DB.get('otRequests')||[]).filter(o=>o.approved);
-  document.getElementById('r-head').innerHTML='<tr><th style="min-width:140px">Employee</th>'+days.map(d=>`<th>${FDISP(d)}</th>`).join('')+'</tr>';
+  const today=FD(new Date());
+
+  // Fixed-width table — name col 130px, remaining space split evenly across 7 days
+  document.getElementById('r-head').innerHTML=
+    '<tr><th style="width:130px">Employee</th>'+
+    days.map(d=>{
+      const ds=FD(d);
+      const isToday=ds===today;
+      return`<th style="${isToday?'background:var(--pl);color:var(--pd)':''}">${FDISP(d)}</th>`;
+    }).join('')+
+    '</tr>';
+
   document.getElementById('r-body').innerHTML=staff.map(emp=>{
-    const dn=dayName;
     const cells=days.map(d=>{
       const ds=FD(d);const dname=dayName(d);
-      const dayShifts=shifts.filter(s=>s.empId===emp.id&&s.date===ds);
+      const dayShifts=shifts.filter(s=>s.empId===emp.id&&s.date===ds&&!s.isOT);
       const onLeave=leaveReqs.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
       const isSick=sickDays.find(sk=>sk.empId===emp.id&&sk.date===ds);
       const hasOT=otReqs.filter(o=>o.empId===emp.id&&o.date===ds);
       const avail=emp.availability?emp.availability[dname]:true;
-      let chips='';
+      const isToday=ds===today;
+
+      let content='';
+
+      // Shift chips — clicking opens the action popup instead of shift detail
       dayShifts.forEach(s=>{
-        if(s.isOT) return;
-        const pubLabel=s.published?'':'·';
+        const pubDot=s.published?'':'<span style="opacity:.5;margin-right:1px">·</span>';
         const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
-        const otLabel=otAnns.map(a=>`<span class="chip chip-ot chip-small" style="font-size:9px;cursor:pointer" onclick="openOTDetailModal('${a.otId||''}','${s.id}')" title="Edit or delete this OT">OT ${a.start}–${a.end}</span>`).join('');
-        chips+=`<div style="display:flex;align-items:center;gap:2px;flex-wrap:wrap">
-          <span class="chip chip-shift" onclick="openShiftDetail('${s.id}')" title="${s.published?'Published':'Draft'}">${pubLabel}${s.start}–${s.end}</span>
-          ${otLabel}
+        const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
+        content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="openShiftPopup(event,'${s.id}')">
+          <span class="chip chip-shift" style="width:100%;justify-content:center" title="${s.published?'Published':'Draft — click to manage'}">${pubDot}${s.start}–${s.end}</span>
+          ${otBadge}
         </div>`;
       });
-      if(isSick) chips+=`<span class="chip chip-sick chip-small">Sick</span>`;
-      if(onLeave&&!isSick) chips+=`<span class="chip chip-leave chip-small">${onLeave.type.replace(' Leave','')}</span>`;
-      if(showAvail&&!avail&&!dayShifts.length) chips+=`<span class="chip chip-unavail chip-small">Unavail.</span>`;
-      return `<td><div class="sc-cell">${chips}<button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')">+</button></div></td>`;
+
+      // Status chips
+      if(isSick) content+=`<span class="chip chip-sick chip-small">🤒 Sick</span>`;
+      else if(onLeave&&!dayShifts.length) content+=`<span class="chip chip-leave chip-small">${onLeave.type.replace(' Leave','').replace(' leave','')}</span>`;
+      if(showAvail&&!avail&&!dayShifts.length&&!onLeave&&!isSick) content+=`<span class="chip chip-unavail chip-small">Unavail.</span>`;
+
+      // Only show + button if no shifts exist for this day
+      const hasShifts=dayShifts.length>0;
+      const addBtn=!hasShifts?`<button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift">+</button>`:'';
+
+      const cellStyle=isToday?'background:rgba(83,74,183,.04)':'';
+      return `<td style="${cellStyle}"><div class="sc-cell">${content}${addBtn}</div></td>`;
     }).join('');
-    const av=INI(emp);
-    return `<tr><td><div class="enc"><div class="av" style="background:${emp.color}22;color:${emp.color}">${av}</div><div><div style="font-weight:500;font-size:11px">${emp.first} ${emp.last}</div><span class="badge ${ROLE_BADGE[emp.role]||'bp'}" style="font-size:8px">${emp.role}</span></div></div></td>${cells}</tr>`;
+
+    return `<tr>
+      <td><div class="enc">
+        <div class="av" style="background:${emp.color}22;color:${emp.color}">${INI(emp)}</div>
+        <div>
+          <div style="font-weight:500;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:85px">${emp.first} ${emp.last}</div>
+          <span class="badge ${ROLE_BADGE[emp.role]||'bp'}" style="font-size:8px">${emp.role}</span>
+        </div>
+      </div></td>
+      ${cells}
+    </tr>`;
   }).join('');
 }
+
+// ── SHIFT ACTION POPUP ──────────────────────────────────────────
+function openShiftPopup(event, shiftId) {
+  event.stopPropagation();
+  closeShiftPopup();
+
+  const s=(DB.get('shifts')||[]).find(x=>x.id===shiftId); if(!s) return;
+  const emp=(DB.get('staff')||[]).find(e=>e.id===s.empId);
+  const sickDays=DB.get('sickDays')||[];
+  const alreadySick=sickDays.find(sk=>sk.empId===s.empId&&sk.date===s.date);
+  const otReqs=(DB.get('otRequests')||[]).filter(o=>o.empId===s.empId&&o.date===s.date&&o.approved);
+  const empName=emp?emp.first+' '+emp.last:'?';
+  const hrs=SH(s).toFixed(1);
+
+  // Overlay to catch outside clicks
+  const overlay=document.createElement('div');
+  overlay.className='shift-popup-overlay';
+  overlay.id='shift-popup-overlay';
+  overlay.onclick=closeShiftPopup;
+  document.body.appendChild(overlay);
+
+  // Build popup
+  const popup=document.createElement('div');
+  popup.className='shift-popup';
+  popup.id='shift-popup';
+
+  const otInfo=otReqs.length?`<div style="margin-top:4px"><span class="chip chip-ot chip-small">OT: ${otReqs.map(o=>o.start+'–'+o.end).join(', ')}</span></div>`:'';
+  const pubBadge=s.published
+    ?`<span class="badge bg" style="font-size:9px">Published</span>`
+    :`<span class="badge ba" style="font-size:9px">Draft</span>`;
+
+  popup.innerHTML=`
+    <div class="shift-popup-title">${empName}</div>
+    <div class="shift-popup-info">
+      <div>${FDS(s.date)} · ${FDOW(s.date)||new Date(s.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short'})}</div>
+      <div style="font-size:15px;margin:3px 0">${s.start} – ${s.end} <span style="font-size:11px;color:var(--t2)">(${hrs}h · ${s.breakMin}m break)</span></div>
+      <div style="margin-top:4px">${pubBadge}</div>
+      ${otInfo}
+      ${s.notes?`<div style="margin-top:5px;font-size:11px;color:var(--t2)">${s.notes}</div>`:''}
+    </div>
+    <div class="shift-popup-row">
+      <button class="shift-popup-btn" onclick="closeShiftPopup();editShiftPopup('${shiftId}')">✏️ Edit shift</button>
+      ${!alreadySick?`<button class="shift-popup-btn" onclick="closeShiftPopup();openQuickSick('${shiftId}')">🤒 Mark as sick day</button>`:''}
+      ${s.published?`<button class="shift-popup-btn" onclick="closeShiftPopup();openAddOTModal(null,'${s.empId}','${s.date}')">⏰ Add OT to this shift</button>`:''}
+      <button class="shift-popup-btn danger" onclick="closeShiftPopup();deleteShiftConfirm('${shiftId}')">🗑 Delete shift</button>
+    </div>`;
+
+  document.body.appendChild(popup);
+
+  // Position popup near click, keeping within viewport
+  const vw=window.innerWidth, vh=window.innerHeight;
+  const pw=280, ph=240;
+  let left=event.clientX+8, top=event.clientY+8;
+  if(left+pw>vw-8) left=event.clientX-pw-8;
+  if(top+ph>vh-8) top=event.clientY-ph-8;
+  if(top<8) top=8;
+  popup.style.left=left+'px';
+  popup.style.top=top+'px';
+}
+
+function closeShiftPopup() {
+  const p=document.getElementById('shift-popup');
+  const o=document.getElementById('shift-popup-overlay');
+  if(p) p.remove();
+  if(o) o.remove();
+}
+
+function editShiftPopup(shiftId) {
+  viewingShiftId=shiftId;
+  editShiftFromDetail();
+}
+
+function deleteShiftConfirm(shiftId) {
+  viewingShiftId=shiftId;
+  if(!confirm('Delete this shift? This cannot be undone.')) return;
+  deleteShift();
+}
+
+// Close popup on Escape key (supplement to existing keydown handler)
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape') closeShiftPopup();
+});
 
 // SHIFTS
 function openAddShiftModal(){
@@ -1497,7 +1620,7 @@ function renderOT(filter){
   document.getElementById('d-ot-list')&&renderDashboard();
 }
 function filterOT(f,el){document.querySelectorAll('#pg-ot .btn').forEach(b=>b.classList.remove('active-filter'));if(el)el.classList.add('active-filter');renderOT(f);}
-function openAddOTModal(id){
+function openAddOTModal(id, prefillEmpId, prefillDate){
   editingOTId=id;
   const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
   document.getElementById('ot-emp').innerHTML=staff.map(s=>`<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
@@ -1510,7 +1633,10 @@ function openAddOTModal(id){
     document.getElementById('tog-ot-avail').classList.toggle('on',o.availConfirmed);
   } else {
     document.getElementById('ot-modal-title').textContent='Add OT request';
-    document.getElementById('ot-date').value=FD(new Date());document.getElementById('ot-reason').value='';document.getElementById('ot-task').value='';
+    // Prefill from shift popup if provided
+    if(prefillEmpId) document.getElementById('ot-emp').value=prefillEmpId;
+    document.getElementById('ot-date').value=prefillDate||FD(new Date());
+    document.getElementById('ot-reason').value='';document.getElementById('ot-task').value='';
     document.getElementById('tog-ot-avail').classList.remove('on');
   }
   OM('m-ot');

@@ -3561,25 +3561,46 @@ function openAnnModal(id) {
   editingAnnId = id || null;
   const anns = DB.get('announcements') || [];
   const ann  = id ? anns.find(a => a.id === id) : null;
-
-  // Build role checkboxes
-  const roleBoxes = ANN_ROLES.map(r => {
-    const checked = ann ? (ann.roles||[]).includes(r) : r === 'All Staff';
-    return `<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 0;cursor:pointer">
-      <input type="checkbox" class="ann-role-cb" value="${r}" ${checked?'checked':''} style="accent-color:var(--purple)">
-      ${r}
-    </label>`;
-  }).join('');
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
 
   document.getElementById('ann-modal-title').textContent = ann ? 'Edit announcement' : 'New announcement';
-  document.getElementById('ann-id-title').value     = ann ? ann.title   : '';
-  document.getElementById('ann-id-desc').value      = ann ? ann.desc    : '';
-  document.getElementById('ann-id-date').value      = ann ? ann.date    : FD(new Date());
-  document.getElementById('ann-id-time').value      = ann ? ann.time    : '';
-  document.getElementById('ann-id-location').value  = ann ? ann.location : '';
-  document.getElementById('ann-id-roles').innerHTML = roleBoxes;
+  document.getElementById('ann-id-title').value    = ann ? ann.title    : '';
+  document.getElementById('ann-id-desc').value     = ann ? ann.desc     : '';
+  document.getElementById('ann-id-date').value     = ann ? ann.date     : FD(new Date());
+  document.getElementById('ann-id-time').value     = ann ? ann.time     : '';
+  document.getElementById('ann-id-location').value = ann ? ann.location : '';
   document.getElementById('ann-delete-btn').style.display = ann ? 'inline-flex' : 'none';
+
+  // Department role checkboxes
+  const existingRoles = ann ? (ann.roles||[]) : ['All Staff'];
+  document.getElementById('ann-id-roles').innerHTML = ANN_ROLES.map(r => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="ann-role-cb" value="${r}" ${existingRoles.includes(r)?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <span>${r}</span>
+    </label>`).join('');
+
+  // Individual staff list (hidden until toggled)
+  const existingStaffIds = ann ? (ann.staffIds||[]) : [];
+  const hasStaffIds = existingStaffIds.length > 0;
+  document.getElementById('ann-select-staff-toggle').checked = hasStaffIds;
+  document.getElementById('ann-staff-list').style.display = hasStaffIds ? 'block' : 'none';
+  document.getElementById('ann-staff-list').innerHTML = staff.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="ann-staff-cb" value="${s.id}" ${existingStaffIds.includes(s.id)?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
+    </label>`).join('');
+
   OM('m-announcement');
+}
+
+function toggleAnnStaffList(cb) {
+  const list = document.getElementById('ann-staff-list');
+  list.style.display = cb.checked ? 'block' : 'none';
+  if (!cb.checked) {
+    // Clear all individual selections when collapsing
+    document.querySelectorAll('.ann-staff-cb').forEach(c => c.checked = false);
+  }
 }
 
 function saveAnnouncement() {
@@ -3590,16 +3611,21 @@ function saveAnnouncement() {
   const location = document.getElementById('ann-id-location').value.trim();
   if (!title || !date) { alert('Title and date are required.'); return; }
 
-  const roles = [...document.querySelectorAll('.ann-role-cb:checked')].map(cb => cb.value);
-  if (!roles.length) { alert('Select at least one department.'); return; }
+  const roles    = [...document.querySelectorAll('.ann-role-cb:checked')].map(cb => cb.value);
+  const useStaff = document.getElementById('ann-select-staff-toggle').checked;
+  const staffIds = useStaff ? [...document.querySelectorAll('.ann-staff-cb:checked')].map(cb => cb.value) : [];
+
+  if (!roles.length && !staffIds.length) { alert('Select at least one department or staff member.'); return; }
+  if (useStaff && !staffIds.length) { alert('Please select at least one staff member, or untick "Notify specific staff members".'); return; }
 
   const anns = DB.get('announcements') || [];
-  const now = new Date().toISOString();
+  const now  = new Date().toISOString();
+  const payload = { title, desc, date, time, location, roles, staffIds, updatedAt: now };
   if (editingAnnId) {
     const idx = anns.findIndex(a => a.id === editingAnnId);
-    if (idx >= 0) anns[idx] = {...anns[idx], title, desc, date, time, location, roles, updatedAt: now};
+    if (idx >= 0) anns[idx] = {...anns[idx], ...payload};
   } else {
-    anns.push({id:'ann'+Date.now(), title, desc, date, time, location, roles, createdAt: now, updatedAt: now});
+    anns.push({id:'ann'+Date.now(), ...payload, createdAt: now});
   }
   DB.set('announcements', anns);
   CM('m-announcement');
@@ -3643,13 +3669,21 @@ function renderAnnouncements(filter, tabEl) {
   list.innerHTML = filtered.map(ann => {
     const isPast = ann.date < today;
     const dateLabel = new Date(ann.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-    const rolesLabel = (ann.roles||[]).join(', ') || 'All Staff';
+    // Build audience label
+    const staffAll = DB.get('staff')||[];
+    let audienceLabel;
+    if(ann.staffIds&&ann.staffIds.length>0){
+      const names = ann.staffIds.map(id=>{const s=staffAll.find(x=>x.id===id);return s?s.first+' '+s.last:null;}).filter(Boolean);
+      audienceLabel = names.length<=3 ? names.join(', ') : names.slice(0,2).join(', ')+' +'+( names.length-2)+' more';
+    } else {
+      audienceLabel = (ann.roles||[]).join(', ') || 'All Staff';
+    }
     return `<div style="border:1px solid var(--border);border-radius:var(--rsm);padding:12px 14px;margin-bottom:8px;background:var(--surface);${isPast?'opacity:.6':''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="flex:1;min-width:0">
           <div style="font-weight:600;font-size:13px;margin-bottom:3px">${ann.title}</div>
           <div style="font-size:11px;color:var(--t2)">📅 ${dateLabel}${ann.time?` · 🕐 ${ann.time}`:''}</div>
-          <div style="font-size:11px;color:var(--t2);margin-top:2px">👥 ${rolesLabel}</div>
+          <div style="font-size:11px;color:var(--t2);margin-top:2px">👥 ${audienceLabel}</div>
           ${ann.location?`<div style="font-size:11px;color:var(--t2);margin-top:2px">📍 ${ann.location}</div>`:''}
           ${ann.desc?`<div style="font-size:12px;color:var(--t3);margin-top:6px;white-space:pre-wrap;line-height:1.4">${ann.desc}</div>`:''}
         </div>
@@ -3673,20 +3707,54 @@ function updateAnnBadge() {
 
 <!-- ANNOUNCEMENT MODAL -->
 <div class="modal-overlay" id="m-announcement">
-  <div class="modal" style="max-width:500px">
+  <div class="modal" style="max-width:480px">
     <div class="mh"><h2 id="ann-modal-title">New announcement</h2><button class="xbtn" onclick="CM('m-announcement')">×</button></div>
-    <div class="fr"><label>Title <span style="color:var(--rd)">*</span></label><input type="text" id="ann-id-title" placeholder="e.g. Staff meeting — April 30" maxlength="80"></div>
-    <div class="fg">
+
+    <!-- Title -->
+    <div class="fr"><label>Title <span style="color:var(--rd)">*</span></label>
+      <input type="text" id="ann-id-title" placeholder="e.g. Staff meeting, 30 April" maxlength="80">
+    </div>
+
+    <!-- Date + Time side by side -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="fr"><label>Date <span style="color:var(--rd)">*</span></label><input type="date" id="ann-id-date"></div>
       <div class="fr"><label>Time <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="time" id="ann-id-time"></div>
     </div>
-    <div class="fr"><label>Location <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="text" id="ann-id-location" placeholder="e.g. Break room, Zoom, Level 2"></div>
-    <div class="fr"><label>Description <span style="color:var(--t3);font-weight:400">(optional)</span></label><textarea id="ann-id-desc" rows="3" placeholder="Any additional details..."></textarea></div>
-    <div class="fr" style="flex-direction:column;align-items:flex-start">
-      <label style="margin-bottom:8px">Applies to <span style="color:var(--rd)">*</span></label>
-      <div id="ann-id-roles" style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;width:100%"></div>
+
+    <!-- Location -->
+    <div class="fr"><label>Location <span style="color:var(--t3);font-weight:400">(optional)</span></label>
+      <input type="text" id="ann-id-location" placeholder="e.g. Break room, Level 2, Zoom">
     </div>
-    <div style="display:flex;gap:6px;justify-content:space-between;margin-top:14px">
+
+    <!-- Description -->
+    <div class="fr"><label>Description <span style="color:var(--t3);font-weight:400">(optional)</span></label>
+      <textarea id="ann-id-desc" rows="3" placeholder="Any additional details..."></textarea>
+    </div>
+
+    <!-- Audience section -->
+    <div style="margin-top:4px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t2);margin-bottom:8px">Audience <span style="color:var(--rd)">*</span></div>
+
+      <!-- Department toggles — always visible -->
+      <div style="border:1px solid var(--border);border-radius:var(--rsm);overflow:hidden;margin-bottom:8px">
+        <div style="padding:6px 10px;background:var(--s2);font-size:10px;font-weight:700;color:var(--t3);letter-spacing:.05em;text-transform:uppercase">By department</div>
+        <div style="padding:8px 10px;display:flex;flex-direction:column;gap:2px" id="ann-id-roles"></div>
+      </div>
+
+      <!-- Select individual staff — collapsed by default -->
+      <div style="border:1px solid var(--border);border-radius:var(--rsm);overflow:hidden">
+        <label style="display:flex;align-items:center;gap:10px;padding:10px;cursor:pointer;background:var(--s2);user-select:none">
+          <input type="checkbox" id="ann-select-staff-toggle" style="accent-color:var(--purple);width:16px;height:16px" onchange="toggleAnnStaffList(this)">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Notify specific staff members</div>
+            <div style="font-size:11px;color:var(--t3);margin-top:1px">Overrides department selection for chosen individuals</div>
+          </div>
+        </label>
+        <div id="ann-staff-list" style="display:none;padding:8px 10px;max-height:180px;overflow-y:auto;border-top:1px solid var(--border)"></div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:6px;justify-content:space-between;margin-top:16px;align-items:center">
       <button class="btn btn-sm btn-danger" id="ann-delete-btn" onclick="deleteAnnouncement()" style="display:none">Delete</button>
       <div style="display:flex;gap:6px;margin-left:auto">
         <button class="btn" onclick="CM('m-announcement')">Cancel</button>

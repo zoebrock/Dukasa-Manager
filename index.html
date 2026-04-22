@@ -233,6 +233,7 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
       <button class="ni" onclick="SP('staff')" id="nav-staff"><span class="nic">👥</span>Staff</button>
       <button class="ni" onclick="SP('leave')" id="nav-leave"><span class="nic">🏖</span>Leave &amp; Sick<span id="leave-badge" class="badge br" style="margin-left:auto;display:none">0</span></button>
       <button class="ni" onclick="SP('timesheets')" id="nav-timesheets"><span class="nic">⏱</span>Timesheets</button>
+      <button class="ni" onclick="SP('announcements')" id="nav-announcements"><span class="nic">📣</span>Announce<span id="ann-badge" class="badge br" style="margin-left:auto;display:none">0</span></button>
       <button class="ni" onclick="SP('settings')" id="nav-settings"><span class="nic">⚙️</span>Settings</button>
     </nav>
     <div style="padding:12px 16px;border-top:1px solid var(--border)">
@@ -404,6 +405,23 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
           <tbody id="ts-body"></tbody>
         </table>
       </div>
+    </div>
+
+    <!-- ANNOUNCEMENTS -->
+    <div class="pg" id="pg-announcements">
+      <div class="ph">
+        <h2>Announcements</h2>
+        <button class="btn btn-primary btn-sm" onclick="openAnnModal()">+ New announcement</button>
+      </div>
+
+      <!-- Filter tabs -->
+      <div class="tabs" style="margin-bottom:14px">
+        <div class="tab active" onclick="renderAnnouncements('active',this)">Active</div>
+        <div class="tab" onclick="renderAnnouncements('upcoming',this)">Upcoming</div>
+        <div class="tab" onclick="renderAnnouncements('archived',this)">Archived</div>
+      </div>
+
+      <div id="ann-list"></div>
     </div>
 
     <!-- SETTINGS -->
@@ -879,7 +897,7 @@ function _setSyncIndicator(state) {
 
 const ALL_KEYS = [
   'staff','shifts','clockEvents','leaveRequests','sickDays',
-  'medCerts','otRequests','rosterTemplates','customHours','settings'
+  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements'
 ];
 
 function FD(d){if(!(d instanceof Date))return d;const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const dy=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+dy;}
@@ -1024,18 +1042,15 @@ function updateBadges(){
   const otReqs=DB.get('otRequests')||[];
   const pendingLR=leaveReqs.filter(l=>l.status==='pending');
   const pendingOT=otReqs.filter(o=>o.approved===null||o.approved===undefined);
-  // Leave badge
   const lb=document.getElementById('leave-badge');
   if(lb){if(pendingLR.length){lb.textContent=pendingLR.length;lb.style.display='inline-flex';}else lb.style.display='none';}
-  // OT badge
   const ob=document.getElementById('ot-badge');
   if(ob){if(pendingOT.length){ob.textContent=pendingOT.length;ob.style.display='inline-flex';}else ob.style.display='none';}
-  // Leave & Sick tab pending badge
   const pcb=document.getElementById('pc-badge');
   if(pcb){if(pendingLR.length){pcb.textContent=pendingLR.length;pcb.style.display='inline-flex';}else pcb.style.display='none';}
-  // Dashboard pending count
   const dp=document.getElementById('d-pending');
   if(dp) dp.textContent=pendingLR.length+pendingOT.length;
+  updateAnnBadge();
 }
 
 function launchManagerApp(){
@@ -1081,7 +1096,7 @@ function SP(p){
   const navEl=document.getElementById('nav-'+p);
   if(pgEl) pgEl.classList.add('active');
   if(navEl) navEl.classList.add('active');
-  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',settings:'Settings'}[p]||p;
+  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',announcements:'Announcements',settings:'Settings'}[p]||p;
   if(!currentWeekStart) initWeek(new Date());
   // Refresh from server for data-heavy pages, then render
   if(p==='dashboard'){
@@ -1100,6 +1115,7 @@ function SP(p){
     DB.refresh(['otRequests'],function(){renderOT('pending');updateBadges();});
   }
   else if(p==='timesheets'){popTSWeeks();renderTS();}
+  else if(p==='announcements'){renderAnnouncements(annFilter);}
 }
 
 // WEEK
@@ -3535,6 +3551,150 @@ DB.preload(ALL_KEYS, function(){
   startManagerSync();
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-overlay.open').forEach(m=>m.classList.remove('open'));});
+
+// ── ANNOUNCEMENTS ───────────────────────────────────────────────
+const ANN_ROLES = ['All Staff','Dispensary Technician','Pharmacist','Logistics Technician','Lab Technician','Admin Assistant','Stock Technician'];
+let editingAnnId = null;
+let annFilter = 'active';
+
+function openAnnModal(id) {
+  editingAnnId = id || null;
+  const anns = DB.get('announcements') || [];
+  const ann  = id ? anns.find(a => a.id === id) : null;
+
+  // Build role checkboxes
+  const roleBoxes = ANN_ROLES.map(r => {
+    const checked = ann ? (ann.roles||[]).includes(r) : r === 'All Staff';
+    return `<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:4px 0;cursor:pointer">
+      <input type="checkbox" class="ann-role-cb" value="${r}" ${checked?'checked':''} style="accent-color:var(--purple)">
+      ${r}
+    </label>`;
+  }).join('');
+
+  document.getElementById('ann-modal-title').textContent = ann ? 'Edit announcement' : 'New announcement';
+  document.getElementById('ann-id-title').value     = ann ? ann.title   : '';
+  document.getElementById('ann-id-desc').value      = ann ? ann.desc    : '';
+  document.getElementById('ann-id-date').value      = ann ? ann.date    : FD(new Date());
+  document.getElementById('ann-id-time').value      = ann ? ann.time    : '';
+  document.getElementById('ann-id-location').value  = ann ? ann.location : '';
+  document.getElementById('ann-id-roles').innerHTML = roleBoxes;
+  document.getElementById('ann-delete-btn').style.display = ann ? 'inline-flex' : 'none';
+  OM('m-announcement');
+}
+
+function saveAnnouncement() {
+  const title    = document.getElementById('ann-id-title').value.trim();
+  const desc     = document.getElementById('ann-id-desc').value.trim();
+  const date     = document.getElementById('ann-id-date').value;
+  const time     = document.getElementById('ann-id-time').value;
+  const location = document.getElementById('ann-id-location').value.trim();
+  if (!title || !date) { alert('Title and date are required.'); return; }
+
+  const roles = [...document.querySelectorAll('.ann-role-cb:checked')].map(cb => cb.value);
+  if (!roles.length) { alert('Select at least one department.'); return; }
+
+  const anns = DB.get('announcements') || [];
+  const now = new Date().toISOString();
+  if (editingAnnId) {
+    const idx = anns.findIndex(a => a.id === editingAnnId);
+    if (idx >= 0) anns[idx] = {...anns[idx], title, desc, date, time, location, roles, updatedAt: now};
+  } else {
+    anns.push({id:'ann'+Date.now(), title, desc, date, time, location, roles, createdAt: now, updatedAt: now});
+  }
+  DB.set('announcements', anns);
+  CM('m-announcement');
+  renderAnnouncements(annFilter);
+  updateBadges();
+}
+
+function deleteAnnouncement() {
+  if (!editingAnnId) return;
+  if (!confirm('Delete this announcement?')) return;
+  DB.set('announcements', (DB.get('announcements')||[]).filter(a => a.id !== editingAnnId));
+  CM('m-announcement');
+  editingAnnId = null;
+  renderAnnouncements(annFilter);
+  updateBadges();
+}
+
+function renderAnnouncements(filter, tabEl) {
+  annFilter = filter || annFilter;
+  if (tabEl) {
+    document.querySelectorAll('#pg-announcements .tab').forEach(t => t.classList.remove('active'));
+    tabEl.classList.add('active');
+  }
+  const anns  = DB.get('announcements') || [];
+  const today = FD(new Date());
+  const list  = document.getElementById('ann-list');
+  if (!list) return;
+
+  const filtered = anns.filter(a => {
+    if (filter === 'active')   return a.date >= today;
+    if (filter === 'upcoming') return a.date > today;
+    if (filter === 'archived') return a.date < today;
+    return true;
+  }).sort((a,b) => a.date.localeCompare(b.date));
+
+  if (!filtered.length) {
+    list.innerHTML = `<p style="font-size:13px;color:var(--t2);padding:20px 0">${filter==='archived'?'No archived announcements.':'No announcements. Create one with the button above.'}</p>`;
+    return;
+  }
+
+  list.innerHTML = filtered.map(ann => {
+    const isPast = ann.date < today;
+    const dateLabel = new Date(ann.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+    const rolesLabel = (ann.roles||[]).join(', ') || 'All Staff';
+    return `<div style="border:1px solid var(--border);border-radius:var(--rsm);padding:12px 14px;margin-bottom:8px;background:var(--surface);${isPast?'opacity:.6':''}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:13px;margin-bottom:3px">${ann.title}</div>
+          <div style="font-size:11px;color:var(--t2)">📅 ${dateLabel}${ann.time?` · 🕐 ${ann.time}`:''}</div>
+          <div style="font-size:11px;color:var(--t2);margin-top:2px">👥 ${rolesLabel}</div>
+          ${ann.location?`<div style="font-size:11px;color:var(--t2);margin-top:2px">📍 ${ann.location}</div>`:''}
+          ${ann.desc?`<div style="font-size:12px;color:var(--t3);margin-top:6px;white-space:pre-wrap;line-height:1.4">${ann.desc}</div>`:''}
+        </div>
+        <div style="display:flex;gap:5px;flex-shrink:0">
+          <button class="btn btn-sm" onclick="openAnnModal('${ann.id}')">Edit</button>
+          ${isPast?`<span class="badge ba" style="font-size:9px;align-self:center">Archived</span>`:'<span class="badge bg" style="font-size:9px;align-self:center">Live</span>'}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Badge counter for active announcements
+function updateAnnBadge() {
+  const today = FD(new Date());
+  const active = (DB.get('announcements')||[]).filter(a => a.date >= today).length;
+  const badge = document.getElementById('ann-badge');
+  if (badge) { if(active>0){badge.textContent=active;badge.style.display='inline-flex';}else badge.style.display='none'; }
+}
 </script>
+
+<!-- ANNOUNCEMENT MODAL -->
+<div class="modal-overlay" id="m-announcement">
+  <div class="modal" style="max-width:500px">
+    <div class="mh"><h2 id="ann-modal-title">New announcement</h2><button class="xbtn" onclick="CM('m-announcement')">×</button></div>
+    <div class="fr"><label>Title <span style="color:var(--rd)">*</span></label><input type="text" id="ann-id-title" placeholder="e.g. Staff meeting — April 30" maxlength="80"></div>
+    <div class="fg">
+      <div class="fr"><label>Date <span style="color:var(--rd)">*</span></label><input type="date" id="ann-id-date"></div>
+      <div class="fr"><label>Time <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="time" id="ann-id-time"></div>
+    </div>
+    <div class="fr"><label>Location <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="text" id="ann-id-location" placeholder="e.g. Break room, Zoom, Level 2"></div>
+    <div class="fr"><label>Description <span style="color:var(--t3);font-weight:400">(optional)</span></label><textarea id="ann-id-desc" rows="3" placeholder="Any additional details..."></textarea></div>
+    <div class="fr" style="flex-direction:column;align-items:flex-start">
+      <label style="margin-bottom:8px">Applies to <span style="color:var(--rd)">*</span></label>
+      <div id="ann-id-roles" style="display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;width:100%"></div>
+    </div>
+    <div style="display:flex;gap:6px;justify-content:space-between;margin-top:14px">
+      <button class="btn btn-sm btn-danger" id="ann-delete-btn" onclick="deleteAnnouncement()" style="display:none">Delete</button>
+      <div style="display:flex;gap:6px;margin-left:auto">
+        <button class="btn" onclick="CM('m-announcement')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveAnnouncement()">Publish</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

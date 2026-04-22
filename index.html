@@ -528,16 +528,19 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
       <div id="staff-leave-body"><p style="font-size:12px;color:var(--t2)">Save staff member first to view leave history.</p></div>
     </div>
     <div id="staff-tab-payroll" style="display:none">
-      <div class="alert ai" style="margin-bottom:10px">Add standard hours below. Toggle "Add Auto-Shift to Weekly Roster" to automatically create draft shifts.</div>
+      <div class="alert ai" style="margin-bottom:10px">Contracted hours are used for timesheet OT calculations and to auto-fill leave hours.</div>
       <div class="nr">
         <span style="font-size:12px">Add auto-shift to weekly roster</span>
         <button class="toggle" id="tog-auto-shift" onclick="this.classList.toggle('on')"></button>
       </div>
       <div style="margin-top:10px">
         <div class="fg3">
-          <div class="fr"><label>Default start</label><input type="time" id="sf-pay-start" value="09:00"></div>
-          <div class="fr"><label>Default end</label><input type="time" id="sf-pay-end" value="17:00"></div>
+          <div class="fr"><label>Contracted start</label><input type="time" id="sf-pay-start" value="09:00"></div>
+          <div class="fr"><label>Contracted end</label><input type="time" id="sf-pay-end" value="17:00"></div>
           <div class="fr"><label>Break (min)</label><input type="number" id="sf-pay-break" value="30"></div>
+        </div>
+        <div class="fr"><label>Weekly contracted hours <span style="color:var(--t3);font-weight:400">(auto-calculated or override)</span></label>
+          <input type="number" id="sf-contracted-hrs" step="0.5" min="0" max="168" placeholder="e.g. 38" style="width:80px">
         </div>
         <div class="fr"><label>Working days</label>
           <div class="avail-grid" id="modal-payroll-days"></div>
@@ -1276,6 +1279,7 @@ function openShiftPopup(event, shiftId) {
     </div>
     <div class="shift-popup-row">
       <button class="shift-popup-btn" onclick="closeShiftPopup();editShiftPopup('${shiftId}')">✏️ Edit shift</button>
+      <button class="shift-popup-btn" onclick="closeShiftPopup();duplicateShift('${shiftId}')">⧉ Duplicate shift</button>
       ${!alreadySick
         ?`<button class="shift-popup-btn" onclick="closeShiftPopup();openQuickSick('${shiftId}')">🤒 Mark as sick day</button>`
         :`<button class="shift-popup-btn" onclick="closeShiftPopup();deleteSickDay('${s.empId}','${s.date}')">↩ Remove sick day (revert to rostered)</button>`
@@ -1306,6 +1310,24 @@ function deleteShiftConfirm(shiftId) {
   viewingShiftId=shiftId;
   if(!confirm('Delete this shift? This cannot be undone.')) return;
   deleteShift();
+}
+
+function duplicateShift(shiftId) {
+  const s=(DB.get('shifts')||[]).find(x=>x.id===shiftId); if(!s) return;
+  // Pre-fill the add shift modal with this shift's values, but no date (user picks)
+  editingShiftId=null;
+  document.getElementById('shift-modal-title').textContent='Duplicate shift';
+  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  document.getElementById('sh-emp').innerHTML=staff.map(st=>`<option value="${st.id}" ${st.id===s.empId?'selected':''}>${st.first} ${st.last}</option>`).join('');
+  // Move date one day forward as a sensible default
+  const nextDate=new Date(s.date+'T00:00:00'); nextDate.setDate(nextDate.getDate()+1);
+  document.getElementById('sh-date').value=FD(nextDate);
+  document.getElementById('sh-start').value=s.start;
+  document.getElementById('sh-end').value=s.end;
+  document.getElementById('sh-break').value=s.breakMin;
+  document.getElementById('sh-notes').value=s.notes||'';
+  document.getElementById('sh-notify-row').style.display='none';
+  OM('m-shift');
 }
 
 // ── DELETE SICK DAY — reverts staff member back to their rostered hours ──
@@ -1783,13 +1805,21 @@ function applyTemplate(){
   const id=document.getElementById('tmpl-select').value;const weekDate=document.getElementById('tmpl-week').value;
   const tmpls=DB.get('rosterTemplates')||[];const t=tmpls.find(x=>x.id===id);if(!t||!weekDate){alert('Select template and week.');return;}
   const wkStart=new Date(weekDate+'T00:00:00');
-  const shifts=DB.get('shifts')||[];
+  const wkStartStr=FD(wkStart);
+  const wkEnd=new Date(wkStart);wkEnd.setDate(wkEnd.getDate()+6);
+  const wkEndStr=FD(wkEnd);
+  // Remove all existing DRAFT shifts for this week (keep published ones)
+  let shifts=DB.get('shifts')||[];
+  const removedDrafts=shifts.filter(s=>s.date>=wkStartStr&&s.date<=wkEndStr&&!s.published).length;
+  shifts=shifts.filter(s=>!(s.date>=wkStartStr&&s.date<=wkEndStr&&!s.published));
+  // Add new shifts from template
   t.shifts.forEach(s=>{
     const d=new Date(wkStart);d.setDate(wkStart.getDate()+s.dayOfWeek);
     const emp=(DB.get('staff')||[]).find(e=>e.id===s.empId);
     shifts.push({id:'sh'+Date.now()+Math.random().toString(36).slice(2),empId:s.empId,date:FD(d),start:s.start,end:s.end,breakMin:s.breakMin||30,role:emp?emp.role:'',notes:'',published:false,status:'draft',templateId:id});
   });
-  DB.set('shifts',shifts);CM('m-template');renderRoster();alert(`Template "${t.name}" applied as draft shifts.`);
+  DB.set('shifts',shifts);CM('m-template');renderRoster();
+  alert(`Template "${t.name}" applied as draft shifts.${removedDrafts>0?' Replaced '+removedDrafts+' existing draft shift(s).':''}`);
 }
 function addTemplateShiftRow(dayVal, empVal, startVal, endVal, breakVal){
   const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
@@ -2148,7 +2178,13 @@ function editStaff(id){
   document.getElementById('sf-dob').value=emp.dob||'';document.getElementById('sf-role').value=emp.role||ROLES[0];
   document.getElementById('sf-pin').value=emp.pin||'';
   document.getElementById('sf-avail-notes').value=emp.availNotes||'';
-  buildModalAvailGrid(emp.availability||{});buildModalPayrollDays(emp.availability||{});
+  // Payroll / contracted hours
+  document.getElementById('sf-pay-start').value=emp.contractStart||'09:00';
+  document.getElementById('sf-pay-end').value=emp.contractEnd||'17:00';
+  document.getElementById('sf-pay-break').value=emp.contractBreak||30;
+  const tog=document.getElementById('tog-auto-shift');if(tog) tog.classList.toggle('on',!!emp.autoShift);
+  buildModalAvailGrid(emp.availability||{});
+  buildModalPayrollDays(emp.contractDays||emp.availability||{});
   const lbody=document.getElementById('staff-leave-body');if(lbody)lbody.innerHTML=staffLeaveHTML(id);
   staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');
 }
@@ -2163,7 +2199,32 @@ function saveStaff(){
   if(!first||!last){alert('First and last name required');return;}
   const staff=DB.get('staff')||[];
   const avail={};DAYS.forEach(d=>{const el=document.querySelector(`#modal-avail-grid [data-day="${d}"]`);avail[d]=el?el.classList.contains('on'):true;});
-  const ne={id:editingStaffId||'s'+Date.now(),first,last,email:document.getElementById('sf-email').value.trim(),phone:document.getElementById('sf-phone').value.trim(),dob:document.getElementById('sf-dob').value,role:document.getElementById('sf-role').value,pin:String(document.getElementById('sf-pin').value).trim(),availNotes:document.getElementById('sf-avail-notes').value,availability:avail,color:EMP_COLORS[staff.length%EMP_COLORS.length]};
+  const payDays={};DAYS.forEach(d=>{const el=document.querySelector(`#modal-payroll-days [data-day="${d}"]`);payDays[d]=el?el.classList.contains('on'):false;});
+  const cStart=document.getElementById('sf-pay-start').value||'09:00';
+  const cEnd=document.getElementById('sf-pay-end').value||'17:00';
+  const cBreak=parseInt(document.getElementById('sf-pay-break').value)||30;
+  const workingDays=DAYS.filter(d=>payDays[d]).length;
+  const dailyContracted=Math.max(0,(MD(cStart,cEnd)-cBreak)/60);
+  let contractedHrsPerWeek=parseFloat(document.getElementById('sf-contracted-hrs')?.value)||0;
+  if(!contractedHrsPerWeek&&workingDays>0) contractedHrsPerWeek=parseFloat((dailyContracted*workingDays).toFixed(2));
+  const ne={
+    id:editingStaffId||'s'+Date.now(),
+    first,last,
+    email:document.getElementById('sf-email').value.trim(),
+    phone:document.getElementById('sf-phone').value.trim(),
+    dob:document.getElementById('sf-dob').value,
+    role:document.getElementById('sf-role').value,
+    pin:String(document.getElementById('sf-pin').value).trim(),
+    availNotes:document.getElementById('sf-avail-notes').value,
+    availability:avail,
+    color:EMP_COLORS[staff.length%EMP_COLORS.length],
+    contractStart:cStart,
+    contractEnd:cEnd,
+    contractBreak:cBreak,
+    contractDays:payDays,
+    contractedHrsPerWeek,
+    autoShift:document.getElementById('tog-auto-shift').classList.contains('on')
+  };
   if(editingStaffId){const idx=staff.findIndex(s=>s.id===editingStaffId);if(idx>=0){ne.color=staff[idx].color;staff[idx]=ne;}}else staff.push(ne);
   DB.set('staff',staff);CM('m-staff');renderStaff();editingStaffId=null;
 }
@@ -2640,7 +2701,6 @@ function toggleApproved(empId,date,btn){
 }
 
 function buildTSRows(dayDate){
-  // Build all rows for a given date, sorted alphabetically by first name
   const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
   const shifts=DB.get('shifts')||[];
   const ce=DB.get('clockEvents')||[];
@@ -2649,17 +2709,29 @@ function buildTSRows(dayDate){
   const otReqs=(DB.get('otRequests')||[]).filter(o=>o.approved===true);
   const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8,gracePeriod:5};
   const ds=dayDate;
-  const dayShifts=shifts.filter(s=>s.date===ds);
+  const dayShifts=shifts.filter(s=>s.date===ds&&!s.isOT);
   const rows=[];
-  // Sort by employee first name
+
+  // Get contracted daily hours for a staff member on a given day
+  function getContractedDailyHrs(emp,dayStr){
+    if(!emp||!emp.contractStart||!emp.contractEnd) return 0;
+    const d=new Date(dayStr+'T00:00:00');
+    const dayKey=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][(d.getDay()+6)%7];
+    if(emp.contractDays&&emp.contractDays[dayKey]===false) return 0;
+    return Math.max(0,(MD(emp.contractStart,emp.contractEnd)-(emp.contractBreak||30))/60);
+  }
+
+  function roundUpTo30(t){const[h,m]=t.split(':').map(Number);const tot=h*60+m;const r=Math.ceil(tot/30)*30;return String(Math.floor(r/60)%24).padStart(2,'0')+':'+String(r%60).padStart(2,'0');}
+
+  // Step 1 — process shifts
   const sortedShifts=dayShifts.sort((a,b)=>{
     const ea=staff.find(s=>s.id===a.empId);const eb=staff.find(s=>s.id===b.empId);
     return(ea?ea.first:'').localeCompare(eb?eb.first:'');
   });
   sortedShifts.forEach(s=>{
     const emp=staff.find(e=>e.id===s.empId);
-    if(!emp) return; // skip orphaned shifts (staff member no longer exists)
-    if(s.isOT) return; // skip OT-only shift records — OT is shown on the main shift row
+    if(!emp) return;
+    const contractedHrs=getContractedDailyHrs(emp,ds);
     const sHrs=SH(s);
     const ci=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-in');
     const co=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-out');
@@ -2667,133 +2739,98 @@ function buildTSRows(dayDate){
     const be=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='break-end');
     const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===ds);
     const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=ds&&l.to>=ds);
-    // Approved OT for this shift
     const approvedOT=otReqs.find(o=>o.empId===s.empId&&o.date===ds);
-    let actualHrs=null,otHrs=0,status=isSick?'Sick':isLeave?'Annual Leave':'Rostered';
+    let actualHrs=null,otHrs=0,status=isSick?'Sick':isLeave?isLeave.type:'Rostered';
     let bActMin=null,flags=[];
     let autoRoundedIn=null,autoRoundedOut=null;
     let rowCls='';if(isSick)rowCls='tr-sick';else if(isLeave)rowCls='tr-leave';
 
-    // Helper: round a "HH:MM" time UP to next 30-min boundary
-    function roundUpTo30(t){const[h,m]=t.split(':').map(Number);const tot=h*60+m;const r=Math.ceil(tot/30)*30;return String(Math.floor(r/60)%24).padStart(2,'0')+':'+String(r%60).padStart(2,'0');}
-
     if(isSick){
-      // ── SICK: auto-fill rostered hours as sick leave hours ──
-      status='Sick';
-      actualHrs=sHrs; // rostered hours count as sick leave
-      autoRoundedIn=s.start;
-      autoRoundedOut=s.end;
+      status='Sick';actualHrs=sHrs;autoRoundedIn=s.start;autoRoundedOut=s.end;
       flags.push({type:'sick',msg:'Sick leave — rostered hours applied'});
-
-    } else if(!isLeave&&!ci&&!co){
-      // ── NO CLOCK IN OR OUT ──
-      // Only flag past/today shifts — future shifts are simply 'Rostered'
+    } else if(isLeave){
+      status=isLeave.type;
+      actualHrs=contractedHrs||sHrs;
+      autoRoundedIn=emp.contractStart||s.start;autoRoundedOut=emp.contractEnd||s.end;
+      flags.push({type:'leave',msg:`${isLeave.type} — contracted hours applied (${actualHrs.toFixed(1)}h)`});
+    } else if(!ci&&!co){
       const today=FD(new Date());
-      if(ds>today){
-        // Future shift — no flag, just show as rostered
-        status='Rostered';
-      } else {
-        status='No clock events';
-        actualHrs=sHrs;
-        autoRoundedIn=s.start;
-        autoRoundedOut=s.end;
-        flags.push({type:'missing',msg:'No clock in or out — rostered hours applied'});
-      }
-
-    } else if(!isLeave&&ci&&!co){
-      // ── CLOCKED IN BUT FORGOT TO CLOCK OUT ──
+      if(ds>today){status='Rostered';}
+      else{status='No clock events';actualHrs=sHrs;autoRoundedIn=s.start;autoRoundedOut=s.end;flags.push({type:'missing',msg:'No clock in or out — rostered hours applied'});}
+    } else if(ci&&!co){
       status='Missing clock out';
       const ciDiff=MD(s.start,ci.time);
-      if(ciDiff>0){
-        // Late clock-in: round up to next 30 min
-        autoRoundedIn=roundUpTo30(ci.time);
-        flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});
-      } else if(ciDiff<0){
-        // Early clock-in: cap to rostered start
-        autoRoundedIn=s.start;
-        flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → rounded to ${s.start}`});
-      } else {
-        autoRoundedIn=ci.time;
-      }
-      autoRoundedOut=s.end; // assume worked to rostered end
-      flags.push({type:'missing',msg:'No clock out — rostered end applied'});
-      bActMin=s.breakMin;
-      actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
-
-    } else if(!isLeave&&!ci&&co){
-      // ── FORGOT TO CLOCK IN ──
-      status='Missing clock in';
-      autoRoundedIn=s.start; // assume started at rostered time
-      flags.push({type:'missing',msg:'No clock in — rostered start applied'});
-      const coDiff=MD(s.end,co.time); // positive = late
-      if(coDiff>0&&!approvedOT){
-        autoRoundedOut=s.end;
-        flags.push({type:'late-out',msg:`Left ${coDiff}m late → capped to ${s.end}`});
-      } else {
-        autoRoundedOut=co.time;
-      }
-      bActMin=s.breakMin;
-      actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
-
-    } else if(!isLeave&&ci&&co){
-      // ── NORMAL: both clocked in and out ──
+      if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});}
+      else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → capped to ${s.start}`});}
+      else{autoRoundedIn=ci.time;}
+      autoRoundedOut=s.end;flags.push({type:'missing',msg:'No clock out — rostered end applied'});
+      bActMin=s.breakMin;actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
+    } else if(!ci&&co){
+      status='Missing clock in';autoRoundedIn=s.start;flags.push({type:'missing',msg:'No clock in — rostered start applied'});
+      const coDiff=MD(s.end,co.time);
+      if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Left ${coDiff}m late → capped to ${s.end}`});}
+      else{autoRoundedOut=co.time;}
+      bActMin=s.breakMin;actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
+    } else if(ci&&co){
       bActMin=(bs&&be)?MD(bs.time,be.time):s.breakMin;
-      const netMin=Math.max(0,MD(ci.time,co.time)-bActMin);
-      actualHrs=netMin/60;
-      const ciDiff=MD(s.start,ci.time); // positive = late, negative = early
-      const coDiff=MD(s.end,co.time);   // positive = clocked out late
-
-      // Clock In rounding — no grace period
-      if(ciDiff>0){
-        // Any late clock-in → round up to next 30 min
-        autoRoundedIn=roundUpTo30(ci.time);
-        flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});
-      } else if(ciDiff<0){
-        // Any early clock-in → cap to rostered start
-        autoRoundedIn=s.start;
-        flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → rounded to ${s.start}`});
-      }
-
-      // Clock Out rounding
-      if(coDiff>0&&!approvedOT){
-        // Clocked out late with no approved OT → cap to rostered end
-        autoRoundedOut=s.end;
-        flags.push({type:'late-out',msg:`Late out +${coDiff}m → capped to ${s.end}`});
-      }
-
-      // OT
-      const effectiveIn=autoRoundedIn||ci.time;
-      const effectiveOut=autoRoundedOut||co.time;
-      const effectiveNet=Math.max(0,MD(effectiveIn,effectiveOut)-bActMin);
-      if(settings.dailyOT&&(effectiveNet/60)>parseFloat(settings.dailyOTHours)&&!approvedOT){
-        otHrs=(effectiveNet/60)-parseFloat(settings.dailyOTHours);
-        rowCls='tr-ot';
-      }
+      actualHrs=Math.max(0,(MD(ci.time,co.time)-bActMin)/60);
+      const ciDiff=MD(s.start,ci.time);const coDiff=MD(s.end,co.time);
+      if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});}
+      else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → capped to ${s.start}`});}
+      if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Late out +${coDiff}m → capped to ${s.end}`});}
       status='Completed';
     }
 
-    // ── OT: apply after all branches so it works regardless of clock status ──
+    // OT — approved OT takes priority; otherwise vs contracted hours
     if(approvedOT){
-      const otMins=MD(approvedOT.start,approvedOT.end)||0;
-      otHrs=otMins/60;
-      rowCls='tr-ot';
-      flags.push({type:'ot',msg:`OT ${approvedOT.start}–${approvedOT.end} (${otHrs.toFixed(1)}h)`});
+      otHrs=Math.max(0,(MD(approvedOT.start,approvedOT.end)||0)/60);
+      rowCls='tr-ot';flags.push({type:'ot',msg:`OT ${approvedOT.start}–${approvedOT.end} (${otHrs.toFixed(1)}h)`});
+    } else if(actualHrs!==null&&!isLeave&&!isSick){
+      const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
+      const effOut=autoRoundedOut||(co&&co.time)||s.end;
+      const effBreak=bActMin!==null?bActMin:s.breakMin;
+      const effectiveWorkedHrs=Math.max(0,MD(effIn,effOut)-effBreak)/60;
+      // Compare vs contracted daily hours if set, else vs dailyOT threshold
+      const otThreshold=contractedHrs>0?contractedHrs:parseFloat(settings.dailyOTHours)||8;
+      if(effectiveWorkedHrs>otThreshold){
+        otHrs=parseFloat((effectiveWorkedHrs-otThreshold).toFixed(2));
+        rowCls='tr-ot';
+        if(contractedHrs>0) flags.push({type:'ot',msg:`Above contracted ${contractedHrs.toFixed(1)}h — ${effectiveWorkedHrs.toFixed(1)}h worked`});
+      }
     }
 
-    // Calculate effective hours using rounded times for approval
     let effectiveHrs=actualHrs;
-    if(actualHrs!==null&&(autoRoundedIn||autoRoundedOut)){
-      const effIn=autoRoundedIn||ci?.time||s.start;
-      const effOut=autoRoundedOut||co?.time||s.end;
+    if(actualHrs!==null&&!isLeave&&!isSick&&(autoRoundedIn||autoRoundedOut)){
+      const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
+      const effOut=autoRoundedOut||(co&&co.time)||s.end;
       const effBreak=bActMin!==null?bActMin:s.breakMin;
       effectiveHrs=Math.max(0,MD(effIn,effOut)-effBreak)/60;
     }
-    // Total payable hours = effective rostered hours + approved OT hours
     const totalPayableHrs=effectiveHrs!==null?(effectiveHrs+(otHrs||0)):null;
     const custom=getOrCreateCustom(s.empId,ds,actualHrs,autoRoundedIn,autoRoundedOut,totalPayableHrs);
     const approvedHrs=custom.approved?custom.customHrs:null;
-    rows.push({s,emp,sHrs,actualHrs,otHrs,status,rowCls,ci,co,bs,be,bActMin,flags,isSick,isLeave,approvedOT,custom,approvedHrs,autoRoundedIn,autoRoundedOut});
+    rows.push({s,emp,sHrs,actualHrs,otHrs,status,rowCls,ci,co,bs,be,bActMin,flags,isSick,isLeave,approvedOT,custom,approvedHrs,autoRoundedIn,autoRoundedOut,contractedHrs});
   });
+
+  // Step 2 — add rows for staff on LEAVE with no shift today
+  staff.forEach(emp=>{
+    if(rows.some(r=>r.emp&&r.emp.id===emp.id)) return;
+    const isLeave=lr.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
+    if(!isLeave) return;
+    const contractedHrs=getContractedDailyHrs(emp,ds);
+    if(contractedHrs===0) return;
+    const syntheticShift={id:'lv-'+emp.id+'-'+ds,empId:emp.id,date:ds,
+      start:emp.contractStart||'09:00',end:emp.contractEnd||'17:00',
+      breakMin:emp.contractBreak||30,role:emp.role,notes:'',published:true,status:'leave'};
+    const custom=getOrCreateCustom(emp.id,ds,contractedHrs,emp.contractStart||'09:00',emp.contractEnd||'17:00',contractedHrs);
+    rows.push({s:syntheticShift,emp,sHrs:contractedHrs,actualHrs:contractedHrs,otHrs:0,
+      status:isLeave.type,rowCls:'tr-leave',ci:null,co:null,bs:null,be:null,bActMin:emp.contractBreak||30,
+      flags:[{type:'leave',msg:`${isLeave.type} — contracted hours (${contractedHrs.toFixed(1)}h)`}],
+      isSick:false,isLeave,approvedOT:null,custom,approvedHrs:custom.approved?custom.customHrs:null,
+      autoRoundedIn:emp.contractStart||'09:00',autoRoundedOut:emp.contractEnd||'17:00',contractedHrs});
+  });
+
+  rows.sort((a,b)=>(a.emp&&b.emp)?a.emp.first.localeCompare(b.emp.first)||a.emp.last.localeCompare(b.emp.last):0);
   return rows;
 }
 
@@ -2878,6 +2915,7 @@ function renderTSDayBody(ds){
       if(f.type==='late-out') return`<span class="late-badge">⏰ ${f.msg}</span>`;
       if(f.type==='missing') return`<span style="background:var(--al);color:var(--ad);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">⚠ ${f.msg}</span>`;
       if(f.type==='sick') return`<span style="background:var(--rl);color:var(--rd);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">🤒 ${f.msg}</span>`;
+      if(f.type==='leave') return`<span style="background:var(--al);color:var(--ad);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">🏖 ${f.msg}</span>`;
       if(f.type==='ot') return`<span class="ot-badge-ts">${f.msg}</span>`;
       return`<span class="early-badge">${f.msg}</span>`;
     }).join(' '); // OT already included in flags array — don't append again
@@ -2925,87 +2963,173 @@ function exportCSV(){
   if(!sv){alert('Please select a week.');return;}
   const wkS=new Date(sv);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
   const ws=FD(wkS),we=FD(wkE);
-  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
-  const shifts=DB.get('shifts')||[];const ce=DB.get('clockEvents')||[];
+
+  const staffAll=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const shifts=DB.get('shifts')||[];
+  const ce=DB.get('clockEvents')||[];
   const lr=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');
-  const sd=DB.get('sickDays')||[];const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8};
-  const ch=DB.get('customHours')||[];const otReqs=(DB.get('otRequests')||[]).filter(o=>o.approved===true);
-  const wShifts=shifts.filter(s=>s.date>=ws&&s.date<=we);
-  const grace=parseInt(settings.gracePeriod)||5;
-  const headers=['Employee','Role','Date','Day','Status','Flags','Rostered Start','Rostered End','Rostered Hrs','Clock In','Clock Out','Actual Hrs','Auto Rounded In','Auto Rounded Out','Custom Start','Custom End','Break (min)','Custom Hrs','OT Hrs','Approved Hrs','Approved','Reason'];
+  const sd=DB.get('sickDays')||[];
+  const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8};
+  const ch=DB.get('customHours')||[];
+  const otReqs=(DB.get('otRequests')||[]).filter(o=>o.approved===true);
+
+  function getContractedDailyHrs(emp,dayStr){
+    if(!emp||!emp.contractStart||!emp.contractEnd) return 0;
+    const d=new Date(dayStr+'T00:00:00');
+    const dayKey=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][(d.getDay()+6)%7];
+    if(emp.contractDays&&emp.contractDays[dayKey]===false) return 0;
+    return Math.max(0,(MD(emp.contractStart,emp.contractEnd)-(emp.contractBreak||30))/60);
+  }
+
+  function csvRoundUpTo30(t){const[h,m]=t.split(':').map(Number);const tot=h*60+m;const r=Math.ceil(tot/30)*30;return String(Math.floor(r/60)%24).padStart(2,'0')+':'+String(r%60).padStart(2,'0');}
+  const cq=v=>'"'+(String(v||'').replace(/"/g,'""'))+'"';
+
+  // Headers — contract row + separate OT row
+  const headers=['Employee','Role','Date','Day','Row Type','Status','Flags',
+    'Rostered Start','Rostered End','Rostered Hrs','Contract Hrs/Day',
+    'Clock In','Clock Out','Break (min)','Actual Hrs',
+    'Auto Rounded In','Auto Rounded Out',
+    'Custom Start','Custom End','Approved Hrs','Approved','Reason'];
   const csvRows=[headers.join(',')];
-  staff.forEach(emp=>{
-    const empShifts=wShifts.filter(s=>s.empId===emp.id&&!s.isOT).sort((a,b)=>a.date.localeCompare(b.date));
-    if(!empShifts.length)return;
-    empShifts.forEach(s=>{
+
+  // Collect all entries: one per staff per worked/leave day, sorted alpha then date
+  const entries=[];
+
+  // 7 days of the week in date order
+  const days=[];
+  for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);days.push(FD(d));}
+
+  staffAll.forEach(emp=>{
+    // Get all shifts this week for this employee
+    const empShifts=shifts.filter(s=>s.empId===emp.id&&s.date>=ws&&s.date<=we&&!s.isOT)
+      .sort((a,b)=>a.date.localeCompare(b.date));
+
+    // Also find leave days with no shift
+    const leaveDaysNoShift=[];
+    days.forEach(ds=>{
+      const hasShift=empShifts.some(s=>s.date===ds);
+      if(hasShift) return;
+      const isLeave=lr.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
+      if(!isLeave) return;
+      const cHrs=getContractedDailyHrs(emp,ds);
+      if(cHrs>0) leaveDaysNoShift.push({date:ds,leave:isLeave,cHrs});
+    });
+
+    // Combine and sort by date
+    const allDays=[
+      ...empShifts.map(s=>({type:'shift',date:s.date,s})),
+      ...leaveDaysNoShift.map(x=>({type:'leave',date:x.date,leave:x.leave,cHrs:x.cHrs}))
+    ].sort((a,b)=>a.date.localeCompare(b.date));
+
+    allDays.forEach(entry=>{
+      const ds=entry.date;
+      const dayName=new Date(ds+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long'});
+      const contractedHrs=getContractedDailyHrs(emp,ds);
+
+      if(entry.type==='leave'){
+        // Leave day without a shift — use contracted hours
+        const leave=entry.leave;
+        const cHrs=entry.cHrs;
+        entries.push({emp,ds,dayName,status:leave.type,rowType:'Contract',flags:'Leave — contracted hours',
+          rostStart:emp.contractStart||'',rostEnd:emp.contractEnd||'',rostHrs:cHrs.toFixed(2),contractedHrs:cHrs.toFixed(2),
+          clockIn:'',clockOut:'',breakMin:emp.contractBreak||30,actualHrs:cHrs.toFixed(2),
+          autoIn:'',autoOut:'',
+          customStart:'',customEnd:'',approvedHrs:cHrs.toFixed(2),approved:'Yes',reason:'',
+          role:emp.role||''});
+        return;
+      }
+
+      const s=entry.s;
       const sHrs=SH(s);
-      const ci=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='clock-in');
-      const co=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='clock-out');
-      const bs=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-start');
-      const be=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-end');
-      const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===s.date);
-      const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=s.date&&l.to>=s.date);
-      const approvedOT=otReqs.find(o=>o.empId===s.empId&&o.date===s.date);
-      const custom=ch.find(x=>x.empId===s.empId&&x.date===s.date);
-      const dayName=new Date(s.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long'});
+      const ci=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='clock-in');
+      const co=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='clock-out');
+      const bs=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='break-start');
+      const be=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='break-end');
+      const isSick=sd.find(sk=>sk.empId===emp.id&&sk.date===ds);
+      const isLeave=lr.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
+      const approvedOT=otReqs.find(o=>o.empId===emp.id&&o.date===ds);
+      const custom=ch.find(x=>x.empId===emp.id&&x.date===ds);
       let actualHrs=0,otHrs=0,bMin=s.breakMin;
-      let status=isSick?'Sick':isLeave?'Annual Leave':'Rostered';
+      let status=isSick?'Sick':isLeave?isLeave.type:'Rostered';
       const flags=[];
-      let autoRndIn='',autoRndOut='';
-      function csvRoundUpTo30(t){const[h,m]=t.split(':').map(Number);const tot=h*60+m;const r=Math.ceil(tot/30)*30;return String(Math.floor(r/60)%24).padStart(2,'0')+':'+String(r%60).padStart(2,'0');}
+      let autoIn='',autoOut='';
+
       if(isSick){
-        status='Sick';actualHrs=sHrs;autoRndIn=s.start;autoRndOut=s.end;
+        actualHrs=sHrs;autoIn=s.start;autoOut=s.end;status='Sick';
         flags.push('Sick leave — rostered hours applied');
-      } else if(!isLeave&&!ci&&!co){
+      } else if(isLeave){
+        actualHrs=contractedHrs||sHrs;autoIn=emp.contractStart||s.start;autoOut=emp.contractEnd||s.end;
+        status=isLeave.type;flags.push(`${isLeave.type} — contracted hours applied`);
+      } else if(!ci&&!co){
         const csvToday=FD(new Date());
-        if(s.date>csvToday){
-          status='Rostered'; // future shift — no flag
-        } else {
-          status='No clock events';actualHrs=sHrs;autoRndIn=s.start;autoRndOut=s.end;
-          flags.push('No clock in or out — rostered hours applied');
-        }
-      } else if(!isLeave&&ci&&!co){
+        if(ds>csvToday){status='Rostered';}
+        else{status='No clock events';actualHrs=sHrs;autoIn=s.start;autoOut=s.end;flags.push('No clock in or out — rostered hours applied');}
+      } else if(ci&&!co){
         status='Missing clock out';
         const ciD=MD(s.start,ci.time);
-        if(ciD>0){autoRndIn=csvRoundUpTo30(ci.time);flags.push('Late +'+ciD+'m → '+autoRndIn);}
-        else if(ciD<0){autoRndIn=s.start;flags.push('Early '+Math.abs(ciD)+'m → '+s.start);}
-        else autoRndIn=ci.time;
-        autoRndOut=s.end;flags.push('No clock out — rostered end applied');
-        actualHrs=Math.max(0,MD(autoRndIn,autoRndOut)-bMin)/60;
-      } else if(!isLeave&&!ci&&co){
-        status='Missing clock in';autoRndIn=s.start;flags.push('No clock in — rostered start applied');
+        if(ciD>0){autoIn=csvRoundUpTo30(ci.time);flags.push('Late +'+ciD+'m → '+autoIn);}
+        else if(ciD<0){autoIn=s.start;flags.push('Early '+Math.abs(ciD)+'m → '+s.start);}
+        else{autoIn=ci.time;}
+        autoOut=s.end;flags.push('No clock out — rostered end applied');
+        actualHrs=Math.max(0,MD(autoIn,autoOut)-bMin)/60;
+      } else if(!ci&&co){
+        status='Missing clock in';autoIn=s.start;flags.push('No clock in — rostered start applied');
         const coD=MD(s.end,co.time);
-        if(coD>0&&!approvedOT){autoRndOut=s.end;flags.push('Late out +'+coD+'m → capped');}
-        else autoRndOut=co.time;
-        actualHrs=Math.max(0,MD(autoRndIn,autoRndOut)-bMin)/60;
-      } else if(!isLeave&&ci&&co){
+        if(coD>0&&!approvedOT){autoOut=s.end;flags.push('Late out → capped');}else{autoOut=co.time;}
+        actualHrs=Math.max(0,MD(autoIn,autoOut)-bMin)/60;
+      } else if(ci&&co){
         if(bs&&be)bMin=MD(bs.time,be.time);
         actualHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);
         const ciD=MD(s.start,ci.time);const coD=MD(s.end,co.time);
-        if(ciD>0){autoRndIn=csvRoundUpTo30(ci.time);flags.push('Late +'+ciD+'m → '+autoRndIn);}
-        else if(ciD<0){autoRndIn=s.start;flags.push('Early '+Math.abs(ciD)+'m → '+s.start);}
-        if(coD>0&&!approvedOT){autoRndOut=s.end;flags.push('Late out +'+coD+'m → capped to '+s.end);}
-        if(approvedOT){otHrs=Math.max(0,(MD(approvedOT.start,approvedOT.end)||0)/60);flags.push('OT '+approvedOT.start+'–'+approvedOT.end+' ('+otHrs.toFixed(1)+'h)');}
-        else if(settings.dailyOT&&actualHrs>parseFloat(settings.dailyOTHours)){otHrs=actualHrs-parseFloat(settings.dailyOTHours);}
+        if(ciD>0){autoIn=csvRoundUpTo30(ci.time);flags.push('Late +'+ciD+'m → '+autoIn);}
+        else if(ciD<0){autoIn=s.start;flags.push('Early → capped to '+s.start);}
+        if(coD>0&&!approvedOT){autoOut=s.end;flags.push('Late out → capped to '+s.end);}
         status='Completed';
       }
-      const approvedHrs=custom&&custom.approved?custom.customHrs:0; // includes OT when no manual entry (autoHrs = rostered+OT)
-      const cq=function(v){return '"'+(String(v||'').replace(/"/g,'""'))+'"';};
-      csvRows.push([
-        cq(emp.first+' '+emp.last),cq(s.role||emp.role||''),cq(s.date),cq(dayName),cq(status),
-        cq(flags.join('; ')),cq(s.start),cq(s.end),sHrs.toFixed(2),
-        cq(ci?ci.time:''),cq(co?co.time:''),actualHrs.toFixed(2),
-        cq(autoRndIn||''),cq(autoRndOut||''),
-        cq(custom&&custom.customStart?custom.customStart:''),
-        cq(custom&&custom.customEnd?custom.customEnd:''),
-        bMin,custom?custom.customHrs.toFixed(2):'',
-        otHrs.toFixed(2),approvedHrs.toFixed(2),
-        cq(custom&&custom.approved?'Yes':'No'),
-        cq(ci&&ci.reason?ci.reason:co&&co.reason?co.reason:'')
-      ].join(','));
+
+      // Determine contract vs OT split
+      const otThreshold=contractedHrs>0?contractedHrs:(parseFloat(settings.dailyOTHours)||8);
+      if(approvedOT){
+        otHrs=Math.max(0,(MD(approvedOT.start,approvedOT.end)||0)/60);
+        flags.push('OT '+approvedOT.start+'–'+approvedOT.end+' ('+otHrs.toFixed(2)+'h)');
+      } else if(actualHrs>otThreshold&&!isSick&&!isLeave){
+        otHrs=parseFloat((actualHrs-otThreshold).toFixed(2));
+        if(contractedHrs>0) flags.push('Above contracted '+contractedHrs.toFixed(1)+'h — '+actualHrs.toFixed(2)+'h worked');
+      }
+
+      const contractHrs=isLeave?actualHrs:isSick?actualHrs:Math.min(actualHrs,otThreshold);
+      const approvedHrs=custom&&custom.approved?custom.customHrs:null;
+      const flagStr=flags.join('; ');
+      const reason=ci&&ci.reason?ci.reason:co&&co.reason?co.reason:'';
+
+      const baseRow={emp,ds,dayName,status,flags:flagStr,
+        rostStart:s.start,rostEnd:s.end,rostHrs:sHrs.toFixed(2),contractedHrs:contractedHrs.toFixed(2),
+        clockIn:ci?ci.time:'',clockOut:co?co.time:'',breakMin:bMin,
+        autoIn,autoOut,
+        customStart:custom&&custom.customStart?custom.customStart:'',
+        customEnd:custom&&custom.customEnd?custom.customEnd:'',
+        approved:custom&&custom.approved?'Yes':'No',reason,role:s.role||emp.role||''};
+
+      // Contract hours row
+      entries.push({...baseRow,rowType:'Contract',actualHrs:contractHrs.toFixed(2),approvedHrs:approvedHrs!==null?approvedHrs.toFixed(2):''});
+
+      // OT row — only if OT > 0
+      if(otHrs>0){
+        entries.push({...baseRow,rowType:'Overtime',actualHrs:otHrs.toFixed(2),approvedHrs:'',status:'Overtime',flags:''});
+      }
     });
-    csvRows.push('');// blank separator row between employees
   });
+
+  entries.forEach(r=>{
+    csvRows.push([
+      cq(r.emp.first+' '+r.emp.last),cq(r.role),cq(r.ds),cq(r.dayName),cq(r.rowType),cq(r.status),
+      cq(r.flags),cq(r.rostStart),cq(r.rostEnd),r.rostHrs,r.contractedHrs,
+      cq(r.clockIn),cq(r.clockOut),r.breakMin,r.actualHrs,
+      cq(r.autoIn),cq(r.autoOut),
+      cq(r.customStart),cq(r.customEnd),cq(r.approvedHrs),cq(r.approved),cq(r.reason)
+    ].join(','));
+  });
+
   const blob=new Blob([csvRows.join('\n')],{type:'text/csv'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);

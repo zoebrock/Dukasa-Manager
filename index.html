@@ -3631,6 +3631,33 @@ function saveAnnouncement() {
   CM('m-announcement');
   renderAnnouncements(annFilter);
   updateBadges();
+
+  // ── Send email to relevant staff ──────────────────────────
+  // Build the list of empIds to notify
+  const staffAll = DB.get('staff') || [];
+  let empIdsToNotify = [];
+  if (staffIds.length > 0) {
+    // Specific staff selected
+    empIdsToNotify = staffIds;
+  } else {
+    // Filter by role
+    empIdsToNotify = staffAll
+      .filter(s => roles.includes('All Staff') || roles.includes(s.role))
+      .map(s => s.id);
+  }
+  if (empIdsToNotify.length > 0) {
+    _gasPost({action:'sendEmail', fn:'sendAnnouncementEmail', payload:{
+      empIds: empIdsToNotify, title, desc, date, time, location, roles, staffIds
+    }}).then(r => {
+      const el = document.getElementById('pub-status');
+      if (el) {
+        const result = typeof r === 'object' ? r : {};
+        el.style.display = 'block';
+        el.textContent = 'Announcement published' + (result.sent > 0 ? ' - ' + result.sent + ' email(s) sent.' : '.');
+        setTimeout(() => el.style.display = 'none', 5000);
+      }
+    }).catch(err => console.error('Announcement email failed:', err));
+  }
 }
 
 function deleteAnnouncement() {

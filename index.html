@@ -456,7 +456,11 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
     <div class="fr"><label>Break (minutes)</label><input type="number" id="sh-break" value="30" min="0" max="120"></div>
     <div class="fr"><label>Notes</label><textarea id="sh-notes" rows="2" placeholder="Optional..."></textarea></div>
     <div id="sh-notify-row" style="display:none;margin-bottom:8px">
-      <div class="alert ai" style="font-size:11px;margin-bottom:0" id="sh-notify-msg"></div>
+      <div class="alert ai" style="font-size:11px;margin-bottom:8px" id="sh-notify-msg"></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:8px 10px;background:var(--s2);border-radius:var(--rsm);border:1px solid var(--border)">
+        <input type="checkbox" id="sh-send-email" checked style="width:16px;height:16px;accent-color:var(--purple)">
+        <span>Notify staff member by email</span>
+      </label>
     </div>
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="btn" onclick="CM('m-shift')">Cancel</button>
@@ -528,23 +532,35 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
       <div id="staff-leave-body"><p style="font-size:12px;color:var(--t2)">Save staff member first to view leave history.</p></div>
     </div>
     <div id="staff-tab-payroll" style="display:none">
-      <div class="alert ai" style="margin-bottom:10px">Contracted hours are used for timesheet OT calculations and to auto-fill leave hours.</div>
-      <div class="nr">
+      <div class="alert ai" style="margin-bottom:12px;font-size:12px">Contracted hours are used for timesheet OT calculations, leave hour auto-fill, and CSV export. Hours above contracted hours are automatically flagged as OT.</div>
+      <div class="nr" style="margin-bottom:12px">
         <span style="font-size:12px">Add auto-shift to weekly roster</span>
         <button class="toggle" id="tog-auto-shift" onclick="this.classList.toggle('on')"></button>
       </div>
-      <div style="margin-top:10px">
-        <div class="fg3">
-          <div class="fr"><label>Contracted start</label><input type="time" id="sf-pay-start" value="09:00"></div>
-          <div class="fr"><label>Contracted end</label><input type="time" id="sf-pay-end" value="17:00"></div>
-          <div class="fr"><label>Break (min)</label><input type="number" id="sf-pay-break" value="30"></div>
-        </div>
-        <div class="fr"><label>Weekly contracted hours <span style="color:var(--t3);font-weight:400">(auto-calculated or override)</span></label>
-          <input type="number" id="sf-contracted-hrs" step="0.5" min="0" max="168" placeholder="e.g. 38" style="width:80px">
-        </div>
-        <div class="fr"><label>Working days</label>
-          <div class="avail-grid" id="modal-payroll-days"></div>
-        </div>
+      <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t3);margin-bottom:8px">Contracted hours per day</div>
+      <div style="border:1px solid var(--border);border-radius:var(--rsm);overflow:hidden;margin-bottom:12px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="background:var(--s2)">
+              <th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--t2);font-size:11px">Day</th>
+              <th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--t2);font-size:11px">Contracted?</th>
+              <th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--t2);font-size:11px">Start</th>
+              <th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--t2);font-size:11px">End</th>
+              <th style="padding:7px 10px;text-align:left;font-weight:600;color:var(--t2);font-size:11px">Break</th>
+              <th style="padding:7px 10px;text-align:right;font-weight:600;color:var(--t2);font-size:11px">Hrs</th>
+            </tr>
+          </thead>
+          <tbody id="contract-days-tbody"></tbody>
+          <tfoot>
+            <tr style="background:var(--s2)">
+              <td colspan="5" style="padding:8px 10px;font-weight:600;font-size:12px;color:var(--t2)">Weekly contracted total</td>
+              <td style="padding:8px 10px;text-align:right;font-weight:700;font-size:13px;color:var(--purple)" id="contract-weekly-total">0h</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div class="fr"><label>Override weekly total (optional)</label>
+        <input type="number" id="sf-contracted-hrs" step="0.5" min="0" max="168" placeholder="Auto-calculated from above" style="width:120px">
       </div>
     </div>
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px">
@@ -1537,6 +1553,7 @@ function openAddShiftModal(){
   document.getElementById('sh-date').value=FD(currentWeekStart);
   document.getElementById('sh-notes').value='';
   document.getElementById('sh-notify-row').style.display='none';
+  const emailCb=document.getElementById('sh-send-email');if(emailCb)emailCb.checked=true;
   OM('m-shift');
 }
 function openAddShiftForED(empId,date){
@@ -1551,11 +1568,12 @@ function openAddShiftForED(empId,date){
   const notifyRow=document.getElementById('sh-notify-row');
   const emp=staff.find(s=>s.id===empId);
   if(weekPublished){
-    document.getElementById('sh-notify-msg').textContent='This week is already published. This shift will be published immediately and '+(emp?emp.first:'the staff member')+' will be notified by email.';
+    document.getElementById('sh-notify-msg').textContent='This week is already published. This shift will be published immediately and '+(emp?emp.first:'the staff member')+' will be notified by email (untick below to skip).';
     notifyRow.style.display='block';
   } else {
     notifyRow.style.display='none';
   }
+  const emailCb2=document.getElementById('sh-send-email');if(emailCb2)emailCb2.checked=true;
   OM('m-shift');
 }
 
@@ -1593,15 +1611,19 @@ function saveShift(){
   // Pass the already-updated shifts array directly so the email uses current data
   // (DB.set is async — server may not have the new data yet when email fires)
   if(emp&&isPublished){
+    const shouldEmail = document.getElementById('sh-send-email')?.checked !== false;
     const el=document.getElementById('pub-status');
     el.style.display='block';
-    el.textContent=(shouldAutoPublish?'Shift added — notifying ':'Shift updated — notifying ')+emp.first+'...';
-    setTimeout(()=>el.style.display='none',6000);
-    // Send targeted single-shift email
-    _gasPost({action:'sendEmail',fn:'sendShiftUpdateEmail',payload:{empId:ns.empId,date:ns.date,start:ns.start,end:ns.end,breakMin:ns.breakMin,isNew:isNewShift||shouldAutoPublish}})
-      .then(r=>console.log('Shift email:',r)).catch(err=>console.error('Shift email failed:',err));
-    // Also send full week roster notification
-    notifyStaffMember(empId,shiftDate,shiftDate,shifts);
+    if(shouldEmail){
+      el.textContent=(shouldAutoPublish?'Shift added — notifying ':'Shift updated — notifying ')+emp.first+'...';
+      setTimeout(()=>el.style.display='none',6000);
+      _gasPost({action:'sendEmail',fn:'sendShiftUpdateEmail',payload:{empId:ns.empId,date:ns.date,start:ns.start,end:ns.end,breakMin:ns.breakMin,isNew:isNewShift||shouldAutoPublish}})
+        .then(r=>console.log('Shift email:',r)).catch(err=>console.error('Shift email failed:',err));
+      notifyStaffMember(empId,shiftDate,shiftDate,shifts);
+    } else {
+      el.textContent='Shift saved (no email sent to '+emp.first+').';
+      setTimeout(()=>el.style.display='none',4000);
+    }
   }
 }
 
@@ -1673,11 +1695,12 @@ function editShiftFromDetail(){
   const notifyRow=document.getElementById('sh-notify-row');
   if(isPublished){
     const emp=(DB.get('staff')||[]).find(e=>e.id===s.empId);
-    document.getElementById('sh-notify-msg').textContent='This is a published shift. Saving will update '+(emp?emp.first:'the staff member')+"'s roster and send them an email notification.";
+    document.getElementById('sh-notify-msg').textContent='This is a published shift. Saving will update '+(emp?emp.first:'the staff member')+"'s roster (untick below to skip the email notification).";
     notifyRow.style.display='block';
   } else {
     notifyRow.style.display='none';
   }
+  const emailCb3=document.getElementById('sh-send-email');if(emailCb3)emailCb3.checked=true;
   OM('m-shift');
 }
 function deleteShift(){if(!viewingShiftId)return;DB.set('shifts',(DB.get('shifts')||[]).filter(s=>s.id!==viewingShiftId));CM('m-shift-detail');renderRoster();renderDashboard();}
@@ -2100,6 +2123,7 @@ function renderStaff(){
           <div style="font-size:10px;color:var(--t2)"><span class="badge ${ROLE_BADGE[emp.role]||'bp'}" style="font-size:8px">${emp.role}</span> · ${emp.email}</div>
         </div>
         <div style="display:flex;gap:5px">
+          <button class="btn btn-sm" onclick="event.stopPropagation();sendWelcomeEmail('${emp.id}')" title="Send welcome email to staff member" style="background:var(--tl);color:var(--teal);border-color:#9de0ca">👋 Welcome</button>
           <button class="btn btn-sm" onclick="event.stopPropagation();editStaff('${emp.id}')">Edit</button>
           <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();removeStaff('${emp.id}')">Remove</button>
         </div>
@@ -2123,11 +2147,19 @@ function staffCardTab(empId,tab,el){
   el.closest('.tabs').querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');
   ['info','avail','leave','payroll'].forEach(t=>{const d=document.getElementById(`sct-${empId}-${t}`);if(d)d.style.display=t===tab?'block':'none';});
 }
-function staffInfoHTML(emp){return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-top:4px">
+function staffInfoHTML(emp){
+  const dow=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const contractedDays=dow.filter(d=>emp.contractDays&&emp.contractDays[d]!==false&&emp.contractStart&&emp.contractEnd);
+  const dailyHrs=emp.contractStart&&emp.contractEnd?Math.max(0,(MD(emp.contractStart,emp.contractEnd)-(emp.contractBreak||30))/60):0;
+  const contractSummary=emp.contractStart&&emp.contractEnd
+    ?`${emp.contractStart}–${emp.contractEnd} · ${emp.contractBreak||30}m break · ${dailyHrs.toFixed(1)}h/day · ${contractedDays.join(', ')||'no days set'} (${emp.contractedHrsPerWeek||0}h/wk)`
+    :'Not configured';
+  return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-top:4px">
   <div><span style="color:var(--t2)">Email:</span> ${emp.email||'—'}</div>
   <div><span style="color:var(--t2)">Phone:</span> ${emp.phone||'—'}</div>
   <div><span style="color:var(--t2)">DOB:</span> ${emp.dob?new Date(emp.dob+'T00:00:00').toLocaleDateString('en-AU'):'—'}</div>
-  <div><span style="color:var(--t2)">PIN:</span> ${emp.pin}</div>
+  <div><span style="color:var(--t2)">PIN:</span> ${emp.pin||'—'}</div>
+  <div style="grid-column:1/-1"><span style="color:var(--t2)">Contracted hours:</span> <span style="font-weight:500">${contractSummary}</span></div>
 </div>`;}
 function staffAvailHTML(emp){const days=DAYS;return`<div style="margin-top:4px">
   <div class="avail-grid">${days.map(d=>`<div class="avail-day ${emp.availability&&emp.availability[d]?'on':'off'}" onclick="toggleStaffAvail('${emp.id}','${d}',this)">${d}<br><span style="font-size:9px">${emp.availability&&emp.availability[d]?'Avail':'Unavail'}</span></div>`).join('')}</div>
@@ -2169,7 +2201,7 @@ function toggleAutoShift(empId,btn){
   const staff=DB.get('staff')||[];const idx=staff.findIndex(s=>s.id===empId);if(idx<0)return;
   staff[idx].autoShift=!staff[idx].autoShift;DB.set('staff',staff);btn.classList.toggle('on',staff[idx].autoShift);
 }
-function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';document.getElementById('sf-role').value='Dispensary Technician';buildModalAvailGrid({});buildModalPayrollDays({});staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
+function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';document.getElementById('sf-role').value='Dispensary Technician';const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildContractDaysTable(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
 function editStaff(id){
   editingStaffId=id;const staff=DB.get('staff')||[];const emp=staff.find(s=>s.id===id);if(!emp)return;
   document.getElementById('staff-modal-title').textContent='Edit: '+emp.first+' '+emp.last;
@@ -2178,35 +2210,123 @@ function editStaff(id){
   document.getElementById('sf-dob').value=emp.dob||'';document.getElementById('sf-role').value=emp.role||ROLES[0];
   document.getElementById('sf-pin').value=emp.pin||'';
   document.getElementById('sf-avail-notes').value=emp.availNotes||'';
-  // Payroll / contracted hours
-  document.getElementById('sf-pay-start').value=emp.contractStart||'09:00';
-  document.getElementById('sf-pay-end').value=emp.contractEnd||'17:00';
-  document.getElementById('sf-pay-break').value=emp.contractBreak||30;
   const tog=document.getElementById('tog-auto-shift');if(tog) tog.classList.toggle('on',!!emp.autoShift);
+  const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value=emp.contractedHrsPerWeek||'';
   buildModalAvailGrid(emp.availability||{});
-  buildModalPayrollDays(emp.contractDays||emp.availability||{});
+  buildContractDaysTable(emp);
   const lbody=document.getElementById('staff-leave-body');if(lbody)lbody.innerHTML=staffLeaveHTML(id);
   staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');
 }
 function buildModalAvailGrid(avail){
   document.getElementById('modal-avail-grid').innerHTML=DAYS.map(d=>`<div class="avail-day ${avail[d]!==false?'on':'off'}" onclick="this.classList.toggle('on');this.classList.toggle('off');this.querySelector('span').textContent=this.classList.contains('on')?'Avail':'Unavail'" data-day="${d}">${d}<br><span style="font-size:9px">${avail[d]!==false?'Avail':'Unavail'}</span></div>`).join('');
 }
-function buildModalPayrollDays(avail){
-  document.getElementById('modal-payroll-days').innerHTML=DAYS.map(d=>`<div class="avail-day ${avail[d]!==false?'on':'off'}" onclick="this.classList.toggle('on');this.classList.toggle('off')" data-day="${d}">${d}</div>`).join('');
+function buildModalPayrollDays(avail){ /* legacy — no longer used, kept for safety */ }
+
+function buildContractDaysTable(emp) {
+  const tbody = document.getElementById('contract-days-tbody');
+  if(!tbody) return;
+  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const perDay = emp && emp.contractPerDay ? emp.contractPerDay : {};
+  // Defaults from old single-time fields if available
+  const defStart = (emp && emp.contractStart) || '09:00';
+  const defEnd   = (emp && emp.contractEnd)   || '17:00';
+  const defBreak = (emp && emp.contractBreak) || 30;
+  tbody.innerHTML = days.map(d => {
+    const pd = perDay[d] || {};
+    const on = pd.on !== undefined ? pd.on : (d !== 'Sat' && d !== 'Sun');
+    const start = pd.start || defStart;
+    const end   = pd.end   || defEnd;
+    const brk   = pd.break !== undefined ? pd.break : defBreak;
+    return `<tr>
+      <td style="padding:6px 10px;font-weight:600;font-size:12px">${d}</td>
+      <td style="padding:6px 10px">
+        <button class="toggle ${on?'on':''}" id="cpd-toggle-${d}" onclick="toggleContractDay('${d}',this)" style="width:30px;height:16px"></button>
+      </td>
+      <td style="padding:4px 6px"><input type="time" id="cpd-start-${d}" value="${start}" class="contract-day-input" style="font-size:11px;padding:3px 5px;width:80px" onchange="recalcContractTotal()" ${on?'':'disabled style="opacity:.4;font-size:11px;padding:3px 5px;width:80px"'}></td>
+      <td style="padding:4px 6px"><input type="time" id="cpd-end-${d}"   value="${end}"   class="contract-day-input" style="font-size:11px;padding:3px 5px;width:80px" onchange="recalcContractTotal()" ${on?'':'disabled style="opacity:.4;font-size:11px;padding:3px 5px;width:80px"'}></td>
+      <td style="padding:4px 6px"><input type="number" id="cpd-break-${d}" value="${brk}" min="0" max="120" class="contract-day-input" style="font-size:11px;padding:3px 5px;width:50px" onchange="recalcContractTotal()" ${on?'':'disabled style="opacity:.4;font-size:11px;padding:3px 5px;width:50px"'}></td>
+      <td style="padding:6px 10px;text-align:right;font-size:12px;font-weight:600;color:var(--purple)" id="cpd-hrs-${d}">
+        ${on ? Math.max(0,(MD(start,end)-brk)/60).toFixed(1)+'h' : '—'}
+      </td>
+    </tr>`;
+  }).join('');
+  recalcContractTotal();
 }
+
+function toggleContractDay(day, btn) {
+  btn.classList.toggle('on');
+  const on = btn.classList.contains('on');
+  ['start','end','break'].forEach(f=>{
+    const el=document.getElementById(`cpd-${f}-${day}`);
+    if(el){el.disabled=!on;el.style.opacity=on?'1':'0.4';}
+  });
+  const hrsEl=document.getElementById(`cpd-hrs-${day}`);
+  if(hrsEl) hrsEl.textContent=on?calcDayHrs(day)+'h':'—';
+  recalcContractTotal();
+}
+
+function calcDayHrs(day) {
+  const s=document.getElementById(`cpd-start-${day}`)?.value;
+  const e=document.getElementById(`cpd-end-${day}`)?.value;
+  const b=parseInt(document.getElementById(`cpd-break-${day}`)?.value)||0;
+  if(!s||!e) return '0.0';
+  return Math.max(0,(MD(s,e)-b)/60).toFixed(1);
+}
+
+function recalcContractTotal() {
+  const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  let total=0;
+  days.forEach(d=>{
+    const tog=document.getElementById(`cpd-toggle-${d}`);
+    const on=tog&&tog.classList.contains('on');
+    const hrs=on?parseFloat(calcDayHrs(d))||0:0;
+    total+=hrs;
+    const hrsEl=document.getElementById(`cpd-hrs-${d}`);
+    if(hrsEl) hrsEl.textContent=on?hrs.toFixed(1)+'h':'—';
+  });
+  const totEl=document.getElementById('contract-weekly-total');
+  if(totEl) totEl.textContent=total.toFixed(1)+'h';
+  // Only auto-fill override field if it's empty
+  const overrideEl=document.getElementById('sf-contracted-hrs');
+  if(overrideEl&&!overrideEl.value) overrideEl.placeholder=`${total.toFixed(1)} (auto-calculated)`;
+}
+
+function readContractPerDay() {
+  const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const result={};
+  days.forEach(d=>{
+    const tog=document.getElementById(`cpd-toggle-${d}`);
+    const on=tog?tog.classList.contains('on'):false;
+    result[d]={
+      on,
+      start:document.getElementById(`cpd-start-${d}`)?.value||'09:00',
+      end:  document.getElementById(`cpd-end-${d}`)?.value||'17:00',
+      break:parseInt(document.getElementById(`cpd-break-${d}`)?.value)||30
+    };
+  });
+  return result;
+}
+
 function saveStaff(){
   const first=document.getElementById('sf-first').value.trim();const last=document.getElementById('sf-last').value.trim();
   if(!first||!last){alert('First and last name required');return;}
   const staff=DB.get('staff')||[];
   const avail={};DAYS.forEach(d=>{const el=document.querySelector(`#modal-avail-grid [data-day="${d}"]`);avail[d]=el?el.classList.contains('on'):true;});
-  const payDays={};DAYS.forEach(d=>{const el=document.querySelector(`#modal-payroll-days [data-day="${d}"]`);payDays[d]=el?el.classList.contains('on'):false;});
-  const cStart=document.getElementById('sf-pay-start').value||'09:00';
-  const cEnd=document.getElementById('sf-pay-end').value||'17:00';
-  const cBreak=parseInt(document.getElementById('sf-pay-break').value)||30;
-  const workingDays=DAYS.filter(d=>payDays[d]).length;
-  const dailyContracted=Math.max(0,(MD(cStart,cEnd)-cBreak)/60);
+  const contractPerDay=readContractPerDay();
+  // Derive legacy single-time fields from Mon contract (or first active day) for backward compat
+  const firstActive=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].find(d=>contractPerDay[d]&&contractPerDay[d].on);
+  const cStart=(firstActive&&contractPerDay[firstActive].start)||'09:00';
+  const cEnd  =(firstActive&&contractPerDay[firstActive].end)  ||'17:00';
+  const cBreak=(firstActive&&contractPerDay[firstActive].break)||30;
+  // Build contractDays map for getContractedDailyHrs compatibility
+  const contractDays={};DAYS.forEach(d=>{contractDays[d]=!!(contractPerDay[d]&&contractPerDay[d].on);});
+  const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const total=days.reduce((s,d)=>{
+    if(!contractPerDay[d]||!contractPerDay[d].on)return s;
+    return s+Math.max(0,(MD(contractPerDay[d].start,contractPerDay[d].end)-contractPerDay[d].break)/60);
+  },0);
   let contractedHrsPerWeek=parseFloat(document.getElementById('sf-contracted-hrs')?.value)||0;
-  if(!contractedHrsPerWeek&&workingDays>0) contractedHrsPerWeek=parseFloat((dailyContracted*workingDays).toFixed(2));
+  if(!contractedHrsPerWeek) contractedHrsPerWeek=parseFloat(total.toFixed(2));
   const ne={
     id:editingStaffId||'s'+Date.now(),
     first,last,
@@ -2218,15 +2338,25 @@ function saveStaff(){
     availNotes:document.getElementById('sf-avail-notes').value,
     availability:avail,
     color:EMP_COLORS[staff.length%EMP_COLORS.length],
-    contractStart:cStart,
-    contractEnd:cEnd,
-    contractBreak:cBreak,
-    contractDays:payDays,
-    contractedHrsPerWeek,
+    contractStart:cStart,contractEnd:cEnd,contractBreak:cBreak,
+    contractDays,contractPerDay,contractedHrsPerWeek,
     autoShift:document.getElementById('tog-auto-shift').classList.contains('on')
   };
   if(editingStaffId){const idx=staff.findIndex(s=>s.id===editingStaffId);if(idx>=0){ne.color=staff[idx].color;staff[idx]=ne;}}else staff.push(ne);
   DB.set('staff',staff);CM('m-staff');renderStaff();editingStaffId=null;
+}
+
+function sendWelcomeEmail(empId) {
+  const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
+  if(!emp){alert('Staff member not found.');return;}
+  if(!emp.email){alert(`${emp.first} does not have an email address on file. Please add one first.`);return;}
+  if(!confirm(`Send a welcome email to ${emp.first} ${emp.last} at ${emp.email}?\n\nThis will include instructions to log in, set their PIN, and save the portal to their home screen.`)) return;
+  _gasPost({action:'sendEmail',fn:'sendWelcomeEmail',payload:{empId}})
+    .then(r=>{
+      if(r.ok) alert(`✓ Welcome email sent to ${emp.first} at ${emp.email}!`);
+      else alert('Could not send email: '+(r.error||'unknown error'));
+    })
+    .catch(err=>alert('Email failed: '+err.message));
 }
 function removeStaff(id){if(!confirm('Remove this staff member?'))return;DB.set('staff',(DB.get('staff')||[]).filter(s=>s.id!==id));renderStaff();}
 function staffTab(t,el){if(!el)return;el.closest('.tabs').querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));el.classList.add('active');['info','availability','leave','payroll'].forEach(x=>{const d=document.getElementById('staff-tab-'+x);if(d)d.style.display=x===t?'block':'none';});if(t==='leave'&&editingStaffId){const lb=document.getElementById('staff-leave-body');if(lb)lb.innerHTML=staffLeaveHTML(editingStaffId);}}
@@ -2717,6 +2847,13 @@ function buildTSRows(dayDate){
     if(!emp||!emp.contractStart||!emp.contractEnd) return 0;
     const d=new Date(dayStr+'T00:00:00');
     const dayKey=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][(d.getDay()+6)%7];
+    // Per-day contract data (new format)
+    if(emp.contractPerDay&&emp.contractPerDay[dayKey]){
+      const pd=emp.contractPerDay[dayKey];
+      if(!pd.on) return 0;
+      return Math.max(0,(MD(pd.start,pd.end)-(pd.break||30))/60);
+    }
+    // Legacy single-time contract
     if(emp.contractDays&&emp.contractDays[dayKey]===false) return 0;
     return Math.max(0,(MD(emp.contractStart,emp.contractEnd)-(emp.contractBreak||30))/60);
   }
@@ -2977,6 +3114,13 @@ function exportCSV(){
     if(!emp||!emp.contractStart||!emp.contractEnd) return 0;
     const d=new Date(dayStr+'T00:00:00');
     const dayKey=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][(d.getDay()+6)%7];
+    // Per-day contract data (new format)
+    if(emp.contractPerDay&&emp.contractPerDay[dayKey]){
+      const pd=emp.contractPerDay[dayKey];
+      if(!pd.on) return 0;
+      return Math.max(0,(MD(pd.start,pd.end)-(pd.break||30))/60);
+    }
+    // Legacy single-time contract
     if(emp.contractDays&&emp.contractDays[dayKey]===false) return 0;
     return Math.max(0,(MD(emp.contractStart,emp.contractEnd)-(emp.contractBreak||30))/60);
   }

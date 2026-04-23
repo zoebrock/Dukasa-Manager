@@ -468,10 +468,15 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
     <div class="fr"><label>Employee</label><select id="sh-emp"></select></div>
     <div class="fr"><label>Date</label><input type="date" id="sh-date"></div>
     <div class="fg">
-      <div class="fr"><label>Start time</label><input type="time" id="sh-start" value="09:00"></div>
-      <div class="fr"><label>End time</label><input type="time" id="sh-end" value="17:00"></div>
+      <div class="fr"><label>Start time</label><input type="time" id="sh-start" value="09:00" onchange="autoCalcBreak()"></div>
+      <div class="fr"><label>End time</label><input type="time" id="sh-end" value="17:00" onchange="autoCalcBreak()"></div>
     </div>
-    <div class="fr"><label>Break (minutes)</label><input type="number" id="sh-break" value="30" min="0" max="120"></div>
+    <div class="fr"><label>Break (minutes)
+      <span style="font-size:10px;color:var(--t3);font-weight:400;margin-left:4px" id="sh-break-hint">Auto-calculated from hours</span>
+    </label>
+    <input type="number" id="sh-break" value="30" min="0" max="120" oninput="document.getElementById('sh-break-hint').textContent='(manual)'">
+    </div>
+    <div style="font-size:11px;color:var(--t3);margin-top:-6px;margin-bottom:4px" id="sh-break-detail"></div>
     <div class="fr"><label>Notes</label><textarea id="sh-notes" rows="2" placeholder="Optional..."></textarea></div>
     <div id="sh-notify-row" style="display:none;margin-bottom:8px">
       <div class="alert ai" style="font-size:11px;margin-bottom:8px" id="sh-notify-msg"></div>
@@ -1304,7 +1309,7 @@ function openShiftPopup(event, shiftId) {
     <div class="shift-popup-info">
       <div style="font-size:11px;color:var(--t2)">${dow}, ${FDS(s.date)}</div>
       <div style="font-size:15px;font-weight:700;margin:3px 0">${s.start} – ${s.end}</div>
-      <div style="font-size:11px;color:var(--t2)">${hrs}h · ${s.breakMin||0}m break</div>
+      <div style="font-size:11px;color:var(--t2)">${hrs}h paid · ${s.breakMin||30}min break${(s.breakMin||30)>30?` (30min paid, ${(s.breakMin||30)-30}min unpaid)`:' (paid)'}</div>
       <div style="margin-top:5px;display:flex;gap:4px;flex-wrap:wrap">${pubBadge}</div>
       ${otInfo}${sickBanner}${leaveBanner}
       ${s.notes?`<div style="margin-top:5px;font-size:11px;color:var(--t2);font-style:italic">${s.notes}</div>`:''}
@@ -1570,6 +1575,9 @@ function openAddShiftModal(){
   document.getElementById('sh-notes').value='';
   document.getElementById('sh-notify-row').style.display='none';
   const emailCb=document.getElementById('sh-send-email');if(emailCb)emailCb.checked=true;
+  // Reset break hint and auto-calculate for default 09:00-17:00
+  const brHint=document.getElementById('sh-break-hint');if(brHint)brHint.textContent='Auto-calculated';
+  autoCalcBreak(true);
   OM('m-shift');
 }
 function openAddShiftForED(empId,date){
@@ -1590,6 +1598,8 @@ function openAddShiftForED(empId,date){
     notifyRow.style.display='none';
   }
   const emailCb2=document.getElementById('sh-send-email');if(emailCb2)emailCb2.checked=true;
+  const brHint2=document.getElementById('sh-break-hint');if(brHint2)brHint2.textContent='Auto-calculated';
+  autoCalcBreak(true);
   OM('m-shift');
 }
 
@@ -1613,7 +1623,8 @@ function saveShift(){
     empId,date:shiftDate,
     start:document.getElementById('sh-start').value,
     end:document.getElementById('sh-end').value,
-    breakMin:parseInt(document.getElementById('sh-break').value)||30,
+    breakMin:parseInt(document.getElementById('sh-break').value)||calcBreakMin(document.getElementById('sh-start').value,document.getElementById('sh-end').value),
+    paidBreakMin:30, // only 30 min of any break is paid
     role:emp?emp.role:'',
     notes:document.getElementById('sh-notes').value,
     published:isPublished,status:isPublished?'published':'draft'
@@ -1672,7 +1683,54 @@ function notifyStaffMember(empId,weekStart,weekEnd,updatedShifts){
     });
 }
 
-function SH(s){return Math.max(0,(MD(s.start,s.end)-(s.breakMin||0))/60);}
+// SH = paid hours (deducts only the paid 30-min portion of break)
+function SH(s){return Math.max(0,(MD(s.start,s.end)-(s.paidBreakMin||30))/60);}
+// SH_GROSS = total time on shift including unpaid break portion
+function SH_GROSS(s){return Math.max(0,(MD(s.start,s.end))/60);}
+
+// Break rules:
+//   < 8 hrs worked → 30 min total break (all paid)
+//   = 8 hrs exactly → 40 min total break (30 paid, 10 unpaid)
+//   > 8 hrs → 50 min total break (30 paid, 20 unpaid)
+// Paid break = always 30 min regardless of shift length
+// s.breakMin stores the TOTAL break (including unpaid portion)
+// For pay purposes, only 30 min of any break is paid
+function calcBreakMin(start, end) {
+  if(!start||!end) return 30;
+  const totalMins = MD(start, end);
+  const grossHrs  = totalMins / 60;
+  if(grossHrs > 8)  return 50; // 30 paid + 20 unpaid
+  if(grossHrs >= 8) return 40; // 30 paid + 10 unpaid
+  return 30;                    // 30 paid
+}
+function paidBreakMin() { return 30; } // only 30 min is ever paid
+
+function autoCalcBreak(forceOverride) {
+  const start = document.getElementById('sh-start')?.value;
+  const end   = document.getElementById('sh-end')?.value;
+  if(!start||!end) return;
+  const brk = calcBreakMin(start, end);
+  const hintEl = document.getElementById('sh-break-hint');
+  // Only auto-fill if the field hasn't been manually edited
+  if(forceOverride || (hintEl && hintEl.textContent !== '(manual)')) {
+    document.getElementById('sh-break').value = brk;
+    if(hintEl) hintEl.textContent = 'Auto-calculated';
+  }
+  // Always update the detail line
+  const totalMins = MD(start, end);
+  const grossHrs  = totalMins / 60;
+  const paidHrs   = Math.max(0, (totalMins - 30) / 60); // 30 min paid break deducted
+  const detailEl  = document.getElementById('sh-break-detail');
+  if(detailEl) {
+    if(grossHrs >= 8) {
+      detailEl.textContent = `${brk}min total break (30 paid + ${brk-30} unpaid) · ${paidHrs.toFixed(1)}h paid`;
+      detailEl.style.display = 'block';
+    } else {
+      detailEl.textContent = `30min break (all paid) · ${paidHrs.toFixed(1)}h paid`;
+      detailEl.style.display = 'block';
+    }
+  }
+}
 
 function openShiftDetail(id){
   viewingShiftId=id;
@@ -1717,6 +1775,9 @@ function editShiftFromDetail(){
     notifyRow.style.display='none';
   }
   const emailCb3=document.getElementById('sh-send-email');if(emailCb3)emailCb3.checked=true;
+  // Mark break as manual since we're loading an existing value
+  const brHint3=document.getElementById('sh-break-hint');if(brHint3)brHint3.textContent='(manual)';
+  autoCalcBreak(false); // update detail line only
   OM('m-shift');
 }
 function deleteShift(){if(!viewingShiftId)return;DB.set('shifts',(DB.get('shifts')||[]).filter(s=>s.id!==viewingShiftId));CM('m-shift-detail');renderRoster();renderDashboard();}

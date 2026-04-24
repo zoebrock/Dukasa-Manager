@@ -3149,8 +3149,18 @@ function renderTSDayBody(ds){
       <td style="color:var(--t2)">${r.s.start}</td>
       <td style="color:var(--t2)">${r.s.end}</td>
       <td style="color:var(--t2)">${r.sHrs.toFixed(2)}</td>
-      <td style="font-weight:500">${r.ci?r.ci.time:'—'}</td>
-      <td style="font-weight:500">${r.co?r.co.time:'—'}</td>
+      <td style="font-weight:500">
+        ${r.ci
+          ? `<span style="color:var(--teal);font-weight:700">${r.ci.time}</span>${r.ci.manual?'<span title="Manually entered" style="font-size:9px;background:var(--al);color:var(--ad);border-radius:3px;padding:1px 4px;margin-left:3px">manual</span>':''}`
+          : `<button class="btn btn-sm" style="font-size:10px;padding:2px 7px" onclick="openManualClock('${r.emp?r.emp.id:''}','${r.s.date}','clock-in','${r.s.start}')">+ Add</button>`
+        }
+      </td>
+      <td style="font-weight:500">
+        ${r.co
+          ? `<span style="color:var(--purple);font-weight:700">${r.co.time}</span>${r.co.manual?'<span title="Manually entered" style="font-size:9px;background:var(--al);color:var(--ad);border-radius:3px;padding:1px 4px;margin-left:3px">manual</span>':''}`
+          : `<button class="btn btn-sm" style="font-size:10px;padding:2px 7px" onclick="openManualClock('${r.emp?r.emp.id:''}','${r.s.date}','clock-out','${r.s.end}')">+ Add</button>`
+        }
+      </td>
       <td>${brkDisplay}</td>
       <td style="font-weight:600">${r.actualHrs!==null?r.actualHrs.toFixed(2):'—'}</td>
       <td style="font-size:11px;${r.autoRoundedIn?'color:var(--amber);font-weight:600':'color:var(--t3)'}" title="${r.autoRoundedIn?'Late clock-in rounded up to next 30min mark':'No rounding applied'}">${r.autoRoundedIn||'—'}</td>
@@ -3166,6 +3176,57 @@ function renderTSDayBody(ds){
     </tr>`;
   }).join('');
 }
+
+// ── MANUAL CLOCK IN/OUT ────────────────────────────────────
+let _mcEmpId='', _mcDate='', _mcType='', _mcDefault='';
+
+function openManualClock(empId, date, type, defaultTime) {
+  _mcEmpId=empId; _mcDate=date; _mcType=type; _mcDefault=defaultTime;
+  const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
+  const empName=emp?emp.first+' '+emp.last:'?';
+  const typeLabel=type==='clock-in'?'Clock-in':'Clock-out';
+  document.getElementById('mc-title').textContent='Add '+typeLabel.toLowerCase()+' — '+empName;
+  document.getElementById('mc-info').textContent=typeLabel+' time for '+empName+' on '+FDL(date)+'. This creates a clock event that syncs to the Dukasa Clock and timesheets immediately.';
+  document.getElementById('mc-time').value=defaultTime||'';
+  document.getElementById('mc-reason').value='';
+  OM('m-manual-clock');
+}
+
+function saveManualClock() {
+  const time=document.getElementById('mc-time').value;
+  const reason=document.getElementById('mc-reason').value.trim();
+  if(!time){alert('Please enter a time.');return;}
+  if(!_mcEmpId||!_mcDate||!_mcType){alert('Missing data. Please close and try again.');return;}
+  const ce=DB.get('clockEvents')||[];
+  // Check for duplicate
+  const existIdx=ce.findIndex(e=>e.empId===_mcEmpId&&e.date===_mcDate&&e.type===_mcType&&!e.manual===false);
+  if(existIdx>=0){
+    if(!confirm('A '+_mcType+' event already exists for this person ('+ce[existIdx].time+'). Replace it with '+time+'?')) return;
+    ce.splice(existIdx,1);
+  }
+  const newEvent={
+    id:'ce-manual-'+Date.now(),
+    empId:_mcEmpId, date:_mcDate, type:_mcType, time:time,
+    reason:reason||'Manual entry by manager',
+    manual:true,
+    ts:new Date(_mcDate+'T'+time+':00').toISOString()
+  };
+  ce.push(newEvent);
+  // Atomic server append — same as clock device
+  _gasPost({action:'appendClockEvent',event:newEvent})
+    .then(r=>{ console.log('Manual clock event appended:',r); DB.set('clockEvents',ce); })
+    .catch(err=>{ console.error('Server write failed:',err); DB.set('clockEvents',ce); });
+  CM('m-manual-clock');
+  renderTSDayBody(_mcDate);
+  const el=document.getElementById('pub-status');
+  if(el){
+    const emp=(DB.get('staff')||[]).find(s=>s.id===_mcEmpId);
+    el.style.display='block';
+    el.textContent='✓ '+(_mcType==='clock-in'?'Clock-in':'Clock-out')+' '+time+' added for '+(emp?emp.first:'staff member')+' on '+FDL(_mcDate)+'.';
+    setTimeout(()=>el.style.display='none',5000);
+  }
+}
+
 function viewPhoto(inPhoto,outPhoto){
   document.getElementById('photo-view-body').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
     <div><div style="font-size:11px;color:var(--t2);margin-bottom:4px">Clock in</div>${inPhoto?`<img src="${inPhoto}" style="width:100%;border-radius:var(--rsm);border:1px solid var(--border)">`:'<div style="height:160px;background:var(--s2);border-radius:var(--rsm);display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:11px">No photo</div>'}</div>
@@ -3848,6 +3909,22 @@ function updateAnnBadge() {
         <button class="btn" onclick="CM('m-announcement')">Cancel</button>
         <button class="btn btn-primary" onclick="saveAnnouncement()">Publish</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- MANUAL CLOCK IN/OUT MODAL -->
+<div class="modal-overlay" id="m-manual-clock">
+  <div class="modal" style="max-width:380px">
+    <div class="mh"><h2 id="mc-title">Add clock-in</h2><button class="xbtn" onclick="CM('m-manual-clock')">×</button></div>
+    <div class="alert ai" style="font-size:11px;margin-bottom:12px" id="mc-info"></div>
+    <div class="fr"><label>Time</label><input type="time" id="mc-time"></div>
+    <div class="fr"><label>Reason / note <span style="color:var(--t3);font-weight:400">(optional)</span></label>
+      <input type="text" id="mc-reason" placeholder="e.g. Clock device issue, forgot to clock in">
+    </div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="CM('m-manual-clock')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveManualClock()">Save</button>
     </div>
   </div>
 </div>

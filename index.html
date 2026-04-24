@@ -835,9 +835,28 @@ const DB = {
     _gasGet('getAll')
       .then(result => {
         if (result.ok && result.data) {
-          Object.entries(result.data).forEach(([key, val]) => {
-            try { CACHE[key] = JSON.parse(val); localStorage.setItem(key, val); }
-            catch(e) { CACHE[key] = null; }
+          Object.entries(result.data).forEach(([key, rawVal]) => {
+            try {
+              const serverVal = JSON.parse(rawVal);
+              // clockEvents: merge server with any local manual entries not yet confirmed
+              if (key === 'rx3_clockEvents' && Array.isArray(serverVal)) {
+                const localRaw = localStorage.getItem(key);
+                const localVal = localRaw ? JSON.parse(localRaw) : [];
+                if (Array.isArray(localVal) && localVal.length > 0) {
+                  const serverIds = new Set(serverVal.map(e=>e.id));
+                  const localOnly = localVal.filter(e=>!serverIds.has(e.id));
+                  if (localOnly.length > 0) {
+                    const merged = [...serverVal, ...localOnly];
+                    merged.sort((a,b)=>((a.date||'')+(a.time||'')).localeCompare((b.date||'')+(b.time||'')));
+                    CACHE[key] = merged;
+                    localStorage.setItem(key, JSON.stringify(merged));
+                    return;
+                  }
+                }
+              }
+              CACHE[key] = serverVal;
+              localStorage.setItem(key, rawVal);
+            } catch(e) { CACHE[key] = null; }
           });
           // Any key missing from server — use localStorage
           keys.forEach(k => {
@@ -846,12 +865,10 @@ const DB = {
               const local = localStorage.getItem(key);
               if (local) {
                 try { CACHE[key] = JSON.parse(local); } catch(e) {}
-                _gasPost({ action: 'set', dataKey: key, value: local });
               } else { CACHE[key] = null; }
             }
           });
         } else {
-          // Fallback to localStorage
           keys.forEach(k => { const key='rx3_'+k; const local=localStorage.getItem(key); try{CACHE[key]=local?JSON.parse(local):null;}catch(e){CACHE[key]=null;} });
         }
         _setSyncIndicator('idle');
@@ -865,7 +882,7 @@ const DB = {
       });
   },
 
-  // Refresh specific keys from server
+  // Refresh specific keys from server — merges clockEvents to preserve manual entries
   refresh(keys, callback) {
     if (!keys.length) { if(callback) callback(); return; }
     _gasGet('getAll')
@@ -874,7 +891,27 @@ const DB = {
           keys.forEach(k => {
             const key = 'rx3_' + k;
             if (result.data[key] !== undefined) {
-              try { CACHE[key] = JSON.parse(result.data[key]); localStorage.setItem(key, result.data[key]); } catch(e) {}
+              try {
+                const serverVal = JSON.parse(result.data[key]);
+                if (k === 'clockEvents' && Array.isArray(serverVal)) {
+                  // Merge: keep any local events not yet on server (manual entries in flight)
+                  const localVal = CACHE[key] || [];
+                  if (Array.isArray(localVal) && localVal.length > 0) {
+                    const serverIds = new Set(serverVal.map(e=>e.id));
+                    const localOnly = localVal.filter(e=>!serverIds.has(e.id));
+                    if (localOnly.length > 0) {
+                      // Local has events server doesn't — keep them
+                      const merged = [...serverVal, ...localOnly];
+                      merged.sort((a,b)=>((a.date||'')+(a.time||'')).localeCompare((b.date||'')+(b.time||'')));
+                      CACHE[key] = merged;
+                      localStorage.setItem(key, JSON.stringify(merged));
+                      return;
+                    }
+                  }
+                }
+                CACHE[key] = serverVal;
+                localStorage.setItem(key, result.data[key]);
+              } catch(e) {}
             }
           });
         }
@@ -901,9 +938,12 @@ function _setSyncIndicator(state) {
 }
 
 const ALL_KEYS = [
-  'staff','shifts','clockEvents','leaveRequests','sickDays',
+  'staff','shifts','leaveRequests','sickDays',
   'medCerts','otRequests','rosterTemplates','customHours','settings','announcements'
 ];
+// clockEvents is fetched separately only when needed (timesheets/dashboard)
+// so manual entries aren't wiped by the 10-second smart sync
+const ALL_KEYS_WITH_CLOCK = [...ALL_KEYS, 'clockEvents'];
 
 function FD(d){if(!(d instanceof Date))return d;const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const dy=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+dy;}
 function FDS(s){if(!s)return'—';const d=new Date(s+'T00:00:00');return d.toLocaleDateString('en-AU',{day:'numeric',month:'short'})}

@@ -3181,14 +3181,15 @@ function renderTSDayBody(ds){
 let _mcEmpId='', _mcDate='', _mcType='', _mcDefault='';
 
 function openManualClock(empId, date, type, defaultTime) {
-  _mcEmpId=empId; _mcDate=date; _mcType=type; _mcDefault=defaultTime;
+  _mcEmpId=empId; _mcDate=date; _mcType=type;
   const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
   const empName=emp?emp.first+' '+emp.last:'?';
   const typeLabel=type==='clock-in'?'Clock-in':'Clock-out';
-  document.getElementById('mc-title').textContent='Add '+typeLabel.toLowerCase()+' — '+empName;
-  document.getElementById('mc-info').textContent=typeLabel+' time for '+empName+' on '+FDL(date)+'. This creates a clock event that syncs to the Dukasa Clock and timesheets immediately.';
+  document.getElementById('mc-title').textContent='Add '+typeLabel.toLowerCase()+' \u2014 '+empName;
+  document.getElementById('mc-info').textContent=typeLabel+' for '+empName+' on '+FDL(date)+'. Pre-filled with rostered time \u2014 adjust if different.';
   document.getElementById('mc-time').value=defaultTime||'';
   document.getElementById('mc-reason').value='';
+  setTimeout(()=>document.getElementById('mc-time')?.focus(),100);
   OM('m-manual-clock');
 }
 
@@ -3197,33 +3198,63 @@ function saveManualClock() {
   const reason=document.getElementById('mc-reason').value.trim();
   if(!time){alert('Please enter a time.');return;}
   if(!_mcEmpId||!_mcDate||!_mcType){alert('Missing data. Please close and try again.');return;}
-  const ce=DB.get('clockEvents')||[];
-  // Check for duplicate
-  const existIdx=ce.findIndex(e=>e.empId===_mcEmpId&&e.date===_mcDate&&e.type===_mcType&&!e.manual===false);
+function saveManualClock() {
+  const time   = document.getElementById('mc-time').value;
+  const reason = document.getElementById('mc-reason').value.trim();
+  if(!time){alert('Please enter a time.');return;}
+
+  // Snapshot state variables NOW before anything async touches them
+  const empId = _mcEmpId, date = _mcDate, type = _mcType;
+  if(!empId||!date||!type){alert('Missing data — please close and try again.');return;}
+
+  // Work on a fresh copy of clockEvents
+  let ce = JSON.parse(JSON.stringify(DB.get('clockEvents')||[]));
+
+  // Check for duplicate (correct JS: check if manual property exists)
+  const existIdx = ce.findIndex(e=>e.empId===empId&&e.date===date&&e.type===type);
   if(existIdx>=0){
-    if(!confirm('A '+_mcType+' event already exists for this person ('+ce[existIdx].time+'). Replace it with '+time+'?')) return;
+    if(!confirm('A '+type+' event already exists ('+ce[existIdx].time+'). Replace with '+time+'?')) return;
     ce.splice(existIdx,1);
   }
+
   const newEvent={
-    id:'ce-manual-'+Date.now(),
-    empId:_mcEmpId, date:_mcDate, type:_mcType, time:time,
-    reason:reason||'Manual entry by manager',
-    manual:true,
-    ts:new Date(_mcDate+'T'+time+':00').toISOString()
+    id:'ce-manual-'+Date.now()+Math.random().toString(36).slice(2,6),
+    empId, date, type, time,
+    reason: reason||'Manual entry by manager',
+    manual: true,
+    ts: new Date(date+'T'+time+':00').toISOString()
   };
   ce.push(newEvent);
-  // Atomic server append — same as clock device
-  _gasPost({action:'appendClockEvent',event:newEvent})
-    .then(r=>{ console.log('Manual clock event appended:',r); DB.set('clockEvents',ce); })
-    .catch(err=>{ console.error('Server write failed:',err); DB.set('clockEvents',ce); });
+
+  // ── Step 1: Write to local cache synchronously ──────────────
+  // Do this BEFORE closing modal and re-rendering so the new table
+  // row reads the correct data immediately
+  CACHE['rx3_clockEvents'] = ce;
+  try { localStorage.setItem('rx3_clockEvents', JSON.stringify(ce)); } catch(e){}
+
+  // ── Step 2: Close modal and re-render ───────────────────────
   CM('m-manual-clock');
-  renderTSDayBody(_mcDate);
+  renderTSDayBody(date);
+
+  // ── Step 3: Fire server write in background — no DOM interaction ──
+  // Using appendClockEvent (atomic server-side append, no race condition)
+  _gasPost({action:'appendClockEvent', event:newEvent})
+    .then(r=>console.log('Manual clock event confirmed on server:',r.total,'total events'))
+    .catch(err=>{
+      console.error('Server write failed (event is saved locally):',err);
+      // Retry silently after 5s
+      setTimeout(()=>_gasPost({action:'appendClockEvent',event:newEvent})
+        .then(r=>console.log('Retry succeeded:',r))
+        .catch(()=>console.error('Retry also failed — event is in local cache only')),5000);
+    });
+
+  // ── Step 4: Show status bar confirmation ────────────────────
+  const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
   const el=document.getElementById('pub-status');
   if(el){
-    const emp=(DB.get('staff')||[]).find(s=>s.id===_mcEmpId);
     el.style.display='block';
-    el.textContent='✓ '+(_mcType==='clock-in'?'Clock-in':'Clock-out')+' '+time+' added for '+(emp?emp.first:'staff member')+' on '+FDL(_mcDate)+'.';
-    setTimeout(()=>el.style.display='none',5000);
+    el.textContent='✓ '+(type==='clock-in'?'Clock-in':'Clock-out')+' '+time+' saved for '+(emp?emp.first:'staff member')+' on '+FDL(date)+'.';
+    setTimeout(()=>el.style.display='none',4000);
   }
 }
 

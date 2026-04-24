@@ -3194,11 +3194,6 @@ function openManualClock(empId, date, type, defaultTime) {
 }
 
 function saveManualClock() {
-  const time=document.getElementById('mc-time').value;
-  const reason=document.getElementById('mc-reason').value.trim();
-  if(!time){alert('Please enter a time.');return;}
-  if(!_mcEmpId||!_mcDate||!_mcType){alert('Missing data. Please close and try again.');return;}
-function saveManualClock() {
   const time   = document.getElementById('mc-time').value;
   const reason = document.getElementById('mc-reason').value.trim();
   if(!time){alert('Please enter a time.');return;}

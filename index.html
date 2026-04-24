@@ -3231,26 +3231,33 @@ function saveManualClock() {
   CM('m-manual-clock');
   renderTSDayBody(date);
 
-  // ── Step 3: Fire server write in background — no DOM interaction ──
-  // Using appendClockEvent (atomic server-side append, no race condition)
-  _gasPost({action:'appendClockEvent', event:newEvent})
-    .then(r=>console.log('Manual clock event confirmed on server:',r.total,'total events'))
+  // ── Step 3: Write to server using 'set' (proven reliable) ────
+  // appendClockEvent is atomic but requires Code.gs redeploy.
+  // 'set' writes the full array and is guaranteed to work.
+  const allCe = CACHE['rx3_clockEvents'] || [];
+  const el = document.getElementById('pub-status');
+
+  _gasPost({action:'set', dataKey:'rx3_clockEvents', value:JSON.stringify(allCe)})
+    .then(r=>{
+      console.log('Clock event write result:',r);
+      if(r.ok){
+        if(el){
+          el.style.display='block';
+          el.style.background='';
+          const emp2=(DB.get('staff')||[]).find(s=>s.id===empId);
+          el.textContent='✓ '+(type==='clock-in'?'Clock-in':'Clock-out')+' '+time+' saved for '+(emp2?emp2.first:'staff member')+' on '+FDL(date)+'.';
+          setTimeout(()=>el.style.display='none',5000);
+        }
+      } else {
+        console.error('Server write failed:',r.error);
+        if(el){el.style.display='block';el.style.background='var(--rl)';el.style.color='var(--rd)';el.textContent='Server error: '+(r.error||'unknown');}
+      }
+    })
     .catch(err=>{
-      console.error('Server write failed (event is saved locally):',err);
-      // Retry silently after 5s
-      setTimeout(()=>_gasPost({action:'appendClockEvent',event:newEvent})
-        .then(r=>console.log('Retry succeeded:',r))
-        .catch(()=>console.error('Retry also failed — event is in local cache only')),5000);
+      console.error('Network error saving clock event:',err);
+      if(el){el.style.display='block';el.style.background='var(--rl)';el.style.color='var(--rd)';el.textContent='Network error: '+err.message;}
     });
 
-  // ── Step 4: Show status bar confirmation ────────────────────
-  const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
-  const el=document.getElementById('pub-status');
-  if(el){
-    el.style.display='block';
-    el.textContent='✓ '+(type==='clock-in'?'Clock-in':'Clock-out')+' '+time+' saved for '+(emp?emp.first:'staff member')+' on '+FDL(date)+'.';
-    setTimeout(()=>el.style.display='none',4000);
-  }
 }
 
 function viewPhoto(inPhoto,outPhoto){

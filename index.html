@@ -1728,7 +1728,7 @@ function notifyStaffMember(empId,weekStart,weekEnd,updatedShifts){
 }
 
 // SH = paid hours (deducts only the paid 30-min portion of break)
-function SH(s){return Math.max(0,(MD(s.start,s.end)-(s.paidBreakMin||30))/60);}
+function SH(s){return Math.max(0,(MD(s.start,s.end)-(parseFloat(s.paidBreakMin)||parseFloat(s.breakMin)||30))/60);}
 // SH_GROSS = total time on shift including unpaid break portion
 function SH_GROSS(s){return Math.max(0,(MD(s.start,s.end))/60);}
 
@@ -2856,28 +2856,19 @@ function renderCalendar(){
 let tsDayIndex = 0; // currently selected day tab (0=Mon...6=Sun)
 
 function popTSWeeks(){
-  const sel=document.getElementById('ts-week');
-  const opts=[];
-  for(let w=0;w<8;w++){
-    // Calculate the Monday of w weeks ago — correctly handles all days of week
-    const d=new Date();
-    d.setHours(0,0,0,0);
-    const dow=d.getDay(); // 0=Sun, 1=Mon ... 6=Sat
-    const daysToMon=dow===0?-6:1-dow; // how many days back to get to Monday
-    d.setDate(d.getDate()+daysToMon-w*7);
-    opts.push({val:d.toISOString(),label:FDISP(d)+' week'});
-  }
+  const sel=document.getElementById('ts-week');const opts=[];
+  for(let w=0;w<8;w++){const d=new Date();d.setDate(d.getDate()-d.getDay()+1-w*7);d.setHours(0,0,0,0);opts.push({val:d.toISOString(),label:FDISP(d)+' week'});}
   sel.innerHTML=opts.map(o=>`<option value="${o.val}">${o.label}</option>`).join('');
-  // Default day tab to today's day within the week (0=Mon ... 6=Sun)
-  const dow=new Date().getDay();
-  tsDayIndex=dow===0?6:dow-1; // convert Sun=0 to index 6, Mon=1 to index 0 etc.
+  // Default to today's day index
+  const todayDow=(new Date().getDay()+6)%7;
+  tsDayIndex=todayDow;
 }
 function popTSEmps(){} // no longer needed — removed emp filter
 
 function getOrCreateCustom(empId,date,actualHrs,autoRoundedIn,autoRoundedOut,effectiveHrs){
   let ch=DB.get('customHours')||[];
   let existing=ch.find(x=>x.empId===empId&&x.date===date);
-  const computedAutoHrs=ROUND30(effectiveHrs!==undefined&&effectiveHrs!==null?effectiveHrs:(actualHrs!==null?actualHrs:0));
+  const computedAutoHrs=ROUND30(parseFloat(effectiveHrs!==undefined&&effectiveHrs!==null?effectiveHrs:(actualHrs!==null?actualHrs:0))||0);
   if(!existing){
     existing={id:'ch'+Date.now()+Math.random(),empId,date,
       customStart:null,  // never auto-populate custom fields — manager enters these manually
@@ -2915,7 +2906,7 @@ function updateCustomTime(empId,date,field,val,shiftId){
   const cStart=ch[idx].customStart;const cEnd=ch[idx].customEnd;
   if(cStart&&cEnd){
     const shifts=DB.get('shifts')||[];const s=shifts.find(x=>x.id===shiftId);
-    const bMin=s?s.breakMin:30;
+    const bMin=s?parseFloat(s.breakMin)||30:30;
     const mins=Math.max(0,MD(cStart,cEnd)-bMin);
     ch[idx].customHrs=Math.round(mins/60*100)/100;
     ch[idx].autoRounded=false;
@@ -2936,13 +2927,13 @@ function updateApprovedHrsDisplay(empId,date){
   if(!c.approved){el.textContent='—';return;}
   // Use locked approvedHrs if set (guaranteed snapshot), fall back to customHrs
   const hrs=c.approvedHrs!=null?c.approvedHrs:c.customHrs;
-  el.textContent=parseFloat(hrs).toFixed(2)+'h';
+  el.textContent=parseFloat(hrs||0).toFixed(2)+'h';
 }
 
 function updateCustomHrs(empId,date,val){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
-  if(idx>=0){ch[idx].customHrs=parseFloat(val)||0;ch[idx].autoRounded=false;ch[idx].manualEntry=true;DB.set('customHours',ch);}
+  if(idx>=0){ch[idx].customHrs=parseFloat(val||0)||0;ch[idx].autoRounded=false;ch[idx].manualEntry=true;DB.set('customHours',ch);}
   updateApprovedHrsDisplay(empId,date);
 }
 
@@ -2956,7 +2947,7 @@ function toggleApproved(empId,date,btn){
       // Lock in the approved hours as a permanent snapshot.
       // customHrs is always the correct payable amount (synced to autoHrs when no manual entry,
       // or set by the manager when manualEntry=true). Store it as approvedHrs too.
-      ch[idx].approvedHrs=ch[idx].customHrs;
+      ch[idx].approvedHrs=parseFloat(ch[idx].customHrs||0)||0;
       // Mark as manualEntry so the purge logic and getOrCreateCustom never overwrite these hours.
       ch[idx].manualEntry=true;
       ch[idx].approvedAt=new Date().toISOString();
@@ -3073,11 +3064,11 @@ function buildTSRows(dayDate){
       const coDiff=MD(s.end,co.time);
       if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Left ${coDiff}m late → capped to ${s.end}`});}
       else{autoRoundedOut=co.time;}
-      bActMin=_breakSessionCount>0?_totalActualBreakMins:s.breakMin;
+      bActMin=_breakSessionCount>0?_totalActualBreakMins:parseFloat(s.breakMin)||30;
       actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
     } else if(ci&&co){
       // Use actual total break minutes from all completed sessions; fall back to rostered break
-      bActMin=_breakSessionCount>0?_totalActualBreakMins:s.breakMin;
+      bActMin=_breakSessionCount>0?_totalActualBreakMins:parseFloat(s.breakMin)||30;
       actualHrs=Math.max(0,(MD(ci.time,co.time)-bActMin)/60);
       const ciDiff=MD(s.start,ci.time);const coDiff=MD(s.end,co.time);
       if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});}
@@ -3097,7 +3088,7 @@ function buildTSRows(dayDate){
     } else if(actualHrs!==null&&!isLeave&&!isSick){
       const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
       const effOut=autoRoundedOut||(co&&co.time)||s.end;
-      const effBreak=bActMin!==null?bActMin:s.breakMin;
+      const effBreak=bActMin!==null?bActMin:parseFloat(s.breakMin)||30;
       const effectiveWorkedHrs=Math.max(0,MD(effIn,effOut)-effBreak)/60;
       // Compare vs contracted daily hours if set, else vs dailyOT threshold
       const otThreshold=contractedHrs>0?contractedHrs:parseFloat(settings.dailyOTHours)||8;
@@ -3112,7 +3103,7 @@ function buildTSRows(dayDate){
     if(actualHrs!==null&&!isLeave&&!isSick&&(autoRoundedIn||autoRoundedOut)){
       const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
       const effOut=autoRoundedOut||(co&&co.time)||s.end;
-      const effBreak=bActMin!==null?bActMin:s.breakMin;
+      const effBreak=bActMin!==null?bActMin:parseFloat(s.breakMin)||30;
       effectiveHrs=Math.max(0,MD(effIn,effOut)-effBreak)/60;
     }
     const totalPayableHrs=effectiveHrs!==null?(effectiveHrs+(otHrs||0)):null;
@@ -3171,16 +3162,16 @@ function renderTS(){
     const co=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='clock-out');
     const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===s.date);
     const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=s.date&&l.to>=s.date);
-    if(!isSick&&!isLeave&&ci&&co){const bMin=(()=>{const empSCe=ce.filter(e=>e.empId===s.empId&&e.date===s.date).sort((a,b)=>(a.ts||a.time||'').localeCompare(b.ts||b.time||''));let _bp=null,_tot=0,_cnt=0;for(const _e of empSCe){if(_e.type==='break-start'){_bp=_e;}else if(_e.type==='break-end'&&_bp){const _sMs=_bp.ts?new Date(_bp.ts).getTime():0;const _eMs=_e.ts?new Date(_e.ts).getTime():0;const _m=(_sMs&&_eMs&&_eMs>_sMs)?Math.round((_eMs-_sMs)/60000):MD(_bp.time,_e.time)||0;_tot+=Math.max(0,_m);_cnt++;_bp=null;}}return _cnt>0?_tot:s.breakMin;})();const aHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);totW+=aHrs;if(settings.dailyOT&&aHrs>parseFloat(settings.dailyOTHours))totOT+=aHrs-parseFloat(settings.dailyOTHours);}
-    const c=ch.find(x=>x.empId===s.empId&&x.date===s.date);if(c&&c.approved){totApproved++;totApprovedHrs+=(c.approvedHrs!=null?c.approvedHrs:c.customHrs)||0;}
+    if(!isSick&&!isLeave&&ci&&co){const bMin=(()=>{const empSCe=ce.filter(e=>e.empId===s.empId&&e.date===s.date).sort((a,b)=>(a.ts||a.time||'').localeCompare(b.ts||b.time||''));let _bp=null,_tot=0,_cnt=0;for(const _e of empSCe){if(_e.type==='break-start'){_bp=_e;}else if(_e.type==='break-end'&&_bp){const _sMs=_bp.ts?new Date(_bp.ts).getTime():0;const _eMs=_e.ts?new Date(_e.ts).getTime():0;const _m=(_sMs&&_eMs&&_eMs>_sMs)?Math.round((_eMs-_sMs)/60000):MD(_bp.time,_e.time)||0;_tot+=Math.max(0,_m);_cnt++;_bp=null;}}return _cnt>0?_tot:parseFloat(s.breakMin)||30;})();const aHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);totW+=aHrs;if(settings.dailyOT&&aHrs>parseFloat(settings.dailyOTHours))totOT+=aHrs-parseFloat(settings.dailyOTHours);}
+    const c=ch.find(x=>x.empId===s.empId&&x.date===s.date);if(c&&c.approved){totApproved++;totApprovedHrs+=parseFloat((c.approvedHrs!=null?c.approvedHrs:c.customHrs)||0)||0;}
     totCount++;
   });
   document.getElementById('ts-summary').innerHTML=`
-    <div class="sc"><div class="sl">Rostered hrs</div><div class="sv">${totR.toFixed(1)}</div></div>
-    <div class="sc"><div class="sl">Worked hrs</div><div class="sv">${totW.toFixed(1)}</div></div>
-    <div class="sc"><div class="sl">OT hrs</div><div class="sv" style="color:var(--rd)">${totOT.toFixed(1)}</div></div>
-    <div class="sc"><div class="sl">Diff</div><div class="sv" style="font-size:16px;color:${totW-totR<0?'var(--amber)':'var(--td)'}">${totW-totR>=0?'+':''}${(totW-totR).toFixed(1)}h</div></div>
-    <div class="sc"><div class="sl">Approved</div><div class="sv" title="${totApprovedHrs.toFixed(1)}h approved">${totApproved}/${totCount}<span style="font-size:11px;color:var(--td);display:block">${totApprovedHrs.toFixed(1)}h</span></div></div>`;
+    <div class="sc"><div class="sl">Rostered hrs</div><div class="sv">${parseFloat(totR||0).toFixed(1)}</div></div>
+    <div class="sc"><div class="sl">Worked hrs</div><div class="sv">${parseFloat(totW||0).toFixed(1)}</div></div>
+    <div class="sc"><div class="sl">OT hrs</div><div class="sv" style="color:var(--rd)">${parseFloat(totOT||0).toFixed(1)}</div></div>
+    <div class="sc"><div class="sl">Diff</div><div class="sv" style="font-size:16px;color:${totW-totR<0?'var(--amber)':'var(--td)'}">${totW-totR>=0?'+':''}${parseFloat((totW-totR)||0).toFixed(1)}h</div></div>
+    <div class="sc"><div class="sl">Approved</div><div class="sv" title="${totApprovedHrs.toFixed(1)}h approved">${totApproved}/${totCount}<span style="font-size:11px;color:var(--td);display:block">${parseFloat(totApprovedHrs||0).toFixed(1)}h</span></div></div>`;
   // Build day tabs
   const tabsEl=document.getElementById('ts-day-tabs');
   const DNAMES=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -3224,7 +3215,7 @@ function approveAllDay(){
     const idx=ch.findIndex(x=>x.empId===r.s.empId&&x.date===r.s.date);
     if(idx>=0&&!ch[idx].approved){
       ch[idx].approved=true;
-      ch[idx].approvedHrs=ch[idx].customHrs;
+      ch[idx].approvedHrs=parseFloat(ch[idx].customHrs||0)||0;
       ch[idx].manualEntry=true;
       ch[idx].approvedAt=new Date().toISOString();
       approvedCount++;
@@ -3276,9 +3267,9 @@ function renderTSDayBody(ds){
     // Custom start/end inputs
     const cStart=r.custom.customStart||'';const cEnd=r.custom.customEnd||'';
     const hasCustomTime=!!(r.custom.customStart||r.custom.customEnd);
-    const approvedHrsDisplay=r.custom.approved?r.custom.customHrs.toFixed(2)+'h':'—';
+    const approvedHrsDisplay=r.custom.approved?parseFloat(r.custom.customHrs||0).toFixed(2)+'h':'—';
     // Break display
-    const brkDisplay=r.bActMin!==null?r.bActMin+'m':(r.s.breakMin?r.s.breakMin+'m':'—');
+    const brkDisplay=r.bActMin!==null?parseFloat(r.bActMin||0)+'m':(r.s.breakMin?parseFloat(r.s.breakMin||0)+'m':'—');
     return`<tr class="${r.rowCls}${r.otHrs>0?' tr-ot':''}">
       <td style="min-width:130px">
         <div style="font-weight:600;font-size:13px">${r.emp?r.emp.first+' '+r.emp.last:'?'}</div>
@@ -3307,8 +3298,8 @@ function renderTSDayBody(ds){
       <td style="font-size:11px;${r.autoRoundedOut?'color:var(--amber);font-weight:600':'color:var(--t3)'}" title="${r.autoRoundedOut?'Capped to rostered end (no approved OT)':'No rounding applied'}">${r.autoRoundedOut||'—'}</td>
       <td><input type="time" class="custom-time-input${hasCustomTime?' edited':''}" value="${cStart}" onchange="updateCustomTime('${empKey}','${dateKey}','customStart',this.value,'${r.s.id}')" title="Custom clock-in time"></td>
       <td><input type="time" class="custom-time-input${hasCustomTime?' edited':''}" value="${cEnd}" onchange="updateCustomTime('${empKey}','${dateKey}','customEnd',this.value,'${r.s.id}')" title="Custom clock-out time"></td>
-      <td><span id="custom-hrs-${empKey}-${dateKey}">${r.custom.customHrs.toFixed(2)}h</span></td>
-      <td class="${r.otHrs>0?'ot-val':''}">${r.otHrs>0?r.otHrs.toFixed(2)+'h':'—'}</td>
+      <td><span id="custom-hrs-${empKey}-${dateKey}">${parseFloat(r.custom.customHrs||0).toFixed(2)}h</span></td>
+      <td class="${r.otHrs>0?'ot-val':''}">${r.otHrs>0?parseFloat(r.otHrs||0).toFixed(2)+'h':'—'}</td>
       <td id="approved-hrs-${empKey}-${dateKey}" style="font-weight:600;color:var(--td)">${approvedHrsDisplay}</td>
       <td style="text-align:center"><div class="approved-check ${r.custom.approved?'checked':''}" onclick="toggleApproved('${empKey}','${dateKey}',this)">${r.custom.approved?'✓':''}</div></td>
       <td>${r.ci?.photo?`<img class="img-thumb" src="${r.ci.photo}" onclick="viewPhoto('${r.ci.photo}','${r.co?.photo||''}')" title="View clock photos">`:'—'}</td>
@@ -3514,7 +3505,7 @@ function exportCSV(){
           _csvTotalBrk+=Math.max(0,_m);_csvBrkSessions.push(`${_csvBp.time}–${_e.time}`);_csvBrkCnt++;_csvBp=null;
         }
       }
-      let actualHrs=0,otHrs=0,bMin=_csvBrkCnt>0?_csvTotalBrk:s.breakMin;
+      let actualHrs=0,otHrs=0,bMin=_csvBrkCnt>0?_csvTotalBrk:parseFloat(s.breakMin)||30;
       let status=isSick?'Sick':isLeave?isLeave.type:'Rostered';
       const flags=[];
       let autoIn='',autoOut='';

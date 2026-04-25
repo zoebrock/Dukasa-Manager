@@ -3009,6 +3009,25 @@ function buildTSRows(dayDate){
     const sHrs=SH(s);
     const ci=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-in');
     const co=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-out');
+    // ── Compute total actual break minutes from ALL break sessions ──────────
+    // A single shift may have 2+ break sessions (e.g. 15min + 15min = 30min total).
+    // Using only the first break-start/break-end pair would under-count.
+    const empDayCe=ce.filter(e=>e.empId===s.empId&&e.date===ds)
+      .sort((a,b)=>(a.ts||a.time||'').localeCompare(b.ts||b.time||''));
+    let _bPending=null,_totalActualBreakMins=0,_breakSessionCount=0;
+    const _allBreakSessions=[];
+    for(const _e of empDayCe){
+      if(_e.type==='break-start'){_bPending=_e;}
+      else if(_e.type==='break-end'&&_bPending){
+        const _sMs=_bPending.ts?new Date(_bPending.ts).getTime():0;
+        const _eMs=_e.ts?new Date(_e.ts).getTime():0;
+        const _mins=(_sMs&&_eMs&&_eMs>_sMs)?Math.round((_eMs-_sMs)/60000):MD(_bPending.time,_e.time)||0;
+        _totalActualBreakMins+=Math.max(0,_mins);
+        _allBreakSessions.push({start:_bPending,end:_e,mins:Math.max(0,_mins)});
+        _breakSessionCount++;_bPending=null;
+      }
+    }
+    // Fall back to rostered break if no completed break sessions recorded
     const bs=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='break-start');
     const be=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='break-end');
     const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===ds);
@@ -3038,20 +3057,27 @@ function buildTSRows(dayDate){
       else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → capped to ${s.start}`});}
       else{autoRoundedIn=ci.time;}
       autoRoundedOut=s.end;flags.push({type:'missing',msg:'No clock out — rostered end applied'});
-      bActMin=s.breakMin;actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
+      bActMin=_breakSessionCount>0?_totalActualBreakMins:s.breakMin;
+      actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
     } else if(!ci&&co){
       status='Missing clock in';autoRoundedIn=s.start;flags.push({type:'missing',msg:'No clock in — rostered start applied'});
       const coDiff=MD(s.end,co.time);
       if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Left ${coDiff}m late → capped to ${s.end}`});}
       else{autoRoundedOut=co.time;}
-      bActMin=s.breakMin;actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
+      bActMin=_breakSessionCount>0?_totalActualBreakMins:s.breakMin;
+      actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
     } else if(ci&&co){
-      bActMin=(bs&&be)?MD(bs.time,be.time):s.breakMin;
+      // Use actual total break minutes from all completed sessions; fall back to rostered break
+      bActMin=_breakSessionCount>0?_totalActualBreakMins:s.breakMin;
       actualHrs=Math.max(0,(MD(ci.time,co.time)-bActMin)/60);
       const ciDiff=MD(s.start,ci.time);const coDiff=MD(s.end,co.time);
       if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});}
       else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → capped to ${s.start}`});}
       if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Late out +${coDiff}m → capped to ${s.end}`});}
+      // Add multi-break flag if more than one session detected
+      if(_breakSessionCount>1){
+        flags.push({type:'info',msg:`${_breakSessionCount} breaks: ${_allBreakSessions.map(b=>`${b.start.time}–${b.end.time}(${b.mins}m)`).join(', ')} = ${_totalActualBreakMins}m total`});
+      }
       status='Completed';
     }
 
@@ -3136,7 +3162,7 @@ function renderTS(){
     const co=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='clock-out');
     const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===s.date);
     const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=s.date&&l.to>=s.date);
-    if(!isSick&&!isLeave&&ci&&co){const bMin=(()=>{const bs=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-start');const be=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-end');return(bs&&be)?MD(bs.time,be.time):s.breakMin;})();const aHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);totW+=aHrs;if(settings.dailyOT&&aHrs>parseFloat(settings.dailyOTHours))totOT+=aHrs-parseFloat(settings.dailyOTHours);}
+    if(!isSick&&!isLeave&&ci&&co){const bMin=(()=>{const empSCe=ce.filter(e=>e.empId===s.empId&&e.date===s.date).sort((a,b)=>(a.ts||a.time||'').localeCompare(b.ts||b.time||''));let _bp=null,_tot=0,_cnt=0;for(const _e of empSCe){if(_e.type==='break-start'){_bp=_e;}else if(_e.type==='break-end'&&_bp){const _sMs=_bp.ts?new Date(_bp.ts).getTime():0;const _eMs=_e.ts?new Date(_e.ts).getTime():0;const _m=(_sMs&&_eMs&&_eMs>_sMs)?Math.round((_eMs-_sMs)/60000):MD(_bp.time,_e.time)||0;_tot+=Math.max(0,_m);_cnt++;_bp=null;}}return _cnt>0?_tot:s.breakMin;})();const aHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);totW+=aHrs;if(settings.dailyOT&&aHrs>parseFloat(settings.dailyOTHours))totOT+=aHrs-parseFloat(settings.dailyOTHours);}
     const c=ch.find(x=>x.empId===s.empId&&x.date===s.date);if(c&&c.approved){totApproved++;totApprovedHrs+=(c.approvedHrs!=null?c.approvedHrs:c.customHrs)||0;}
     totCount++;
   });
@@ -3235,6 +3261,7 @@ function renderTSDayBody(ds){
       if(f.type==='sick') return`<span style="background:var(--rl);color:var(--rd);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">🤒 ${f.msg}</span>`;
       if(f.type==='leave') return`<span style="background:var(--al);color:var(--ad);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">🏖 ${f.msg}</span>`;
       if(f.type==='ot') return`<span class="ot-badge-ts">${f.msg}</span>`;
+      if(f.type==='info') return`<span style="background:var(--bl);color:var(--bd);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">☕ ${f.msg}</span>`;
       return`<span class="early-badge">${f.msg}</span>`;
     }).join(' '); // OT already included in flags array — don't append again
     // Custom start/end inputs
@@ -3462,13 +3489,23 @@ function exportCSV(){
       const sHrs=SH(s);
       const ci=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='clock-in');
       const co=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='clock-out');
-      const bs=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='break-start');
-      const be=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='break-end');
       const isSick=sd.find(sk=>sk.empId===emp.id&&sk.date===ds);
       const isLeave=lr.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
       const approvedOT=otReqs.find(o=>o.empId===emp.id&&o.date===ds);
       const custom=ch.find(x=>x.empId===emp.id&&x.date===ds);
-      let actualHrs=0,otHrs=0,bMin=s.breakMin;
+      // Compute total break minutes from ALL completed break sessions
+      const _csvCe=ce.filter(e=>e.empId===emp.id&&e.date===ds).sort((a,b)=>(a.ts||a.time||'').localeCompare(b.ts||b.time||''));
+      let _csvBp=null,_csvTotalBrk=0,_csvBrkCnt=0,_csvBrkSessions=[];
+      for(const _e of _csvCe){
+        if(_e.type==='break-start'){_csvBp=_e;}
+        else if(_e.type==='break-end'&&_csvBp){
+          const _sMs=_csvBp.ts?new Date(_csvBp.ts).getTime():0;
+          const _eMs=_e.ts?new Date(_e.ts).getTime():0;
+          const _m=(_sMs&&_eMs&&_eMs>_sMs)?Math.round((_eMs-_sMs)/60000):MD(_csvBp.time,_e.time)||0;
+          _csvTotalBrk+=Math.max(0,_m);_csvBrkSessions.push(`${_csvBp.time}–${_e.time}`);_csvBrkCnt++;_csvBp=null;
+        }
+      }
+      let actualHrs=0,otHrs=0,bMin=_csvBrkCnt>0?_csvTotalBrk:s.breakMin;
       let status=isSick?'Sick':isLeave?isLeave.type:'Rostered';
       const flags=[];
       let autoIn='',autoOut='';
@@ -3497,12 +3534,13 @@ function exportCSV(){
         if(coD>0&&!approvedOT){autoOut=s.end;flags.push('Late out → capped');}else{autoOut=co.time;}
         actualHrs=Math.max(0,MD(autoIn,autoOut)-bMin)/60;
       } else if(ci&&co){
-        if(bs&&be)bMin=MD(bs.time,be.time);
+        // bMin already set to total actual break from all sessions above (falls back to rostered)
         actualHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);
         const ciD=MD(s.start,ci.time);const coD=MD(s.end,co.time);
         if(ciD>0){autoIn=csvRoundUpTo30(ci.time);flags.push('Late +'+ciD+'m → '+autoIn);}
         else if(ciD<0){autoIn=s.start;flags.push('Early → capped to '+s.start);}
         if(coD>0&&!approvedOT){autoOut=s.end;flags.push('Late out → capped to '+s.end);}
+        if(_csvBrkCnt>1) flags.push('Multiple breaks: '+_csvBrkSessions.join(', ')+' = '+_csvTotalBrk+'m total');
         status='Completed';
       }
 

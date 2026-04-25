@@ -384,12 +384,16 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
         <h2>Timesheets</h2>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <select id="ts-week" style="width:auto;font-size:13px" onchange="renderTS()"></select>
+          <button class="btn btn-sm" onclick="approveAllDay()" title="Tick approved for every row shown today">✓ Approve all today</button>
           <button class="btn btn-primary btn-sm" onclick="exportCSV()">⬇ Export CSV</button>
         </div>
       </div>
+      <div id="ts-pub-status" style="display:none;padding:8px 12px;border-radius:var(--rsm);font-size:12px;margin-bottom:10px;background:var(--gl);color:var(--gd)"></div>
       <div id="ts-summary" style="display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-bottom:14px"></div>
       <!-- Day tabs -->
       <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0;overflow-x:auto" id="ts-day-tabs"></div>
+      <!-- Per-day approved count bar -->
+      <div id="ts-day-approved-bar" style="display:none;padding:6px 12px;background:var(--gl);color:var(--gd);font-size:12px;font-weight:600;border-bottom:1px solid #C0DD97"></div>
       <!-- Per-day table -->
       <div class="ts-wrap" style="margin-top:0">
         <table class="ts-tbl">
@@ -2878,10 +2882,12 @@ function getOrCreateCustom(empId,date,actualHrs,autoRoundedIn,autoRoundedOut,eff
   } else {
     // Backfill flags for older records
     if(existing.manualEntry===undefined) existing.manualEntry=false;
+    if(existing.approved===undefined) existing.approved=false;
     // Always keep autoHrs fresh from current rounding
     existing.autoHrs=computedAutoHrs;
-    // If no manual entry, sync customHrs to autoHrs (never touch customStart/customEnd)
-    if(!existing.manualEntry){
+    // Only sync customHrs to autoHrs when there is NO manual entry AND the record is NOT approved.
+    // Approved records must never have their hours silently changed — the manager explicitly signed off.
+    if(!existing.manualEntry && !existing.approved){
       existing.customHrs=computedAutoHrs;
     }
     const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
@@ -2919,8 +2925,9 @@ function updateApprovedHrsDisplay(empId,date){
   const el=document.getElementById(`approved-hrs-${empId}-${date}`);
   if(!el)return;
   if(!c.approved){el.textContent='—';return;}
-  // Always use customHrs — getOrCreateCustom keeps it synced to autoHrs when no manual entry
-  el.textContent=c.customHrs.toFixed(2)+'h';
+  // Use locked approvedHrs if set (guaranteed snapshot), fall back to customHrs
+  const hrs=c.approvedHrs!=null?c.approvedHrs:c.customHrs;
+  el.textContent=parseFloat(hrs).toFixed(2)+'h';
 }
 
 function updateCustomHrs(empId,date,val){
@@ -2934,11 +2941,24 @@ function toggleApproved(empId,date,btn){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
   if(idx>=0){
-    ch[idx].approved=!ch[idx].approved;
-    // When approving, lock in the correct hours:
-    // use manual customHrs if entered, otherwise use autoHrs
+    const wasApproved=ch[idx].approved;
+    ch[idx].approved=!wasApproved;
     if(ch[idx].approved){
-      ch[idx].approvedHrs=ch[idx].customHrs; // customHrs is always correct (synced to autoHrs when no manual entry)
+      // Lock in the approved hours as a permanent snapshot.
+      // customHrs is always the correct payable amount (synced to autoHrs when no manual entry,
+      // or set by the manager when manualEntry=true). Store it as approvedHrs too.
+      ch[idx].approvedHrs=ch[idx].customHrs;
+      // Mark as manualEntry so the purge logic and getOrCreateCustom never overwrite these hours.
+      ch[idx].manualEntry=true;
+      ch[idx].approvedAt=new Date().toISOString();
+    } else {
+      // Un-approving: clear the lock so auto-recalculation can resume
+      ch[idx].approvedHrs=null;
+      ch[idx].approvedAt=null;
+      // Only clear manualEntry lock if the manager hadn't actually typed custom times
+      if(!ch[idx].customStart && !ch[idx].customEnd){
+        ch[idx].manualEntry=false;
+      }
     }
     DB.set('customHours',ch);
     btn.classList.toggle('checked',ch[idx].approved);
@@ -3062,7 +3082,7 @@ function buildTSRows(dayDate){
     }
     const totalPayableHrs=effectiveHrs!==null?(effectiveHrs+(otHrs||0)):null;
     const custom=getOrCreateCustom(s.empId,ds,actualHrs,autoRoundedIn,autoRoundedOut,totalPayableHrs);
-    const approvedHrs=custom.approved?custom.customHrs:null;
+    const approvedHrs=custom.approved?(custom.approvedHrs!=null?custom.approvedHrs:custom.customHrs):null;
     rows.push({s,emp,sHrs,actualHrs,otHrs,status,rowCls,ci,co,bs,be,bActMin,flags,isSick,isLeave,approvedOT,custom,approvedHrs,autoRoundedIn,autoRoundedOut,contractedHrs});
   });
 
@@ -3091,14 +3111,13 @@ function buildTSRows(dayDate){
 function renderTS(){
   const sv=document.getElementById('ts-week').value;
   if(!sv)return;
-  // Purge any non-manual customHours records so they are recalculated fresh
-  // This ensures stale auto-seeded records don't persist with wrong hours
-  // Purge stale auto-seeded records so they regenerate with correct hours
+  // Purge ONLY unapproved, non-manual auto-seeded records so they recalculate fresh.
+  // NEVER purge records that are approved OR manually edited — these must survive page refreshes.
   const chStale=DB.get('customHours')||[];
-  const chPurged=chStale.filter(x=>x.manualEntry===true);
+  const chPurged=chStale.filter(x=>x.manualEntry===true||x.approved===true);
   if(chPurged.length!==chStale.length){
     DB.set('customHours',chPurged);
-    console.log('Purged',chStale.length-chPurged.length,'stale auto-seeded custom hours records');
+    console.log('Purged',chStale.length-chPurged.length,'stale unapproved auto-seeded custom hours records (approved/manual preserved)');
   }
   const wkS=new Date(sv);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
   // Build 7 days
@@ -3110,7 +3129,7 @@ function renderTS(){
   const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8};
   const ws=FD(wkS),we=FD(wkE);
   const wShifts=shifts.filter(s=>s.date>=ws&&s.date<=we&&!s.isOT&&(DB.get('staff')||[]).some(e=>e.id===s.empId));
-  let totR=0,totW=0,totOT=0,totApproved=0,totCount=0;
+  let totR=0,totW=0,totOT=0,totApproved=0,totCount=0,totApprovedHrs=0;
   wShifts.forEach(s=>{
     totR+=SH(s);
     const ci=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='clock-in');
@@ -3118,7 +3137,7 @@ function renderTS(){
     const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===s.date);
     const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=s.date&&l.to>=s.date);
     if(!isSick&&!isLeave&&ci&&co){const bMin=(()=>{const bs=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-start');const be=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-end');return(bs&&be)?MD(bs.time,be.time):s.breakMin;})();const aHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);totW+=aHrs;if(settings.dailyOT&&aHrs>parseFloat(settings.dailyOTHours))totOT+=aHrs-parseFloat(settings.dailyOTHours);}
-    const c=ch.find(x=>x.empId===s.empId&&x.date===s.date);if(c&&c.approved)totApproved++;
+    const c=ch.find(x=>x.empId===s.empId&&x.date===s.date);if(c&&c.approved){totApproved++;totApprovedHrs+=(c.approvedHrs!=null?c.approvedHrs:c.customHrs)||0;}
     totCount++;
   });
   document.getElementById('ts-summary').innerHTML=`
@@ -3126,7 +3145,7 @@ function renderTS(){
     <div class="sc"><div class="sl">Worked hrs</div><div class="sv">${totW.toFixed(1)}</div></div>
     <div class="sc"><div class="sl">OT hrs</div><div class="sv" style="color:var(--rd)">${totOT.toFixed(1)}</div></div>
     <div class="sc"><div class="sl">Diff</div><div class="sv" style="font-size:16px;color:${totW-totR<0?'var(--amber)':'var(--td)'}">${totW-totR>=0?'+':''}${(totW-totR).toFixed(1)}h</div></div>
-    <div class="sc"><div class="sl">Approved</div><div class="sv">${totApproved}/${totCount}</div></div>`;
+    <div class="sc"><div class="sl">Approved</div><div class="sv" title="${totApprovedHrs.toFixed(1)}h approved">${totApproved}/${totCount}<span style="font-size:11px;color:var(--td);display:block">${totApprovedHrs.toFixed(1)}h</span></div></div>`;
   // Build day tabs
   const tabsEl=document.getElementById('ts-day-tabs');
   const DNAMES=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -3141,7 +3160,10 @@ function renderTS(){
     const d=new Date(ds+'T00:00:00');
     const label=`${DNAMES[i]} ${d.getDate()}/${d.getMonth()+1}`;
     const shiftCount=dayShifts.length;
-    return`<button class="ts-day-tab${i===tsDayIndex?' active':''}${hasFlags?' has-flags':''}" onclick="selectTSDay(${i})">${label}${shiftCount>0?`<span style="margin-left:5px;font-size:9px;background:var(--pl);color:var(--pd);padding:1px 5px;border-radius:10px">${shiftCount}</span>`:''}${hasFlags?'<span style="margin-left:3px" title="Has timing flags">⚠</span>':''}</button>`;
+    const ch=DB.get('customHours')||[];
+    const approvedOnDay=dayShifts.filter(s=>ch.some(x=>x.empId===s.empId&&x.date===ds&&x.approved)).length;
+    const allApproved=shiftCount>0&&approvedOnDay===shiftCount;
+    return`<button class="ts-day-tab${i===tsDayIndex?' active':''}${hasFlags?' has-flags':''}" onclick="selectTSDay(${i})">${label}${shiftCount>0?`<span style="margin-left:5px;font-size:9px;background:var(--pl);color:var(--pd);padding:1px 5px;border-radius:10px">${shiftCount}</span>`:''}${allApproved?`<span style="margin-left:3px;font-size:9px;background:var(--gl);color:var(--gd);padding:1px 5px;border-radius:10px" title="All approved">✓</span>`:''}${hasFlags?'<span style="margin-left:3px" title="Has timing flags">⚠</span>':''}</button>`;
   }).join('');
   renderTSDayBody(days[tsDayIndex]||days[0]);
 }
@@ -3155,10 +3177,52 @@ function selectTSDay(idx){
   renderTSDayBody(days[idx]||days[0]);
 }
 
+function approveAllDay(){
+  const sv=document.getElementById('ts-week').value;if(!sv)return;
+  const wkS=new Date(sv);
+  const days=[];for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);days.push(FD(d));}
+  const ds=days[tsDayIndex]||days[0];
+  let ch=DB.get('customHours')||[];
+  const rows=buildTSRows(ds);
+  let approvedCount=0;
+  rows.forEach(r=>{
+    const idx=ch.findIndex(x=>x.empId===r.s.empId&&x.date===r.s.date);
+    if(idx>=0&&!ch[idx].approved){
+      ch[idx].approved=true;
+      ch[idx].approvedHrs=ch[idx].customHrs;
+      ch[idx].manualEntry=true;
+      ch[idx].approvedAt=new Date().toISOString();
+      approvedCount++;
+    }
+  });
+  DB.set('customHours',ch);
+  renderTSDayBody(ds);
+  renderTS(); // refresh summary counts
+  const bar=document.getElementById('ts-pub-status');
+  if(bar){bar.style.display='block';bar.style.background='var(--gl)';bar.style.color='var(--gd)';bar.textContent=`✓ Approved ${approvedCount} row(s) for ${FDL(ds)}.`;setTimeout(()=>bar.style.display='none',4000);}
+}
+
 function renderTSDayBody(ds){
   const rows=buildTSRows(ds);
   const SB={Rostered:'bp',Completed:'bg','In progress':'ba',Sick:'br','Annual Leave':'ba','No clock events':'br','Missing clock out':'ba','Missing clock in':'ba'};
   const body=document.getElementById('ts-body');
+  // Update approved count bar
+  const approvedBar=document.getElementById('ts-day-approved-bar');
+  if(approvedBar){
+    const ch=DB.get('customHours')||[];
+    const appCount=rows.filter(r=>ch.some(x=>x.empId===r.s.empId&&x.date===r.s.date&&x.approved)).length;
+    const totCount=rows.length;
+    if(totCount>0){
+      approvedBar.style.display='block';
+      if(appCount===totCount){
+        approvedBar.style.background='var(--gl)';approvedBar.style.color='var(--gd)';
+        approvedBar.textContent=`✓ All ${totCount} row(s) approved for ${FDL(ds)}`;
+      } else {
+        approvedBar.style.background='var(--al)';approvedBar.style.color='var(--ad)';
+        approvedBar.textContent=`${appCount} of ${totCount} row(s) approved for ${FDL(ds)} — ${totCount-appCount} pending`;
+      }
+    } else {approvedBar.style.display='none';}
+  }
   if(!rows.length){body.innerHTML=`<tr><td colspan="20" style="text-align:center;color:var(--t2);padding:20px;font-size:12px">No shifts on ${FDL(ds)}</td></tr>`;return;}
   body.innerHTML=rows.map(r=>{
     const empKey=r.s.empId;const dateKey=r.s.date;
@@ -3453,7 +3517,7 @@ function exportCSV(){
       }
 
       const contractHrs=isLeave?actualHrs:isSick?actualHrs:Math.min(actualHrs,otThreshold);
-      const approvedHrs=custom&&custom.approved?custom.customHrs:null;
+      const approvedHrs=custom&&custom.approved?(custom.approvedHrs!=null?custom.approvedHrs:custom.customHrs):null;
       const flagStr=flags.join('; ');
       const reason=ci&&ci.reason?ci.reason:co&&co.reason?co.reason:'';
 

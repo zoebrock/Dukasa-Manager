@@ -2856,12 +2856,21 @@ function renderCalendar(){
 let tsDayIndex = 0; // currently selected day tab (0=Mon...6=Sun)
 
 function popTSWeeks(){
-  const sel=document.getElementById('ts-week');const opts=[];
-  for(let w=0;w<8;w++){const d=new Date();d.setDate(d.getDate()-d.getDay()+1-w*7);d.setHours(0,0,0,0);opts.push({val:d.toISOString(),label:FDISP(d)+' week'});}
+  const sel=document.getElementById('ts-week');
+  const opts=[];
+  for(let w=0;w<8;w++){
+    // Calculate the Monday of w weeks ago — correctly handles all days of week
+    const d=new Date();
+    d.setHours(0,0,0,0);
+    const dow=d.getDay(); // 0=Sun, 1=Mon ... 6=Sat
+    const daysToMon=dow===0?-6:1-dow; // how many days back to get to Monday
+    d.setDate(d.getDate()+daysToMon-w*7);
+    opts.push({val:d.toISOString(),label:FDISP(d)+' week'});
+  }
   sel.innerHTML=opts.map(o=>`<option value="${o.val}">${o.label}</option>`).join('');
-  // Default to today's day index
-  const todayDow=(new Date().getDay()+6)%7;
-  tsDayIndex=todayDow;
+  // Default day tab to today's day within the week (0=Mon ... 6=Sun)
+  const dow=new Date().getDay();
+  tsDayIndex=dow===0?6:dow-1; // convert Sun=0 to index 6, Mon=1 to index 0 etc.
 }
 function popTSEmps(){} // no longer needed — removed emp filter
 

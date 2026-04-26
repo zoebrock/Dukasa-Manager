@@ -92,6 +92,11 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
 .chip-unavail{background:var(--s2);color:var(--t3);border:1px solid var(--border);cursor:default}
 .add-btn{width:22px;height:22px;border-radius:4px;border:1px dashed var(--border2);color:var(--t3);font-size:13px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
 .add-btn:hover{border-color:var(--purple);color:var(--purple);background:var(--pl)}
+.shift-select-cb{position:absolute;top:2px;left:2px;width:14px;height:14px;accent-color:var(--purple);cursor:pointer;z-index:2}
+.shift-chip-wrap{position:relative;width:100%}
+.shift-chip-wrap.selected .chip{outline:2px solid var(--purple);outline-offset:1px}
+.select-bar{display:none;position:sticky;top:0;z-index:10;background:var(--purple);color:#fff;padding:8px 14px;border-radius:var(--rsm);margin-bottom:8px;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:500}
+.select-bar.visible{display:flex}
 .av{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0}
 .enc{display:flex;align-items:center;gap:7px}
 .tbl{width:100%;border-collapse:collapse}
@@ -287,12 +292,23 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
             <button class="toggle" id="toggle-avail" onclick="toggleAvail()"></button>
             Show availability
           </label>
+          <button class="btn btn-sm" id="select-mode-btn" onclick="toggleSelectMode()" title="Select multiple shifts to delete">☑ Select</button>
           <button class="btn btn-sm" onclick="openTemplateModal()">📋 Templates</button>
           <button class="btn btn-sm" onclick="openPublishModal()">📣 Publish</button>
           <button class="btn btn-primary btn-sm" onclick="openAddShiftModal()">+ Add shift</button>
         </div>
       </div>
       <div class="alert ai" id="pub-status" style="display:none"></div>
+      <!-- Multi-select delete bar -->
+      <div class="select-bar" id="select-bar">
+        <span id="select-count-label">0 shifts selected</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn btn-sm" style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.3)" onclick="selectAllVisible()">Select all visible</button>
+          <button class="btn btn-sm" style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.3)" onclick="clearSelection()">Clear</button>
+          <button class="btn btn-sm" style="background:var(--red);color:#fff;border-color:var(--rd)" onclick="deleteSelected()">🗑 Delete selected</button>
+          <button class="btn btn-sm" style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.3)" onclick="toggleSelectMode()">✕ Cancel</button>
+        </div>
+      </div>
       <div id="roster-pharma-alerts" style="margin-bottom:6px"></div>
       <div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:10px">
         <span style="color:var(--t2)">Legend:</span>
@@ -999,6 +1015,8 @@ function initDefaults(){
 }
 
 let currentWeekStart=null,showAvail=false,editingShiftId=null,editingStaffId=null,editingOTId=null,reviewingLeaveId=null,quickSickShiftId=null,viewingShiftId=null,currentLeaveFilter='pending',calMonth=new Date();
+let _selectMode=false;
+const _selectedShiftIds=new Set();
 
 // AUTH
 // DASHBOARD
@@ -1260,6 +1278,83 @@ function dayName(d){return['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()
 // ROSTER
 function toggleAvail(){showAvail=!showAvail;document.getElementById('toggle-avail').classList.toggle('on',showAvail);renderRoster();}
 
+// ── MULTI-SELECT DELETE ────────────────────────────────────────
+function toggleSelectMode(){
+  _selectMode=!_selectMode;
+  _selectedShiftIds.clear();
+  const btn=document.getElementById('select-mode-btn');
+  const bar=document.getElementById('select-bar');
+  if(btn){
+    btn.textContent=_selectMode?'✕ Cancel select':'☑ Select';
+    btn.style.background=_selectMode?'var(--purple)':'';
+    btn.style.color=_selectMode?'#fff':'';
+    btn.style.borderColor=_selectMode?'var(--purple)':'';
+  }
+  if(bar) bar.classList.toggle('visible',_selectMode);
+  updateSelectBar();
+  renderRoster();
+}
+
+function toggleShiftSelect(shiftId, event){
+  if(event) event.stopPropagation();
+  if(_selectedShiftIds.has(shiftId)) _selectedShiftIds.delete(shiftId);
+  else _selectedShiftIds.add(shiftId);
+  // Update the chip wrapper visually without full re-render
+  const wrap=document.getElementById('swrap-'+shiftId);
+  if(wrap){
+    wrap.classList.toggle('selected',_selectedShiftIds.has(shiftId));
+    const cb=wrap.querySelector('input[type=checkbox]');
+    if(cb) cb.checked=_selectedShiftIds.has(shiftId);
+  }
+  updateSelectBar();
+}
+
+function selectAllVisible(){
+  // Select all shift IDs currently visible in the rendered roster (current week)
+  const shifts=DB.get('shifts')||[];
+  const days=getWD();
+  const ws=FD(days[0]),we=FD(days[6]);
+  shifts.filter(s=>s.date>=ws&&s.date<=we&&!s.isOT).forEach(s=>_selectedShiftIds.add(s.id));
+  updateSelectBar();
+  renderRoster();
+}
+
+function clearSelection(){
+  _selectedShiftIds.clear();
+  updateSelectBar();
+  renderRoster();
+}
+
+function updateSelectBar(){
+  const label=document.getElementById('select-count-label');
+  const n=_selectedShiftIds.size;
+  if(label) label.textContent=n===0?'No shifts selected':n===1?'1 shift selected':`${n} shifts selected`;
+}
+
+function deleteSelected(){
+  const n=_selectedShiftIds.size;
+  if(n===0){alert('No shifts selected. Click on shifts to select them first.');return;}
+  if(!confirm(`Delete ${n} shift${n===1?'':'s'}? This cannot be undone.`)) return;
+  let shifts=DB.get('shifts')||[];
+  shifts=shifts.filter(s=>!_selectedShiftIds.has(s.id));
+  DB.set('shifts',shifts);
+  _selectedShiftIds.clear();
+  // Exit select mode after deletion
+  _selectMode=false;
+  const btn=document.getElementById('select-mode-btn');
+  const bar=document.getElementById('select-bar');
+  if(btn){btn.textContent='☑ Select';btn.style.background='';btn.style.color='';btn.style.borderColor='';}
+  if(bar) bar.classList.remove('visible');
+  renderRoster();
+  renderDashboard();
+  const el=document.getElementById('pub-status');
+  if(el){
+    el.style.display='block';
+    el.textContent=`✓ ${n} shift${n===1?'':'s'} deleted.`;
+    setTimeout(()=>el.style.display='none',4000);
+  }
+}
+
 function renderRoster(){
   if(!currentWeekStart){initWeek(new Date());}
   const days=getWD();const we=new Date(currentWeekStart);we.setDate(we.getDate()+6);
@@ -1293,16 +1388,24 @@ function renderRoster(){
 
       let content='';
 
-      // Shift chips — clicking opens the action popup instead of shift detail
+      // Shift chips — clicking opens popup normally, or toggles selection in select mode
       dayShifts.forEach(s=>{
         const chipClass=s.published?'chip-shift':'chip-draft';
-        const pubDot=s.published?'':'';
         const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
         const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
-        content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="openShiftPopup(event,'${s.id}')">
-          <span class="chip ${chipClass}" style="width:100%;justify-content:center" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">${s.start}–${s.end}</span>
-          ${otBadge}
-        </div>`;
+        const isSelected=_selectedShiftIds.has(s.id);
+        if(_selectMode){
+          content+=`<div class="shift-chip-wrap${isSelected?' selected':''}" id="swrap-${s.id}" onclick="toggleShiftSelect('${s.id}',event)">
+            <input type="checkbox" class="shift-select-cb" ${isSelected?'checked':''} onclick="toggleShiftSelect('${s.id}',event)">
+            <span class="chip ${chipClass}" style="width:100%;justify-content:center;padding-left:18px">${s.start}–${s.end}</span>
+            ${otBadge}
+          </div>`;
+        } else {
+          content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="openShiftPopup(event,'${s.id}')">
+            <span class="chip ${chipClass}" style="width:100%;justify-content:center" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">${s.start}–${s.end}</span>
+            ${otBadge}
+          </div>`;
+        }
       });
 
       // Status chips — clickable for sick/leave management
@@ -1311,9 +1414,9 @@ function renderRoster(){
       else if(onLeave&&dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer;font-size:8px" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">🏖 Leave</span>`;
       if(showAvail&&!avail&&!dayShifts.length&&!onLeave&&!isSick) content+=`<span class="chip chip-unavail chip-small">Unavail.</span>`;
 
-      // Only show + button if no shifts exist for this day
+      // Only show + button if no shifts exist for this day and not in select mode
       const hasShifts=dayShifts.length>0;
-      const addBtn=!hasShifts?`<button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift">+</button>`:'';
+      const addBtn=(!hasShifts&&!_selectMode)?`<button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift">+</button>`:'';
 
       const cellStyle=isToday?'background:rgba(83,74,183,.04)':'';
       return `<td style="${cellStyle}"><div class="sc-cell">${content}${addBtn}</div></td>`;

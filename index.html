@@ -906,6 +906,17 @@ const DB = {
         } else {
           keys.forEach(k => { const key='rx3_'+k; const local=localStorage.getItem(key); try{CACHE[key]=local?JSON.parse(local):null;}catch(e){CACHE[key]=null;} });
         }
+        // Normalise customHours booleans after initial load from Sheet
+        const ck2 = 'rx3_customHours';
+        if (CACHE[ck2] && Array.isArray(CACHE[ck2])) {
+          CACHE[ck2].forEach(function(r) {
+            if (r) {
+              r.approved    = !!r.approved;
+              r.manualEntry = !!r.manualEntry;
+              r.autoRounded = !!r.autoRounded;
+            }
+          });
+        }
         _setSyncIndicator('idle');
         if (callback) callback();
       })
@@ -952,6 +963,18 @@ const DB = {
                 CACHE[key] = serverVal;
                 localStorage.setItem(key, result.data[key]);
               } catch(e) {}
+            }
+          });
+        }
+        // After reading customHours from Sheet, normalise all boolean fields
+        // so the purge and approval logic always sees proper JS booleans (not strings)
+        const ck = 'rx3_customHours';
+        if (CACHE[ck] && Array.isArray(CACHE[ck])) {
+          CACHE[ck].forEach(function(r) {
+            if (r) {
+              r.approved    = !!r.approved;
+              r.manualEntry = !!r.manualEntry;
+              r.autoRounded = !!r.autoRounded;
             }
           });
         }
@@ -3006,6 +3029,9 @@ function getOrCreateCustom(empId,date,actualHrs,autoRoundedIn,autoRoundedOut,eff
     // Backfill flags for older records
     if(existing.manualEntry===undefined) existing.manualEntry=false;
     if(existing.approved===undefined) existing.approved=false;
+    // Normalise booleans — Sheets may return "true"/"false" strings or 1/0 numbers
+    existing.approved=!!existing.approved;
+    existing.manualEntry=!!existing.manualEntry;
     // Always keep autoHrs fresh from current rounding
     existing.autoHrs=computedAutoHrs;
     // Only sync customHrs to autoHrs when there is NO manual entry AND the record is NOT approved.
@@ -3064,6 +3090,9 @@ function toggleApproved(empId,date,btn){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
   if(idx>=0){
+    // Normalise booleans — Sheet may return "true"/"false" strings
+    ch[idx].approved=!!ch[idx].approved;
+    ch[idx].manualEntry=!!ch[idx].manualEntry;
     const wasApproved=ch[idx].approved;
     ch[idx].approved=!wasApproved;
     if(ch[idx].approved){
@@ -3087,8 +3116,9 @@ function toggleApproved(empId,date,btn){
     btn.classList.toggle('checked',ch[idx].approved);
     btn.textContent=ch[idx].approved?'✓':'';
     updateApprovedHrsDisplay(empId,date);
-    // Suppress ping-triggered re-renders for 10s while Sheet write completes
-    _suppressRenderUntil = Date.now() + 10000;
+    // Suppress ping-triggered re-renders for 30s while Sheet write completes.
+    // GAS cold-starts can take 15-20s so 10s was too short.
+    _suppressRenderUntil = Date.now() + 30000;
   }
 }
 
@@ -3264,11 +3294,12 @@ function renderTS(){
   if(!sv)return;
   // Purge ONLY unapproved, non-manual auto-seeded records so they recalculate fresh.
   // NEVER purge records that are approved OR manually edited — these must survive page refreshes.
+  // Use truthy coercion (not ===true) because Sheets may return "true" string or 1 for booleans.
   const chStale=DB.get('customHours')||[];
-  const chPurged=chStale.filter(x=>x.manualEntry===true||x.approved===true);
+  const chPurged=chStale.filter(x=>!!x.manualEntry||!!x.approved);
   if(chPurged.length!==chStale.length){
     DB.set('customHours',chPurged);
-    console.log('Purged',chStale.length-chPurged.length,'stale unapproved auto-seeded custom hours records (approved/manual preserved)');
+    console.log('Purged',chStale.length-chPurged.length,'stale auto-seeded records (approved/manual preserved)');
   }
   const wkS=new Date(sv);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
   // Build 7 days
@@ -3338,6 +3369,11 @@ function approveAllDay(){
   let approvedCount=0;
   rows.forEach(r=>{
     const idx=ch.findIndex(x=>x.empId===r.s.empId&&x.date===r.s.date);
+    if(idx>=0){
+      // Normalise booleans from Sheet
+      ch[idx].approved=!!ch[idx].approved;
+      ch[idx].manualEntry=!!ch[idx].manualEntry;
+    }
     if(idx>=0&&!ch[idx].approved){
       ch[idx].approved=true;
       ch[idx].approvedHrs=parseFloat(ch[idx].customHrs||0)||0;
@@ -3852,8 +3888,10 @@ function startManagerSync() {
       if (ts !== _mgrLastModified) {
         _mgrLastModified = ts;
         // Don't re-render if an approval write is still in progress
-        if (Date.now() < _suppressRenderUntil) {
-          console.log('[PING] Render suppressed — approval write in progress');
+        // Check both the time-based suppress AND whether a key is actively being written
+        const customHoursLocked = _writeLock.has('rx3_customHours');
+        if (Date.now() < _suppressRenderUntil || customHoursLocked) {
+          console.log('[PING] Render suppressed — customHours write in progress or suppress active');
           return;
         }
         // Re-read data and re-render current page

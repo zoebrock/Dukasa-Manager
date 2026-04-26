@@ -3003,11 +3003,22 @@ let tsDayIndex = 0; // currently selected day tab (0=Mon...6=Sun)
 
 function popTSWeeks(){
   const sel=document.getElementById('ts-week');const opts=[];
-  for(let w=0;w<8;w++){const d=new Date();d.setDate(d.getDate()-d.getDay()+1-w*7);d.setHours(0,0,0,0);opts.push({val:d.toISOString(),label:FDISP(d)+' week'});}
+  for(let w=0;w<8;w++){
+    const d=new Date();
+    d.setHours(0,0,0,0);
+    // Correctly find Monday for ANY day of week including Sunday
+    // Sunday=0 → go back 6 days; Mon=1→0; Tue=2→-1; ... Sat=6→-5
+    const dow=d.getDay();
+    const daysToMon=dow===0?-6:1-dow;
+    d.setDate(d.getDate()+daysToMon-w*7);
+    // Use local date string (not toISOString which returns UTC and can shift date)
+    const localVal=FD(d); // YYYY-MM-DD in local timezone
+    opts.push({val:localVal,label:FDISP(d)+' week'});
+  }
   sel.innerHTML=opts.map(o=>`<option value="${o.val}">${o.label}</option>`).join('');
-  // Default to today's day index
-  const todayDow=(new Date().getDay()+6)%7;
-  tsDayIndex=todayDow;
+  // Default to today's day index (0=Mon ... 6=Sun)
+  const dow=new Date().getDay();
+  tsDayIndex=dow===0?6:dow-1;
 }
 function popTSEmps(){} // no longer needed — removed emp filter
 
@@ -3301,10 +3312,11 @@ function renderTS(){
     DB.set('customHours',chPurged);
     console.log('Purged',chStale.length-chPurged.length,'stale auto-seeded records (approved/manual preserved)');
   }
-  const wkS=new Date(sv);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
+  // Always parse as local midnight (T00:00:00) to avoid UTC date shift in AU timezone
+  const wkS=new Date(sv.length===10?sv+'T00:00:00':sv);wkS.setHours(0,0,0,0);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
   // Build 7 days
   const days=[];
-  for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);days.push(FD(d));}
+  for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);d.setHours(0,0,0,0);days.push(FD(d));}
   // Summary totals across whole week
   const shifts=DB.get('shifts')||[];const ce=DB.get('clockEvents')||[];const ch=DB.get('customHours')||[];
   const lr=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');const sd=DB.get('sickDays')||[];
@@ -3354,15 +3366,15 @@ function selectTSDay(idx){
   tsDayIndex=idx;
   document.querySelectorAll('.ts-day-tab').forEach((t,i)=>t.classList.toggle('active',i===idx));
   const sv=document.getElementById('ts-week').value;if(!sv)return;
-  const wkS=new Date(sv);
-  const days=[];for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);days.push(FD(d));}
+  const wkS=new Date(sv.length===10?sv+'T00:00:00':sv);wkS.setHours(0,0,0,0);
+  const days=[];for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);d.setHours(0,0,0,0);days.push(FD(d));}
   renderTSDayBody(days[idx]||days[0]);
 }
 
 function approveAllDay(){
   const sv=document.getElementById('ts-week').value;if(!sv)return;
-  const wkS=new Date(sv);
-  const days=[];for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);days.push(FD(d));}
+  const wkS=new Date(sv.length===10?sv+'T00:00:00':sv);wkS.setHours(0,0,0,0);
+  const days=[];for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);d.setHours(0,0,0,0);days.push(FD(d));}
   const ds=days[tsDayIndex]||days[0];
   let ch=DB.get('customHours')||[];
   const rows=buildTSRows(ds);
@@ -3561,7 +3573,7 @@ function viewPhoto(inPhoto,outPhoto){
 function exportCSV(){
   const sv=document.getElementById('ts-week').value;
   if(!sv){alert('Please select a week.');return;}
-  const wkS=new Date(sv);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
+  const wkS=new Date(sv.length===10?sv+'T00:00:00':sv);wkS.setHours(0,0,0,0);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
   const ws=FD(wkS),we=FD(wkE);
 
   const staffAll=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
@@ -3801,16 +3813,35 @@ function viewMC(mcId){
     }
   }
 
-  // Fetch MC Drive URL via proxy
+  // First check the local cache — it may already have driveUrl
+  // (especially if the manager portal has refreshed since the upload)
+  const cachedMc = (DB.get('medCerts')||[]).find(m => m.id === mcId);
+  if(cachedMc && cachedMc.driveUrl) {
+    showDriveLink(cachedMc.driveUrl);
+    return;
+  }
+
+  // Fall back to a fresh server read via getMCUrl
   _gasGet('getMCUrl', {mcId})
     .then(function(result){
       if(result.ok && result.meta){
         try{
           const m = typeof result.meta === 'string' ? JSON.parse(result.meta) : result.meta;
-          if(m.driveUrl){showDriveLink(m.driveUrl);return;}
+          if(m.driveUrl){
+            // Patch driveUrl into local cache so next open is instant
+            const mcs = DB.get('medCerts')||[];
+            const idx = mcs.findIndex(x => x.id === mcId);
+            if(idx >= 0){ mcs[idx].driveUrl = m.driveUrl; mcs[idx].fileId = m.fileId; CACHE['rx3_medCerts'] = mcs; }
+            showDriveLink(m.driveUrl);
+            return;
+          }
         }catch(e){}
       }
-      showDriveLink(null);
+      // Last resort: trigger a full medCerts refresh then retry once
+      DB.refresh(['medCerts'], function(){
+        const freshMc = (DB.get('medCerts')||[]).find(m => m.id === mcId);
+        showDriveLink(freshMc && freshMc.driveUrl ? freshMc.driveUrl : null);
+      });
     })
     .catch(function(){showDriveLink(null);});
 }

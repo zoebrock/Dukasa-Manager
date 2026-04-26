@@ -778,6 +778,10 @@ const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const PROXY = '/api/gas';
 const CACHE = {};
 const DIRTY = {};
+// Keys currently being written to server — never overwrite these from a server read
+const _writeLock = new Set();
+// Suppress ping-triggered re-renders while an approval is saving
+let _suppressRenderUntil = 0;
 
 async function _gasGet(action, params = {}) {
   const url = new URL(PROXY, window.location.origin);
@@ -816,19 +820,25 @@ const DB = {
     const json = JSON.stringify(v);
     try { localStorage.setItem(key, json); } catch(e) {}
     DIRTY[key] = true;
+    _writeLock.add(key);
     _setSyncIndicator('saving');
     _gasPost({ action: 'set', dataKey: key, value: json })
       .then(() => {
         delete DIRTY[key];
+        _writeLock.delete(key);
         if (Object.keys(DIRTY).length === 0) _setSyncIndicator('saved');
       })
       .catch(err => {
         console.error('DB.set failed for', key, err);
+        _writeLock.delete(key);
         _setSyncIndicator('error');
+        // Retry once after 3 seconds
+        DIRTY[key] = true;
+        _writeLock.add(key);
         setTimeout(() => {
           _gasPost({ action: 'set', dataKey: key, value: json })
-            .then(() => { delete DIRTY[key]; _setSyncIndicator('saved'); })
-            .catch(() => _setSyncIndicator('error'));
+            .then(() => { delete DIRTY[key]; _writeLock.delete(key); _setSyncIndicator('saved'); })
+            .catch(() => { _writeLock.delete(key); _setSyncIndicator('error'); });
         }, 3000);
       });
   },
@@ -840,6 +850,11 @@ const DB = {
       .then(result => {
         if (result.ok && result.data) {
           Object.entries(result.data).forEach(([key, rawVal]) => {
+            // Never overwrite a key currently being written to the server
+            if (_writeLock.has(key)) {
+              console.log('[PRELOAD] Skipping locked key:', key);
+              return;
+            }
             try {
               const serverVal = JSON.parse(rawVal);
               // clockEvents: merge server with any local manual entries not yet confirmed
@@ -894,6 +909,11 @@ const DB = {
         if (result.ok && result.data) {
           keys.forEach(k => {
             const key = 'rx3_' + k;
+            // Never overwrite a key currently being written to the server
+            if (_writeLock.has(key)) {
+              console.log('[REFRESH] Skipping locked key:', key);
+              return;
+            }
             if (result.data[key] !== undefined) {
               try {
                 const serverVal = JSON.parse(result.data[key]);
@@ -2964,6 +2984,8 @@ function toggleApproved(empId,date,btn){
     btn.classList.toggle('checked',ch[idx].approved);
     btn.textContent=ch[idx].approved?'✓':'';
     updateApprovedHrsDisplay(empId,date);
+    // Suppress ping-triggered re-renders for 10s while Sheet write completes
+    _suppressRenderUntil = Date.now() + 10000;
   }
 }
 
@@ -3726,6 +3748,11 @@ function startManagerSync() {
       const ts = r.ok ? r.lastModified : _mgrLastModified;
       if (ts !== _mgrLastModified) {
         _mgrLastModified = ts;
+        // Don't re-render if an approval write is still in progress
+        if (Date.now() < _suppressRenderUntil) {
+          console.log('[PING] Render suppressed — approval write in progress');
+          return;
+        }
         // Re-read data and re-render current page
         await new Promise(resolve => DB.refresh(ALL_KEYS, resolve));
         const activePg = document.querySelector('.pg.active');

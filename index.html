@@ -92,11 +92,6 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
 .chip-unavail{background:var(--s2);color:var(--t3);border:1px solid var(--border);cursor:default}
 .add-btn{width:22px;height:22px;border-radius:4px;border:1px dashed var(--border2);color:var(--t3);font-size:13px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
 .add-btn:hover{border-color:var(--purple);color:var(--purple);background:var(--pl)}
-.shift-select-cb{position:absolute;top:2px;left:2px;width:14px;height:14px;accent-color:var(--purple);cursor:pointer;z-index:2}
-.shift-chip-wrap{position:relative;width:100%}
-.shift-chip-wrap.selected .chip{outline:2px solid var(--purple);outline-offset:1px}
-.select-bar{display:none;position:sticky;top:0;z-index:10;background:var(--purple);color:#fff;padding:8px 14px;border-radius:var(--rsm);margin-bottom:8px;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:500}
-.select-bar.visible{display:flex}
 .av{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0}
 .enc{display:flex;align-items:center;gap:7px}
 .tbl{width:100%;border-collapse:collapse}
@@ -292,23 +287,12 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
             <button class="toggle" id="toggle-avail" onclick="toggleAvail()"></button>
             Show availability
           </label>
-          <button class="btn btn-sm" id="select-mode-btn" onclick="toggleSelectMode()" title="Select multiple shifts to delete">☑ Select</button>
           <button class="btn btn-sm" onclick="openTemplateModal()">📋 Templates</button>
           <button class="btn btn-sm" onclick="openPublishModal()">📣 Publish</button>
           <button class="btn btn-primary btn-sm" onclick="openAddShiftModal()">+ Add shift</button>
         </div>
       </div>
       <div class="alert ai" id="pub-status" style="display:none"></div>
-      <!-- Multi-select delete bar -->
-      <div class="select-bar" id="select-bar">
-        <span id="select-count-label">0 shifts selected</span>
-        <div style="display:flex;gap:6px;align-items:center">
-          <button class="btn btn-sm" style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.3)" onclick="selectAllVisible()">Select all visible</button>
-          <button class="btn btn-sm" style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.3)" onclick="clearSelection()">Clear</button>
-          <button class="btn btn-sm" style="background:var(--red);color:#fff;border-color:var(--rd)" onclick="deleteSelected()">🗑 Delete selected</button>
-          <button class="btn btn-sm" style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.3)" onclick="toggleSelectMode()">✕ Cancel</button>
-        </div>
-      </div>
       <div id="roster-pharma-alerts" style="margin-bottom:6px"></div>
       <div style="margin-bottom:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:10px">
         <span style="color:var(--t2)">Legend:</span>
@@ -400,16 +384,12 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
         <h2>Timesheets</h2>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
           <select id="ts-week" style="width:auto;font-size:13px" onchange="renderTS()"></select>
-          <button class="btn btn-sm" onclick="approveAllDay()" title="Tick approved for every row shown today">✓ Approve all today</button>
           <button class="btn btn-primary btn-sm" onclick="exportCSV()">⬇ Export CSV</button>
         </div>
       </div>
-      <div id="ts-pub-status" style="display:none;padding:8px 12px;border-radius:var(--rsm);font-size:12px;margin-bottom:10px;background:var(--gl);color:var(--gd)"></div>
       <div id="ts-summary" style="display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-bottom:14px"></div>
       <!-- Day tabs -->
       <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0;overflow-x:auto" id="ts-day-tabs"></div>
-      <!-- Per-day approved count bar -->
-      <div id="ts-day-approved-bar" style="display:none;padding:6px 12px;background:var(--gl);color:var(--gd);font-size:12px;font-weight:600;border-bottom:1px solid #C0DD97"></div>
       <!-- Per-day table -->
       <div class="ts-wrap" style="margin-top:0">
         <table class="ts-tbl">
@@ -794,10 +774,6 @@ const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const PROXY = '/api/gas';
 const CACHE = {};
 const DIRTY = {};
-// Keys currently being written to server — never overwrite these from a server read
-const _writeLock = new Set();
-// Suppress ping-triggered re-renders while an approval is saving
-let _suppressRenderUntil = 0;
 
 async function _gasGet(action, params = {}) {
   const url = new URL(PROXY, window.location.origin);
@@ -836,25 +812,19 @@ const DB = {
     const json = JSON.stringify(v);
     try { localStorage.setItem(key, json); } catch(e) {}
     DIRTY[key] = true;
-    _writeLock.add(key);
     _setSyncIndicator('saving');
     _gasPost({ action: 'set', dataKey: key, value: json })
       .then(() => {
         delete DIRTY[key];
-        _writeLock.delete(key);
         if (Object.keys(DIRTY).length === 0) _setSyncIndicator('saved');
       })
       .catch(err => {
         console.error('DB.set failed for', key, err);
-        _writeLock.delete(key);
         _setSyncIndicator('error');
-        // Retry once after 3 seconds
-        DIRTY[key] = true;
-        _writeLock.add(key);
         setTimeout(() => {
           _gasPost({ action: 'set', dataKey: key, value: json })
-            .then(() => { delete DIRTY[key]; _writeLock.delete(key); _setSyncIndicator('saved'); })
-            .catch(() => { _writeLock.delete(key); _setSyncIndicator('error'); });
+            .then(() => { delete DIRTY[key]; _setSyncIndicator('saved'); })
+            .catch(() => _setSyncIndicator('error'));
         }, 3000);
       });
   },
@@ -866,11 +836,6 @@ const DB = {
       .then(result => {
         if (result.ok && result.data) {
           Object.entries(result.data).forEach(([key, rawVal]) => {
-            // Never overwrite a key currently being written to the server
-            if (_writeLock.has(key)) {
-              console.log('[PRELOAD] Skipping locked key:', key);
-              return;
-            }
             try {
               const serverVal = JSON.parse(rawVal);
               // clockEvents: merge server with any local manual entries not yet confirmed
@@ -906,17 +871,6 @@ const DB = {
         } else {
           keys.forEach(k => { const key='rx3_'+k; const local=localStorage.getItem(key); try{CACHE[key]=local?JSON.parse(local):null;}catch(e){CACHE[key]=null;} });
         }
-        // Normalise customHours booleans after initial load from Sheet
-        const ck2 = 'rx3_customHours';
-        if (CACHE[ck2] && Array.isArray(CACHE[ck2])) {
-          CACHE[ck2].forEach(function(r) {
-            if (r) {
-              r.approved    = !!r.approved;
-              r.manualEntry = !!r.manualEntry;
-              r.autoRounded = !!r.autoRounded;
-            }
-          });
-        }
         _setSyncIndicator('idle');
         if (callback) callback();
       })
@@ -936,11 +890,6 @@ const DB = {
         if (result.ok && result.data) {
           keys.forEach(k => {
             const key = 'rx3_' + k;
-            // Never overwrite a key currently being written to the server
-            if (_writeLock.has(key)) {
-              console.log('[REFRESH] Skipping locked key:', key);
-              return;
-            }
             if (result.data[key] !== undefined) {
               try {
                 const serverVal = JSON.parse(result.data[key]);
@@ -963,18 +912,6 @@ const DB = {
                 CACHE[key] = serverVal;
                 localStorage.setItem(key, result.data[key]);
               } catch(e) {}
-            }
-          });
-        }
-        // After reading customHours from Sheet, normalise all boolean fields
-        // so the purge and approval logic always sees proper JS booleans (not strings)
-        const ck = 'rx3_customHours';
-        if (CACHE[ck] && Array.isArray(CACHE[ck])) {
-          CACHE[ck].forEach(function(r) {
-            if (r) {
-              r.approved    = !!r.approved;
-              r.manualEntry = !!r.manualEntry;
-              r.autoRounded = !!r.autoRounded;
             }
           });
         }
@@ -1038,8 +975,6 @@ function initDefaults(){
 }
 
 let currentWeekStart=null,showAvail=false,editingShiftId=null,editingStaffId=null,editingOTId=null,reviewingLeaveId=null,quickSickShiftId=null,viewingShiftId=null,currentLeaveFilter='pending',calMonth=new Date();
-let _selectMode=false;
-const _selectedShiftIds=new Set();
 
 // AUTH
 // DASHBOARD
@@ -1224,7 +1159,10 @@ function SP(p){
   else if(p==='ot'){
     DB.refresh(['otRequests'],function(){renderOT('pending');updateBadges();});
   }
-  else if(p==='timesheets'){popTSWeeks();renderTS();}
+  else if(p==='timesheets'){
+    // Always fetch fresh clock events when opening timesheets
+    DB.refresh(['clockEvents'],function(){popTSWeeks();renderTS();});
+  }
   else if(p==='announcements'){renderAnnouncements(annFilter);}
 }
 
@@ -1301,83 +1239,6 @@ function dayName(d){return['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()
 // ROSTER
 function toggleAvail(){showAvail=!showAvail;document.getElementById('toggle-avail').classList.toggle('on',showAvail);renderRoster();}
 
-// ── MULTI-SELECT DELETE ────────────────────────────────────────
-function toggleSelectMode(){
-  _selectMode=!_selectMode;
-  _selectedShiftIds.clear();
-  const btn=document.getElementById('select-mode-btn');
-  const bar=document.getElementById('select-bar');
-  if(btn){
-    btn.textContent=_selectMode?'✕ Cancel select':'☑ Select';
-    btn.style.background=_selectMode?'var(--purple)':'';
-    btn.style.color=_selectMode?'#fff':'';
-    btn.style.borderColor=_selectMode?'var(--purple)':'';
-  }
-  if(bar) bar.classList.toggle('visible',_selectMode);
-  updateSelectBar();
-  renderRoster();
-}
-
-function toggleShiftSelect(shiftId, event){
-  if(event) event.stopPropagation();
-  if(_selectedShiftIds.has(shiftId)) _selectedShiftIds.delete(shiftId);
-  else _selectedShiftIds.add(shiftId);
-  // Update the chip wrapper visually without full re-render
-  const wrap=document.getElementById('swrap-'+shiftId);
-  if(wrap){
-    wrap.classList.toggle('selected',_selectedShiftIds.has(shiftId));
-    const cb=wrap.querySelector('input[type=checkbox]');
-    if(cb) cb.checked=_selectedShiftIds.has(shiftId);
-  }
-  updateSelectBar();
-}
-
-function selectAllVisible(){
-  // Select all shift IDs currently visible in the rendered roster (current week)
-  const shifts=DB.get('shifts')||[];
-  const days=getWD();
-  const ws=FD(days[0]),we=FD(days[6]);
-  shifts.filter(s=>s.date>=ws&&s.date<=we&&!s.isOT).forEach(s=>_selectedShiftIds.add(s.id));
-  updateSelectBar();
-  renderRoster();
-}
-
-function clearSelection(){
-  _selectedShiftIds.clear();
-  updateSelectBar();
-  renderRoster();
-}
-
-function updateSelectBar(){
-  const label=document.getElementById('select-count-label');
-  const n=_selectedShiftIds.size;
-  if(label) label.textContent=n===0?'No shifts selected':n===1?'1 shift selected':`${n} shifts selected`;
-}
-
-function deleteSelected(){
-  const n=_selectedShiftIds.size;
-  if(n===0){alert('No shifts selected. Click on shifts to select them first.');return;}
-  if(!confirm(`Delete ${n} shift${n===1?'':'s'}? This cannot be undone.`)) return;
-  let shifts=DB.get('shifts')||[];
-  shifts=shifts.filter(s=>!_selectedShiftIds.has(s.id));
-  DB.set('shifts',shifts);
-  _selectedShiftIds.clear();
-  // Exit select mode after deletion
-  _selectMode=false;
-  const btn=document.getElementById('select-mode-btn');
-  const bar=document.getElementById('select-bar');
-  if(btn){btn.textContent='☑ Select';btn.style.background='';btn.style.color='';btn.style.borderColor='';}
-  if(bar) bar.classList.remove('visible');
-  renderRoster();
-  renderDashboard();
-  const el=document.getElementById('pub-status');
-  if(el){
-    el.style.display='block';
-    el.textContent=`✓ ${n} shift${n===1?'':'s'} deleted.`;
-    setTimeout(()=>el.style.display='none',4000);
-  }
-}
-
 function renderRoster(){
   if(!currentWeekStart){initWeek(new Date());}
   const days=getWD();const we=new Date(currentWeekStart);we.setDate(we.getDate()+6);
@@ -1411,24 +1272,16 @@ function renderRoster(){
 
       let content='';
 
-      // Shift chips — clicking opens popup normally, or toggles selection in select mode
+      // Shift chips — clicking opens the action popup instead of shift detail
       dayShifts.forEach(s=>{
         const chipClass=s.published?'chip-shift':'chip-draft';
+        const pubDot=s.published?'':'';
         const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
         const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
-        const isSelected=_selectedShiftIds.has(s.id);
-        if(_selectMode){
-          content+=`<div class="shift-chip-wrap${isSelected?' selected':''}" id="swrap-${s.id}" onclick="toggleShiftSelect('${s.id}',event)">
-            <input type="checkbox" class="shift-select-cb" ${isSelected?'checked':''} onclick="toggleShiftSelect('${s.id}',event)">
-            <span class="chip ${chipClass}" style="width:100%;justify-content:center;padding-left:18px">${s.start}–${s.end}</span>
-            ${otBadge}
-          </div>`;
-        } else {
-          content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="openShiftPopup(event,'${s.id}')">
-            <span class="chip ${chipClass}" style="width:100%;justify-content:center" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">${s.start}–${s.end}</span>
-            ${otBadge}
-          </div>`;
-        }
+        content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="openShiftPopup(event,'${s.id}')">
+          <span class="chip ${chipClass}" style="width:100%;justify-content:center" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">${s.start}–${s.end}</span>
+          ${otBadge}
+        </div>`;
       });
 
       // Status chips — clickable for sick/leave management
@@ -1437,9 +1290,9 @@ function renderRoster(){
       else if(onLeave&&dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer;font-size:8px" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">🏖 Leave</span>`;
       if(showAvail&&!avail&&!dayShifts.length&&!onLeave&&!isSick) content+=`<span class="chip chip-unavail chip-small">Unavail.</span>`;
 
-      // Only show + button if no shifts exist for this day and not in select mode
+      // Only show + button if no shifts exist for this day
       const hasShifts=dayShifts.length>0;
-      const addBtn=(!hasShifts&&!_selectMode)?`<button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift">+</button>`:'';
+      const addBtn=!hasShifts?`<button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift">+</button>`:'';
 
       const cellStyle=isToday?'background:rgba(83,74,183,.04)':'';
       return `<td style="${cellStyle}"><div class="sc-cell">${content}${addBtn}</div></td>`;
@@ -1874,7 +1727,7 @@ function notifyStaffMember(empId,weekStart,weekEnd,updatedShifts){
 }
 
 // SH = paid hours (deducts only the paid 30-min portion of break)
-function SH(s){return Math.max(0,(MD(s.start,s.end)-(parseFloat(s.paidBreakMin)||parseFloat(s.breakMin)||30))/60);}
+function SH(s){return Math.max(0,(MD(s.start,s.end)-(s.paidBreakMin||30))/60);}
 // SH_GROSS = total time on shift including unpaid break portion
 function SH_GROSS(s){return Math.max(0,(MD(s.start,s.end))/60);}
 
@@ -3003,29 +2856,18 @@ let tsDayIndex = 0; // currently selected day tab (0=Mon...6=Sun)
 
 function popTSWeeks(){
   const sel=document.getElementById('ts-week');const opts=[];
-  for(let w=0;w<8;w++){
-    const d=new Date();
-    d.setHours(0,0,0,0);
-    // Correctly find Monday for ANY day of week including Sunday
-    // Sunday=0 → go back 6 days; Mon=1→0; Tue=2→-1; ... Sat=6→-5
-    const dow=d.getDay();
-    const daysToMon=dow===0?-6:1-dow;
-    d.setDate(d.getDate()+daysToMon-w*7);
-    // Use local date string (not toISOString which returns UTC and can shift date)
-    const localVal=FD(d); // YYYY-MM-DD in local timezone
-    opts.push({val:localVal,label:FDISP(d)+' week'});
-  }
+  for(let w=0;w<8;w++){const d=new Date();d.setDate(d.getDate()-d.getDay()+1-w*7);d.setHours(0,0,0,0);opts.push({val:d.toISOString(),label:FDISP(d)+' week'});}
   sel.innerHTML=opts.map(o=>`<option value="${o.val}">${o.label}</option>`).join('');
-  // Default to today's day index (0=Mon ... 6=Sun)
-  const dow=new Date().getDay();
-  tsDayIndex=dow===0?6:dow-1;
+  // Default to today's day index
+  const todayDow=(new Date().getDay()+6)%7;
+  tsDayIndex=todayDow;
 }
 function popTSEmps(){} // no longer needed — removed emp filter
 
 function getOrCreateCustom(empId,date,actualHrs,autoRoundedIn,autoRoundedOut,effectiveHrs){
   let ch=DB.get('customHours')||[];
   let existing=ch.find(x=>x.empId===empId&&x.date===date);
-  const computedAutoHrs=ROUND30(parseFloat(effectiveHrs!==undefined&&effectiveHrs!==null?effectiveHrs:(actualHrs!==null?actualHrs:0))||0);
+  const computedAutoHrs=ROUND30(effectiveHrs!==undefined&&effectiveHrs!==null?effectiveHrs:(actualHrs!==null?actualHrs:0));
   if(!existing){
     existing={id:'ch'+Date.now()+Math.random(),empId,date,
       customStart:null,  // never auto-populate custom fields — manager enters these manually
@@ -3039,15 +2881,10 @@ function getOrCreateCustom(empId,date,actualHrs,autoRoundedIn,autoRoundedOut,eff
   } else {
     // Backfill flags for older records
     if(existing.manualEntry===undefined) existing.manualEntry=false;
-    if(existing.approved===undefined) existing.approved=false;
-    // Normalise booleans — Sheets may return "true"/"false" strings or 1/0 numbers
-    existing.approved=!!existing.approved;
-    existing.manualEntry=!!existing.manualEntry;
     // Always keep autoHrs fresh from current rounding
     existing.autoHrs=computedAutoHrs;
-    // Only sync customHrs to autoHrs when there is NO manual entry AND the record is NOT approved.
-    // Approved records must never have their hours silently changed — the manager explicitly signed off.
-    if(!existing.manualEntry && !existing.approved){
+    // If no manual entry, sync customHrs to autoHrs (never touch customStart/customEnd)
+    if(!existing.manualEntry){
       existing.customHrs=computedAutoHrs;
     }
     const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
@@ -3066,7 +2903,7 @@ function updateCustomTime(empId,date,field,val,shiftId){
   const cStart=ch[idx].customStart;const cEnd=ch[idx].customEnd;
   if(cStart&&cEnd){
     const shifts=DB.get('shifts')||[];const s=shifts.find(x=>x.id===shiftId);
-    const bMin=s?parseFloat(s.breakMin)||30:30;
+    const bMin=s?s.breakMin:30;
     const mins=Math.max(0,MD(cStart,cEnd)-bMin);
     ch[idx].customHrs=Math.round(mins/60*100)/100;
     ch[idx].autoRounded=false;
@@ -3085,15 +2922,14 @@ function updateApprovedHrsDisplay(empId,date){
   const el=document.getElementById(`approved-hrs-${empId}-${date}`);
   if(!el)return;
   if(!c.approved){el.textContent='—';return;}
-  // Use locked approvedHrs if set (guaranteed snapshot), fall back to customHrs
-  const hrs=c.approvedHrs!=null?c.approvedHrs:c.customHrs;
-  el.textContent=parseFloat(hrs||0).toFixed(2)+'h';
+  // Always use customHrs — getOrCreateCustom keeps it synced to autoHrs when no manual entry
+  el.textContent=c.customHrs.toFixed(2)+'h';
 }
 
 function updateCustomHrs(empId,date,val){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
-  if(idx>=0){ch[idx].customHrs=parseFloat(val||0)||0;ch[idx].autoRounded=false;ch[idx].manualEntry=true;DB.set('customHours',ch);}
+  if(idx>=0){ch[idx].customHrs=parseFloat(val)||0;ch[idx].autoRounded=false;ch[idx].manualEntry=true;DB.set('customHours',ch);}
   updateApprovedHrsDisplay(empId,date);
 }
 
@@ -3101,35 +2937,16 @@ function toggleApproved(empId,date,btn){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
   if(idx>=0){
-    // Normalise booleans — Sheet may return "true"/"false" strings
-    ch[idx].approved=!!ch[idx].approved;
-    ch[idx].manualEntry=!!ch[idx].manualEntry;
-    const wasApproved=ch[idx].approved;
-    ch[idx].approved=!wasApproved;
+    ch[idx].approved=!ch[idx].approved;
+    // When approving, lock in the correct hours:
+    // use manual customHrs if entered, otherwise use autoHrs
     if(ch[idx].approved){
-      // Lock in the approved hours as a permanent snapshot.
-      // customHrs is always the correct payable amount (synced to autoHrs when no manual entry,
-      // or set by the manager when manualEntry=true). Store it as approvedHrs too.
-      ch[idx].approvedHrs=parseFloat(ch[idx].customHrs||0)||0;
-      // Mark as manualEntry so the purge logic and getOrCreateCustom never overwrite these hours.
-      ch[idx].manualEntry=true;
-      ch[idx].approvedAt=new Date().toISOString();
-    } else {
-      // Un-approving: clear the lock so auto-recalculation can resume
-      ch[idx].approvedHrs=null;
-      ch[idx].approvedAt=null;
-      // Only clear manualEntry lock if the manager hadn't actually typed custom times
-      if(!ch[idx].customStart && !ch[idx].customEnd){
-        ch[idx].manualEntry=false;
-      }
+      ch[idx].approvedHrs=ch[idx].customHrs; // customHrs is always correct (synced to autoHrs when no manual entry)
     }
     DB.set('customHours',ch);
     btn.classList.toggle('checked',ch[idx].approved);
     btn.textContent=ch[idx].approved?'✓':'';
     updateApprovedHrsDisplay(empId,date);
-    // Suppress ping-triggered re-renders for 30s while Sheet write completes.
-    // GAS cold-starts can take 15-20s so 10s was too short.
-    _suppressRenderUntil = Date.now() + 30000;
   }
 }
 
@@ -3175,25 +2992,6 @@ function buildTSRows(dayDate){
     const sHrs=SH(s);
     const ci=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-in');
     const co=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-out');
-    // ── Compute total actual break minutes from ALL break sessions ──────────
-    // A single shift may have 2+ break sessions (e.g. 15min + 15min = 30min total).
-    // Using only the first break-start/break-end pair would under-count.
-    const empDayCe=ce.filter(e=>e.empId===s.empId&&e.date===ds)
-      .sort((a,b)=>(a.ts||a.time||'').localeCompare(b.ts||b.time||''));
-    let _bPending=null,_totalActualBreakMins=0,_breakSessionCount=0;
-    const _allBreakSessions=[];
-    for(const _e of empDayCe){
-      if(_e.type==='break-start'){_bPending=_e;}
-      else if(_e.type==='break-end'&&_bPending){
-        const _sMs=_bPending.ts?new Date(_bPending.ts).getTime():0;
-        const _eMs=_e.ts?new Date(_e.ts).getTime():0;
-        const _mins=(_sMs&&_eMs&&_eMs>_sMs)?Math.round((_eMs-_sMs)/60000):MD(_bPending.time,_e.time)||0;
-        _totalActualBreakMins+=Math.max(0,_mins);
-        _allBreakSessions.push({start:_bPending,end:_e,mins:Math.max(0,_mins)});
-        _breakSessionCount++;_bPending=null;
-      }
-    }
-    // Fall back to rostered break if no completed break sessions recorded
     const bs=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='break-start');
     const be=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='break-end');
     const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===ds);
@@ -3223,27 +3021,20 @@ function buildTSRows(dayDate){
       else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → capped to ${s.start}`});}
       else{autoRoundedIn=ci.time;}
       autoRoundedOut=s.end;flags.push({type:'missing',msg:'No clock out — rostered end applied'});
-      bActMin=_breakSessionCount>0?_totalActualBreakMins:s.breakMin;
-      actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
+      bActMin=s.breakMin;actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
     } else if(!ci&&co){
       status='Missing clock in';autoRoundedIn=s.start;flags.push({type:'missing',msg:'No clock in — rostered start applied'});
       const coDiff=MD(s.end,co.time);
       if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Left ${coDiff}m late → capped to ${s.end}`});}
       else{autoRoundedOut=co.time;}
-      bActMin=_breakSessionCount>0?_totalActualBreakMins:parseFloat(s.breakMin)||30;
-      actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
+      bActMin=s.breakMin;actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
     } else if(ci&&co){
-      // Use actual total break minutes from all completed sessions; fall back to rostered break
-      bActMin=_breakSessionCount>0?_totalActualBreakMins:parseFloat(s.breakMin)||30;
+      bActMin=(bs&&be)?MD(bs.time,be.time):s.breakMin;
       actualHrs=Math.max(0,(MD(ci.time,co.time)-bActMin)/60);
       const ciDiff=MD(s.start,ci.time);const coDiff=MD(s.end,co.time);
       if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});}
       else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → capped to ${s.start}`});}
       if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Late out +${coDiff}m → capped to ${s.end}`});}
-      // Add multi-break flag if more than one session detected
-      if(_breakSessionCount>1){
-        flags.push({type:'info',msg:`${_breakSessionCount} breaks: ${_allBreakSessions.map(b=>`${b.start.time}–${b.end.time}(${b.mins}m)`).join(', ')} = ${_totalActualBreakMins}m total`});
-      }
       status='Completed';
     }
 
@@ -3254,7 +3045,7 @@ function buildTSRows(dayDate){
     } else if(actualHrs!==null&&!isLeave&&!isSick){
       const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
       const effOut=autoRoundedOut||(co&&co.time)||s.end;
-      const effBreak=bActMin!==null?bActMin:parseFloat(s.breakMin)||30;
+      const effBreak=bActMin!==null?bActMin:s.breakMin;
       const effectiveWorkedHrs=Math.max(0,MD(effIn,effOut)-effBreak)/60;
       // Compare vs contracted daily hours if set, else vs dailyOT threshold
       const otThreshold=contractedHrs>0?contractedHrs:parseFloat(settings.dailyOTHours)||8;
@@ -3269,12 +3060,12 @@ function buildTSRows(dayDate){
     if(actualHrs!==null&&!isLeave&&!isSick&&(autoRoundedIn||autoRoundedOut)){
       const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
       const effOut=autoRoundedOut||(co&&co.time)||s.end;
-      const effBreak=bActMin!==null?bActMin:parseFloat(s.breakMin)||30;
+      const effBreak=bActMin!==null?bActMin:s.breakMin;
       effectiveHrs=Math.max(0,MD(effIn,effOut)-effBreak)/60;
     }
     const totalPayableHrs=effectiveHrs!==null?(effectiveHrs+(otHrs||0)):null;
     const custom=getOrCreateCustom(s.empId,ds,actualHrs,autoRoundedIn,autoRoundedOut,totalPayableHrs);
-    const approvedHrs=custom.approved?(custom.approvedHrs!=null?custom.approvedHrs:custom.customHrs):null;
+    const approvedHrs=custom.approved?custom.customHrs:null;
     rows.push({s,emp,sHrs,actualHrs,otHrs,status,rowCls,ci,co,bs,be,bActMin,flags,isSick,isLeave,approvedOT,custom,approvedHrs,autoRoundedIn,autoRoundedOut,contractedHrs});
   });
 
@@ -3303,43 +3094,42 @@ function buildTSRows(dayDate){
 function renderTS(){
   const sv=document.getElementById('ts-week').value;
   if(!sv)return;
-  // Purge ONLY unapproved, non-manual auto-seeded records so they recalculate fresh.
-  // NEVER purge records that are approved OR manually edited — these must survive page refreshes.
-  // Use truthy coercion (not ===true) because Sheets may return "true" string or 1 for booleans.
+  // Purge any non-manual customHours records so they are recalculated fresh
+  // This ensures stale auto-seeded records don't persist with wrong hours
+  // Purge stale auto-seeded records so they regenerate with correct hours
   const chStale=DB.get('customHours')||[];
-  const chPurged=chStale.filter(x=>!!x.manualEntry||!!x.approved);
+  const chPurged=chStale.filter(x=>x.manualEntry===true);
   if(chPurged.length!==chStale.length){
     DB.set('customHours',chPurged);
-    console.log('Purged',chStale.length-chPurged.length,'stale auto-seeded records (approved/manual preserved)');
+    console.log('Purged',chStale.length-chPurged.length,'stale auto-seeded custom hours records');
   }
-  // Always parse as local midnight (T00:00:00) to avoid UTC date shift in AU timezone
-  const wkS=new Date(sv.length===10?sv+'T00:00:00':sv);wkS.setHours(0,0,0,0);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
+  const wkS=new Date(sv);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
   // Build 7 days
   const days=[];
-  for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);d.setHours(0,0,0,0);days.push(FD(d));}
+  for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);days.push(FD(d));}
   // Summary totals across whole week
   const shifts=DB.get('shifts')||[];const ce=DB.get('clockEvents')||[];const ch=DB.get('customHours')||[];
   const lr=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');const sd=DB.get('sickDays')||[];
   const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8};
   const ws=FD(wkS),we=FD(wkE);
   const wShifts=shifts.filter(s=>s.date>=ws&&s.date<=we&&!s.isOT&&(DB.get('staff')||[]).some(e=>e.id===s.empId));
-  let totR=0,totW=0,totOT=0,totApproved=0,totCount=0,totApprovedHrs=0;
+  let totR=0,totW=0,totOT=0,totApproved=0,totCount=0;
   wShifts.forEach(s=>{
     totR+=SH(s);
     const ci=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='clock-in');
     const co=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='clock-out');
     const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===s.date);
     const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=s.date&&l.to>=s.date);
-    if(!isSick&&!isLeave&&ci&&co){const bMin=(()=>{const empSCe=ce.filter(e=>e.empId===s.empId&&e.date===s.date).sort((a,b)=>(a.ts||a.time||'').localeCompare(b.ts||b.time||''));let _bp=null,_tot=0,_cnt=0;for(const _e of empSCe){if(_e.type==='break-start'){_bp=_e;}else if(_e.type==='break-end'&&_bp){const _sMs=_bp.ts?new Date(_bp.ts).getTime():0;const _eMs=_e.ts?new Date(_e.ts).getTime():0;const _m=(_sMs&&_eMs&&_eMs>_sMs)?Math.round((_eMs-_sMs)/60000):MD(_bp.time,_e.time)||0;_tot+=Math.max(0,_m);_cnt++;_bp=null;}}return _cnt>0?_tot:parseFloat(s.breakMin)||30;})();const aHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);totW+=aHrs;if(settings.dailyOT&&aHrs>parseFloat(settings.dailyOTHours))totOT+=aHrs-parseFloat(settings.dailyOTHours);}
-    const c=ch.find(x=>x.empId===s.empId&&x.date===s.date);if(c&&c.approved){totApproved++;totApprovedHrs+=parseFloat((c.approvedHrs!=null?c.approvedHrs:c.customHrs)||0)||0;}
+    if(!isSick&&!isLeave&&ci&&co){const bMin=(()=>{const bs=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-start');const be=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-end');return(bs&&be)?MD(bs.time,be.time):s.breakMin;})();const aHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);totW+=aHrs;if(settings.dailyOT&&aHrs>parseFloat(settings.dailyOTHours))totOT+=aHrs-parseFloat(settings.dailyOTHours);}
+    const c=ch.find(x=>x.empId===s.empId&&x.date===s.date);if(c&&c.approved)totApproved++;
     totCount++;
   });
   document.getElementById('ts-summary').innerHTML=`
-    <div class="sc"><div class="sl">Rostered hrs</div><div class="sv">${parseFloat(totR||0).toFixed(1)}</div></div>
-    <div class="sc"><div class="sl">Worked hrs</div><div class="sv">${parseFloat(totW||0).toFixed(1)}</div></div>
-    <div class="sc"><div class="sl">OT hrs</div><div class="sv" style="color:var(--rd)">${parseFloat(totOT||0).toFixed(1)}</div></div>
-    <div class="sc"><div class="sl">Diff</div><div class="sv" style="font-size:16px;color:${totW-totR<0?'var(--amber)':'var(--td)'}">${totW-totR>=0?'+':''}${parseFloat((totW-totR)||0).toFixed(1)}h</div></div>
-    <div class="sc"><div class="sl">Approved</div><div class="sv" title="${totApprovedHrs.toFixed(1)}h approved">${totApproved}/${totCount}<span style="font-size:11px;color:var(--td);display:block">${parseFloat(totApprovedHrs||0).toFixed(1)}h</span></div></div>`;
+    <div class="sc"><div class="sl">Rostered hrs</div><div class="sv">${totR.toFixed(1)}</div></div>
+    <div class="sc"><div class="sl">Worked hrs</div><div class="sv">${totW.toFixed(1)}</div></div>
+    <div class="sc"><div class="sl">OT hrs</div><div class="sv" style="color:var(--rd)">${totOT.toFixed(1)}</div></div>
+    <div class="sc"><div class="sl">Diff</div><div class="sv" style="font-size:16px;color:${totW-totR<0?'var(--amber)':'var(--td)'}">${totW-totR>=0?'+':''}${(totW-totR).toFixed(1)}h</div></div>
+    <div class="sc"><div class="sl">Approved</div><div class="sv">${totApproved}/${totCount}</div></div>`;
   // Build day tabs
   const tabsEl=document.getElementById('ts-day-tabs');
   const DNAMES=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -3354,10 +3144,7 @@ function renderTS(){
     const d=new Date(ds+'T00:00:00');
     const label=`${DNAMES[i]} ${d.getDate()}/${d.getMonth()+1}`;
     const shiftCount=dayShifts.length;
-    const ch=DB.get('customHours')||[];
-    const approvedOnDay=dayShifts.filter(s=>ch.some(x=>x.empId===s.empId&&x.date===ds&&x.approved)).length;
-    const allApproved=shiftCount>0&&approvedOnDay===shiftCount;
-    return`<button class="ts-day-tab${i===tsDayIndex?' active':''}${hasFlags?' has-flags':''}" onclick="selectTSDay(${i})">${label}${shiftCount>0?`<span style="margin-left:5px;font-size:9px;background:var(--pl);color:var(--pd);padding:1px 5px;border-radius:10px">${shiftCount}</span>`:''}${allApproved?`<span style="margin-left:3px;font-size:9px;background:var(--gl);color:var(--gd);padding:1px 5px;border-radius:10px" title="All approved">✓</span>`:''}${hasFlags?'<span style="margin-left:3px" title="Has timing flags">⚠</span>':''}</button>`;
+    return`<button class="ts-day-tab${i===tsDayIndex?' active':''}${hasFlags?' has-flags':''}" onclick="selectTSDay(${i})">${label}${shiftCount>0?`<span style="margin-left:5px;font-size:9px;background:var(--pl);color:var(--pd);padding:1px 5px;border-radius:10px">${shiftCount}</span>`:''}${hasFlags?'<span style="margin-left:3px" title="Has timing flags">⚠</span>':''}</button>`;
   }).join('');
   renderTSDayBody(days[tsDayIndex]||days[0]);
 }
@@ -3366,62 +3153,15 @@ function selectTSDay(idx){
   tsDayIndex=idx;
   document.querySelectorAll('.ts-day-tab').forEach((t,i)=>t.classList.toggle('active',i===idx));
   const sv=document.getElementById('ts-week').value;if(!sv)return;
-  const wkS=new Date(sv.length===10?sv+'T00:00:00':sv);wkS.setHours(0,0,0,0);
-  const days=[];for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);d.setHours(0,0,0,0);days.push(FD(d));}
+  const wkS=new Date(sv);
+  const days=[];for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);days.push(FD(d));}
   renderTSDayBody(days[idx]||days[0]);
-}
-
-function approveAllDay(){
-  const sv=document.getElementById('ts-week').value;if(!sv)return;
-  const wkS=new Date(sv.length===10?sv+'T00:00:00':sv);wkS.setHours(0,0,0,0);
-  const days=[];for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);d.setHours(0,0,0,0);days.push(FD(d));}
-  const ds=days[tsDayIndex]||days[0];
-  let ch=DB.get('customHours')||[];
-  const rows=buildTSRows(ds);
-  let approvedCount=0;
-  rows.forEach(r=>{
-    const idx=ch.findIndex(x=>x.empId===r.s.empId&&x.date===r.s.date);
-    if(idx>=0){
-      // Normalise booleans from Sheet
-      ch[idx].approved=!!ch[idx].approved;
-      ch[idx].manualEntry=!!ch[idx].manualEntry;
-    }
-    if(idx>=0&&!ch[idx].approved){
-      ch[idx].approved=true;
-      ch[idx].approvedHrs=parseFloat(ch[idx].customHrs||0)||0;
-      ch[idx].manualEntry=true;
-      ch[idx].approvedAt=new Date().toISOString();
-      approvedCount++;
-    }
-  });
-  DB.set('customHours',ch);
-  renderTSDayBody(ds);
-  renderTS(); // refresh summary counts
-  const bar=document.getElementById('ts-pub-status');
-  if(bar){bar.style.display='block';bar.style.background='var(--gl)';bar.style.color='var(--gd)';bar.textContent=`✓ Approved ${approvedCount} row(s) for ${FDL(ds)}.`;setTimeout(()=>bar.style.display='none',4000);}
 }
 
 function renderTSDayBody(ds){
   const rows=buildTSRows(ds);
   const SB={Rostered:'bp',Completed:'bg','In progress':'ba',Sick:'br','Annual Leave':'ba','No clock events':'br','Missing clock out':'ba','Missing clock in':'ba'};
   const body=document.getElementById('ts-body');
-  // Update approved count bar
-  const approvedBar=document.getElementById('ts-day-approved-bar');
-  if(approvedBar){
-    const ch=DB.get('customHours')||[];
-    const appCount=rows.filter(r=>ch.some(x=>x.empId===r.s.empId&&x.date===r.s.date&&x.approved)).length;
-    const totCount=rows.length;
-    if(totCount>0){
-      approvedBar.style.display='block';
-      if(appCount===totCount){
-        approvedBar.style.background='var(--gl)';approvedBar.style.color='var(--gd)';
-        approvedBar.textContent=`✓ All ${totCount} row(s) approved for ${FDL(ds)}`;
-      } else {
-        approvedBar.style.background='var(--al)';approvedBar.style.color='var(--ad)';
-        approvedBar.textContent=`${appCount} of ${totCount} row(s) approved for ${FDL(ds)} — ${totCount-appCount} pending`;
-      }
-    } else {approvedBar.style.display='none';}
-  }
   if(!rows.length){body.innerHTML=`<tr><td colspan="20" style="text-align:center;color:var(--t2);padding:20px;font-size:12px">No shifts on ${FDL(ds)}</td></tr>`;return;}
   body.innerHTML=rows.map(r=>{
     const empKey=r.s.empId;const dateKey=r.s.date;
@@ -3434,15 +3174,14 @@ function renderTSDayBody(ds){
       if(f.type==='sick') return`<span style="background:var(--rl);color:var(--rd);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">🤒 ${f.msg}</span>`;
       if(f.type==='leave') return`<span style="background:var(--al);color:var(--ad);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">🏖 ${f.msg}</span>`;
       if(f.type==='ot') return`<span class="ot-badge-ts">${f.msg}</span>`;
-      if(f.type==='info') return`<span style="background:var(--bl);color:var(--bd);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">☕ ${f.msg}</span>`;
       return`<span class="early-badge">${f.msg}</span>`;
     }).join(' '); // OT already included in flags array — don't append again
     // Custom start/end inputs
     const cStart=r.custom.customStart||'';const cEnd=r.custom.customEnd||'';
     const hasCustomTime=!!(r.custom.customStart||r.custom.customEnd);
-    const approvedHrsDisplay=r.custom.approved?parseFloat(r.custom.customHrs||0).toFixed(2)+'h':'—';
+    const approvedHrsDisplay=r.custom.approved?r.custom.customHrs.toFixed(2)+'h':'—';
     // Break display
-    const brkDisplay=r.bActMin!==null?parseFloat(r.bActMin||0)+'m':(r.s.breakMin?parseFloat(r.s.breakMin||0)+'m':'—');
+    const brkDisplay=r.bActMin!==null?r.bActMin+'m':(r.s.breakMin?r.s.breakMin+'m':'—');
     return`<tr class="${r.rowCls}${r.otHrs>0?' tr-ot':''}">
       <td style="min-width:130px">
         <div style="font-weight:600;font-size:13px">${r.emp?r.emp.first+' '+r.emp.last:'?'}</div>
@@ -3471,8 +3210,8 @@ function renderTSDayBody(ds){
       <td style="font-size:11px;${r.autoRoundedOut?'color:var(--amber);font-weight:600':'color:var(--t3)'}" title="${r.autoRoundedOut?'Capped to rostered end (no approved OT)':'No rounding applied'}">${r.autoRoundedOut||'—'}</td>
       <td><input type="time" class="custom-time-input${hasCustomTime?' edited':''}" value="${cStart}" onchange="updateCustomTime('${empKey}','${dateKey}','customStart',this.value,'${r.s.id}')" title="Custom clock-in time"></td>
       <td><input type="time" class="custom-time-input${hasCustomTime?' edited':''}" value="${cEnd}" onchange="updateCustomTime('${empKey}','${dateKey}','customEnd',this.value,'${r.s.id}')" title="Custom clock-out time"></td>
-      <td><span id="custom-hrs-${empKey}-${dateKey}">${parseFloat(r.custom.customHrs||0).toFixed(2)}h</span></td>
-      <td class="${r.otHrs>0?'ot-val':''}">${r.otHrs>0?parseFloat(r.otHrs||0).toFixed(2)+'h':'—'}</td>
+      <td><span id="custom-hrs-${empKey}-${dateKey}">${r.custom.customHrs.toFixed(2)}h</span></td>
+      <td class="${r.otHrs>0?'ot-val':''}">${r.otHrs>0?r.otHrs.toFixed(2)+'h':'—'}</td>
       <td id="approved-hrs-${empKey}-${dateKey}" style="font-weight:600;color:var(--td)">${approvedHrsDisplay}</td>
       <td style="text-align:center"><div class="approved-check ${r.custom.approved?'checked':''}" onclick="toggleApproved('${empKey}','${dateKey}',this)">${r.custom.approved?'✓':''}</div></td>
       <td>${r.ci?.photo?`<img class="img-thumb" src="${r.ci.photo}" onclick="viewPhoto('${r.ci.photo}','${r.co?.photo||''}')" title="View clock photos">`:'—'}</td>
@@ -3573,7 +3312,7 @@ function viewPhoto(inPhoto,outPhoto){
 function exportCSV(){
   const sv=document.getElementById('ts-week').value;
   if(!sv){alert('Please select a week.');return;}
-  const wkS=new Date(sv.length===10?sv+'T00:00:00':sv);wkS.setHours(0,0,0,0);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
+  const wkS=new Date(sv);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
   const ws=FD(wkS),we=FD(wkE);
 
   const staffAll=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
@@ -3662,23 +3401,13 @@ function exportCSV(){
       const sHrs=SH(s);
       const ci=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='clock-in');
       const co=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='clock-out');
+      const bs=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='break-start');
+      const be=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='break-end');
       const isSick=sd.find(sk=>sk.empId===emp.id&&sk.date===ds);
       const isLeave=lr.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
       const approvedOT=otReqs.find(o=>o.empId===emp.id&&o.date===ds);
       const custom=ch.find(x=>x.empId===emp.id&&x.date===ds);
-      // Compute total break minutes from ALL completed break sessions
-      const _csvCe=ce.filter(e=>e.empId===emp.id&&e.date===ds).sort((a,b)=>(a.ts||a.time||'').localeCompare(b.ts||b.time||''));
-      let _csvBp=null,_csvTotalBrk=0,_csvBrkCnt=0,_csvBrkSessions=[];
-      for(const _e of _csvCe){
-        if(_e.type==='break-start'){_csvBp=_e;}
-        else if(_e.type==='break-end'&&_csvBp){
-          const _sMs=_csvBp.ts?new Date(_csvBp.ts).getTime():0;
-          const _eMs=_e.ts?new Date(_e.ts).getTime():0;
-          const _m=(_sMs&&_eMs&&_eMs>_sMs)?Math.round((_eMs-_sMs)/60000):MD(_csvBp.time,_e.time)||0;
-          _csvTotalBrk+=Math.max(0,_m);_csvBrkSessions.push(`${_csvBp.time}–${_e.time}`);_csvBrkCnt++;_csvBp=null;
-        }
-      }
-      let actualHrs=0,otHrs=0,bMin=_csvBrkCnt>0?_csvTotalBrk:parseFloat(s.breakMin)||30;
+      let actualHrs=0,otHrs=0,bMin=s.breakMin;
       let status=isSick?'Sick':isLeave?isLeave.type:'Rostered';
       const flags=[];
       let autoIn='',autoOut='';
@@ -3707,13 +3436,12 @@ function exportCSV(){
         if(coD>0&&!approvedOT){autoOut=s.end;flags.push('Late out → capped');}else{autoOut=co.time;}
         actualHrs=Math.max(0,MD(autoIn,autoOut)-bMin)/60;
       } else if(ci&&co){
-        // bMin already set to total actual break from all sessions above (falls back to rostered)
+        if(bs&&be)bMin=MD(bs.time,be.time);
         actualHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);
         const ciD=MD(s.start,ci.time);const coD=MD(s.end,co.time);
         if(ciD>0){autoIn=csvRoundUpTo30(ci.time);flags.push('Late +'+ciD+'m → '+autoIn);}
         else if(ciD<0){autoIn=s.start;flags.push('Early → capped to '+s.start);}
         if(coD>0&&!approvedOT){autoOut=s.end;flags.push('Late out → capped to '+s.end);}
-        if(_csvBrkCnt>1) flags.push('Multiple breaks: '+_csvBrkSessions.join(', ')+' = '+_csvTotalBrk+'m total');
         status='Completed';
       }
 
@@ -3728,7 +3456,7 @@ function exportCSV(){
       }
 
       const contractHrs=isLeave?actualHrs:isSick?actualHrs:Math.min(actualHrs,otThreshold);
-      const approvedHrs=custom&&custom.approved?(custom.approvedHrs!=null?custom.approvedHrs:custom.customHrs):null;
+      const approvedHrs=custom&&custom.approved?custom.customHrs:null;
       const flagStr=flags.join('; ');
       const reason=ci&&ci.reason?ci.reason:co&&co.reason?co.reason:'';
 
@@ -3813,35 +3541,16 @@ function viewMC(mcId){
     }
   }
 
-  // First check the local cache — it may already have driveUrl
-  // (especially if the manager portal has refreshed since the upload)
-  const cachedMc = (DB.get('medCerts')||[]).find(m => m.id === mcId);
-  if(cachedMc && cachedMc.driveUrl) {
-    showDriveLink(cachedMc.driveUrl);
-    return;
-  }
-
-  // Fall back to a fresh server read via getMCUrl
+  // Fetch MC Drive URL via proxy
   _gasGet('getMCUrl', {mcId})
     .then(function(result){
       if(result.ok && result.meta){
         try{
           const m = typeof result.meta === 'string' ? JSON.parse(result.meta) : result.meta;
-          if(m.driveUrl){
-            // Patch driveUrl into local cache so next open is instant
-            const mcs = DB.get('medCerts')||[];
-            const idx = mcs.findIndex(x => x.id === mcId);
-            if(idx >= 0){ mcs[idx].driveUrl = m.driveUrl; mcs[idx].fileId = m.fileId; CACHE['rx3_medCerts'] = mcs; }
-            showDriveLink(m.driveUrl);
-            return;
-          }
+          if(m.driveUrl){showDriveLink(m.driveUrl);return;}
         }catch(e){}
       }
-      // Last resort: trigger a full medCerts refresh then retry once
-      DB.refresh(['medCerts'], function(){
-        const freshMc = (DB.get('medCerts')||[]).find(m => m.id === mcId);
-        showDriveLink(freshMc && freshMc.driveUrl ? freshMc.driveUrl : null);
-      });
+      showDriveLink(null);
     })
     .catch(function(){showDriveLink(null);});
 }
@@ -3918,13 +3627,6 @@ function startManagerSync() {
       const ts = r.ok ? r.lastModified : _mgrLastModified;
       if (ts !== _mgrLastModified) {
         _mgrLastModified = ts;
-        // Don't re-render if an approval write is still in progress
-        // Check both the time-based suppress AND whether a key is actively being written
-        const customHoursLocked = _writeLock.has('rx3_customHours');
-        if (Date.now() < _suppressRenderUntil || customHoursLocked) {
-          console.log('[PING] Render suppressed — customHours write in progress or suppress active');
-          return;
-        }
         // Re-read data and re-render current page
         await new Promise(resolve => DB.refresh(ALL_KEYS, resolve));
         const activePg = document.querySelector('.pg.active');

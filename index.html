@@ -481,7 +481,7 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
     <div id="sh-notify-row" style="display:none;margin-bottom:8px">
       <div class="alert ai" style="font-size:11px;margin-bottom:8px" id="sh-notify-msg"></div>
       <label style="display:flex;align-items:center;gap:8px;font-size:12px;cursor:pointer;padding:8px 10px;background:var(--s2);border-radius:var(--rsm);border:1px solid var(--border)">
-        <input type="checkbox" id="sh-send-email" checked style="width:16px;height:16px;accent-color:var(--purple)">
+        <input type="checkbox" id="sh-send-email" style="width:16px;height:16px;accent-color:var(--purple)">
         <span>Notify staff member by email</span>
       </label>
     </div>
@@ -1617,7 +1617,7 @@ function openAddShiftModal(){
   document.getElementById('sh-date').value=FD(currentWeekStart);
   document.getElementById('sh-notes').value='';
   document.getElementById('sh-notify-row').style.display='none';
-  const emailCb=document.getElementById('sh-send-email');if(emailCb)emailCb.checked=true;
+  const emailCb=document.getElementById('sh-send-email');if(emailCb)emailCb.checked=false; // default OFF
   // Reset break hint and auto-calculate for default 09:00-17:00
   const brHint=document.getElementById('sh-break-hint');if(brHint)brHint.textContent='Auto-calculated';
   autoCalcBreak(true);
@@ -1635,12 +1635,12 @@ function openAddShiftForED(empId,date){
   const notifyRow=document.getElementById('sh-notify-row');
   const emp=staff.find(s=>s.id===empId);
   if(weekPublished){
-    document.getElementById('sh-notify-msg').textContent='This week is already published. This shift will be published immediately and '+(emp?emp.first:'the staff member')+' will be notified by email (untick below to skip).';
-    notifyRow.style.display='block';
+    document.getElementById('sh-notify-msg').textContent='This week is published. Tick to notify '+( emp?emp.first:'staff member')+' by email.';
   } else {
-    notifyRow.style.display='none';
+    document.getElementById('sh-notify-msg').textContent='Tick below to notify '+( emp?emp.first:'staff member')+' by email when saved.';
   }
-  const emailCb2=document.getElementById('sh-send-email');if(emailCb2)emailCb2.checked=true;
+  notifyRow.style.display='block';
+  const emailCb2=document.getElementById('sh-send-email');if(emailCb2)emailCb2.checked=false; // default OFF
   const brHint2=document.getElementById('sh-break-hint');if(brHint2)brHint2.textContent='Auto-calculated';
   autoCalcBreak(true);
   OM('m-shift');
@@ -1677,23 +1677,20 @@ function saveShift(){
   DB.set('shifts',shifts);
   CM('m-shift');renderRoster();renderDashboard();editingShiftId=null;
 
-  // Always notify if the shift is/was published
-  // Pass the already-updated shifts array directly so the email uses current data
-  // (DB.set is async — server may not have the new data yet when email fires)
-  if(emp&&isPublished){
-    const shouldEmail = document.getElementById('sh-send-email')?.checked !== false;
-    const el=document.getElementById('pub-status');
-    el.style.display='block';
-    if(shouldEmail){
-      el.textContent=(shouldAutoPublish?'Shift added — notifying ':'Shift updated — notifying ')+emp.first+'...';
-      setTimeout(()=>el.style.display='none',6000);
-      _gasPost({action:'sendEmail',fn:'sendShiftUpdateEmail',payload:{empId:ns.empId,date:ns.date,start:ns.start,end:ns.end,breakMin:ns.breakMin,isNew:isNewShift||shouldAutoPublish}})
-        .then(r=>console.log('Shift email:',r)).catch(err=>console.error('Shift email failed:',err));
-      notifyStaffMember(empId,shiftDate,shiftDate,shifts);
-    } else {
-      el.textContent='Shift saved (no email sent to '+emp.first+').';
-      setTimeout(()=>el.style.display='none',4000);
-    }
+  // Only email if the notify row is visible AND the checkbox is ticked
+  const notifyRowVisible = document.getElementById('sh-notify-row')?.style.display !== 'none';
+  const shouldEmail = notifyRowVisible && document.getElementById('sh-send-email')?.checked === true;
+  const el=document.getElementById('pub-status');
+  el.style.display='block';
+  if(emp && isPublished && shouldEmail){
+    el.textContent=(shouldAutoPublish?'Shift added — notifying ':'Shift updated — notifying ')+emp.first+'...';
+    setTimeout(()=>el.style.display='none',6000);
+    _gasPost({action:'sendEmail',fn:'sendShiftUpdateEmail',payload:{empId:ns.empId,date:ns.date,start:ns.start,end:ns.end,breakMin:ns.breakMin,isNew:isNewShift||shouldAutoPublish}})
+      .then(r=>console.log('Shift email:',r)).catch(err=>console.error('Shift email failed:',err));
+    notifyStaffMember(empId,shiftDate,shiftDate,shifts);
+  } else if(emp && isPublished) {
+    el.textContent='Shift saved.';
+    setTimeout(()=>el.style.display='none',3000);
   }
 }
 
@@ -1810,14 +1807,10 @@ function editShiftFromDetail(){
   // Show info banner when editing a published shift
   const isPublished=!!s.published;
   const notifyRow=document.getElementById('sh-notify-row');
-  if(isPublished){
-    const emp=(DB.get('staff')||[]).find(e=>e.id===s.empId);
-    document.getElementById('sh-notify-msg').textContent='This is a published shift. Saving will update '+(emp?emp.first:'the staff member')+"'s roster (untick below to skip the email notification).";
-    notifyRow.style.display='block';
-  } else {
-    notifyRow.style.display='none';
-  }
-  const emailCb3=document.getElementById('sh-send-email');if(emailCb3)emailCb3.checked=true;
+  const empForNotify=(DB.get('staff')||[]).find(e=>e.id===s.empId);
+  document.getElementById('sh-notify-msg').textContent=isPublished?'Published shift — tick to notify '+(empForNotify?empForNotify.first:'staff')+'  by email.':'Tick to notify '+(empForNotify?empForNotify.first:'staff')+' by email when saved.';
+  notifyRow.style.display='block';
+  const emailCb3=document.getElementById('sh-send-email');if(emailCb3)emailCb3.checked=false; // default OFF
   // Mark break as manual since we're loading an existing value
   const brHint3=document.getElementById('sh-break-hint');if(brHint3)brHint3.textContent='(manual)';
   autoCalcBreak(false); // update detail line only

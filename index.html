@@ -806,6 +806,13 @@ function mapFromSupabase(key, rows) {
     }));
   }
 
+  if (key === 'announcements') {
+    return rows.map(r => ({
+      ...r,
+      desc: r.description
+    }));
+  }
+
   if (['clockEvents', 'leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
     return rows.map(r => ({
       ...r,
@@ -842,6 +849,11 @@ function mapToSupabase(key, arrOrObj) {
       delete x.otId;
     }
 
+    if (key === 'announcements') {
+      x.description = x.desc;
+      delete x.desc;
+    }
+
     if (['clockEvents', 'leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
       x.emp_id = x.empId;
       if (x.ts && !x.timestamp) x.timestamp = x.ts;
@@ -852,7 +864,7 @@ function mapToSupabase(key, arrOrObj) {
     return x;
   });
 }
-
+  
 const DB = {
   get(k) {
     return CACHE['rx3_' + k] ?? null;

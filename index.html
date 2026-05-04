@@ -977,14 +977,19 @@ function FMINS(m){if(m===null||m===undefined)return'—';const h=Math.floor(Math
 function ROUND30(hrs){return Math.round(hrs*2)/2;}
 function NOW_TIME(){return new Date().toTimeString().slice(0,5);}
 
-function initDefaults(){
-  if(!DB.get('staff')) DB.set('staff',[
-    {id:'s1',first:'Sarah',last:'Chen',email:'sarah@rx.com',phone:'0400111222',dob:'1990-03-15',role:'Dispensary Technician',pin:'1234',color:'#534AB7',availability:{Mon:true,Tue:true,Wed:true,Thu:true,Fri:true,Sat:false,Sun:false},availNotes:''},
-    {id:'s2',first:'Marcus',last:'Williams',email:'marcus@rx.com',phone:'0400222333',dob:'1985-07-22',role:'Pharmacist',pin:'2345',color:'#0F6E56',availability:{Mon:true,Tue:true,Wed:true,Thu:true,Fri:true,Sat:true,Sun:false},availNotes:''},
-    {id:'s3',first:'Priya',last:'Patel',email:'priya@rx.com',phone:'0400333444',dob:'1992-11-08',role:'Lab Technician',pin:'3456',color:'#185FA5',availability:{Mon:true,Tue:false,Wed:true,Thu:false,Fri:true,Sat:true,Sun:true},availNotes:'Prefers mornings'},
-    {id:'s4',first:'Jordan',last:'Lee',email:'jordan@rx.com',phone:'0400444555',dob:'1988-04-30',role:'Logistics Technician',pin:'4567',color:'#BA7517',availability:{Mon:false,Tue:true,Wed:true,Thu:true,Fri:true,Sat:false,Sun:false},availNotes:''},
-    {id:'s5',first:'Alex',last:'Morgan',email:'alex@rx.com',phone:'0400555666',dob:'1995-09-12',role:'Admin Assistant',pin:'5678',color:'#A32D2D',availability:{Mon:true,Tue:true,Wed:true,Thu:true,Fri:false,Sat:false,Sun:false},availNotes:''},
-  ]);
+function initDefaults() {
+  if (!DB.get('settings')) {
+    DB.set('settings', {
+      dailyOT: true,
+      weeklyOT: true,
+      dailyOTHours: 8,
+      weeklyOTHours: 38,
+      otMultiplier: 1.5,
+      gracePeriod: 5,
+      dispensaryName: 'Dukasa Dispensary'
+    });
+  }
+}
   if(!DB.get('shifts')) DB.set('shifts',[]);
   if(!DB.get('settings')) DB.set('settings',{dailyOT:true,weeklyOT:true,dailyOTHours:8,weeklyOTHours:38,otMultiplier:1.5,gracePeriod:5,dispensaryName:'Green Leaf Dispensary'});
   if(!DB.get('clockEvents')) DB.set('clockEvents',[]);

@@ -776,8 +776,6 @@ const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 const SUPABASE_URL = 'https://jfowikvmnqlebranlggf.supabase.co';
 const SUPABASE_KEY = 'PASTE_YOUR_PUBLISHABLE_KEY_HERE';
 
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
 const IS_GAS = false;
 const CACHE = {};
 let _syncStatus = 'idle';
@@ -3545,6 +3543,7 @@ supabaseClient
     showDriveLink(signedUrlData.signedUrl);
   })
   .catch(() => showDriveLink(null));
+}
 
 // SETTINGS
 

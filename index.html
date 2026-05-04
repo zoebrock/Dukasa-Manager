@@ -904,45 +904,6 @@ const DB = {
   }
 };
 
-  // Batch preload — fetches all rx3_ keys in one call
-  async preload(keys, callback) {
-    _setSyncIndicator('loading');
-
-    for (const k of keys) {
-      const table = TABLE_MAP[k];
-
-      if (!table) {
-        CACHE['rx3_' + k] = [];
-        continue;
-      }
-
-      const { data, error } = await supabaseClient
-        .from(table)
-        .select('*');
-
-      if (error) {
-        console.warn('Could not load', k, error.message);
-        CACHE['rx3_' + k] = k === 'settings' ? {} : [];
-      } else {
-        CACHE['rx3_' + k] = mapFromSupabase(k, data || []);
-      }
-    }
-
-    _setSyncIndicator('idle');
-
-    if (callback) callback();
-  },
-
-  async refresh(keys, callback) {
-    if (!keys.length) {
-      if (callback) callback();
-      return;
-    }
-
-    await this.preload(keys, callback);
-  }
-};
-
 function _setSyncIndicator(state) {
   const el = document.getElementById('sync-indicator');
   if (!el) return;

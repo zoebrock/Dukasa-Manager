@@ -846,8 +846,6 @@ function mapToSupabase(key, arrOrObj) {
 
   const arr = Array.isArray(arrOrObj) ? arrOrObj : [];
 
-  return arr.map(item => {
-    const x = { ...item };
 return arr.map(item => {
     const x = { ...item };
 
@@ -920,10 +918,8 @@ const DB = {
 
     const rows = mapToSupabase(k, v);
 
-    await supabaseClient.from(table).delete().neq('id', '');
-
     if (rows.length) {
-      const { error } = await supabaseClient.from(table).insert(rows);
+      const { error } = await supabaseClient.from(table).upsert(rows, { onConflict: 'id' });
       if (error) {
         console.error('Supabase save failed:', k, error);
         alert('Could not save ' + k + ': ' + error.message);

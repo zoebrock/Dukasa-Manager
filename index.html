@@ -636,10 +636,11 @@ const IS_GAS = false;
         <button class="btn btn-primary" onclick="applyTemplate()">Apply template</button>
       </div>
     </div>
-    <div id="tmpl-create" style="display:none">
+      <div id="tmpl-create" style="display:none">
       <div class="fr"><label>Template name</label><input type="text" id="tmpl-name" placeholder="e.g. Standard week, Weekend crew"></div>
-      <p style="font-size:11px;color:var(--t2);margin-bottom:6px">Add shifts by day of week. Break is in minutes.</p>
-      <div style="display:grid;grid-template-columns:80px 1fr 70px 70px 55px auto;gap:5px;margin-bottom:4px;padding:0 0 4px;border-bottom:1px solid var(--border)">
+        <button class="btn btn-sm" style="margin-bottom:10px;background:var(--tl);color:var(--teal);border-color:#9de0ca" onclick="autoGenTemplate()">⚡ Auto-generate from contracted hours</button>
+        <p style="font-size:11px;color:var(--t2);margin-bottom:6px">Add shifts by day of week. Break is in minutes.</p>
+        <div style="display:grid;grid-template-columns:80px 1fr 70px 70px 55px auto;gap:5px;margin-bottom:4px;padding:0 0 4px;border-bottom:1px solid var(--border)">
         <span style="font-size:10px;font-weight:600;color:var(--t3)">Day</span>
         <span style="font-size:10px;font-weight:600;color:var(--t3)">Staff member</span>
         <span style="font-size:10px;font-weight:600;color:var(--t3)">Start</span>
@@ -1907,7 +1908,37 @@ function confirmSickQuick(){
 
 // TEMPLATES
 let editingTemplateId = null;
+function autoGenTemplate() {
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  
+  // Clear existing rows
+  document.getElementById('tmpl-shift-list').innerHTML = '';
+  
+  let count = 0;
+  days.forEach((day, dayIndex) => {
+    staff.forEach(emp => {
+      // Check per-day contract data
+      const pd = emp.contractPerDay && emp.contractPerDay[day];
+      if (!pd || !pd.on) return; // skip if not contracted this day
+      
+      addTemplateShiftRow(dayIndex, emp.id, pd.start||'09:00', pd.end||'17:00', pd.break||30);
+      count++;
+    });
+  });
 
+  if (count === 0) {
+    alert('No contracted hours found. Please set contracted hours for staff members in their profiles first.');
+    return;
+  }
+
+  // Set a default name
+  if (!document.getElementById('tmpl-name').value) {
+    document.getElementById('tmpl-name').value = 'Standard week';
+  }
+
+  alert(`✓ Generated ${count} shifts from contracted hours. Review and adjust as needed, then save.`);
+}
 function openTemplateModal(){
   editingTemplateId = null;
   popTemplateSelect();

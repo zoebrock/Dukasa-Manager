@@ -2298,7 +2298,7 @@ function staffCardTab(empId,tab,el){
 function staffInfoHTML(emp){
   const dow=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const contractedDays=dow.filter(d=>emp.contractDays&&emp.contractDays[d]!==false&&emp.contractStart&&emp.contractEnd);
-  const dailyHrs=emp.contractStart&&emp.contractEnd?Math.max(0,(MD(emp.contractStart,emp.contractEnd)-(emp.contractBreak||30))/60):0;
+  const dailyHrs=emp.contractStart&&emp.contractEnd?Math.max(0,(MD(emp.contractStart,emp.contractEnd)-Math.max(0,(emp.contractBreak||30)-30))/60):0;
   const contractSummary=emp.contractStart&&emp.contractEnd
     ?`${emp.contractStart}–${emp.contractEnd} · ${emp.contractBreak||30}m break · ${dailyHrs.toFixed(1)}h/day · ${contractedDays.join(', ')||'no days set'} (${emp.contractedHrsPerWeek||0}h/wk)`
     :'Not configured';
@@ -2418,7 +2418,9 @@ function calcDayHrs(day) {
   const e=document.getElementById(`cpd-end-${day}`)?.value;
   const b=parseInt(document.getElementById(`cpd-break-${day}`)?.value)||0;
   if(!s||!e) return '0.0';
-  return Math.max(0,(MD(s,e)-b)/60).toFixed(1);
+  // Only 30min of any break is unpaid — rest is paid
+  const unpaidBreak = Math.max(0, b - 30);
+  return Math.max(0,(MD(s,e)-unpaidBreak)/60).toFixed(1);
 }
 
 function recalcContractTotal() {
@@ -2432,12 +2434,6 @@ function recalcContractTotal() {
     const hrsEl=document.getElementById(`cpd-hrs-${d}`);
     if(hrsEl) hrsEl.textContent=on?hrs.toFixed(1)+'h':'—';
   });
-  const totEl=document.getElementById('contract-weekly-total');
-  if(totEl) totEl.textContent=total.toFixed(1)+'h';
-  // Only auto-fill override field if it's empty
-  const overrideEl=document.getElementById('sf-contracted-hrs');
-  if(overrideEl&&!overrideEl.value) overrideEl.placeholder=`${total.toFixed(1)} (auto-calculated)`;
-}
 
 function readContractPerDay() {
   const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -2471,7 +2467,8 @@ function saveStaff(){
   const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const total=days.reduce((s,d)=>{
     if(!contractPerDay[d]||!contractPerDay[d].on)return s;
-    return s+Math.max(0,(MD(contractPerDay[d].start,contractPerDay[d].end)-contractPerDay[d].break)/60);
+    const unpaidBreak=Math.max(0,(contractPerDay[d].break||30)-30);
+    return s+Math.max(0,(MD(contractPerDay[d].start,contractPerDay[d].end)-unpaidBreak)/60);
   },0);
   let contractedHrsPerWeek=parseFloat(document.getElementById('sf-contracted-hrs')?.value)||0;
   if(!contractedHrsPerWeek) contractedHrsPerWeek=parseFloat(total.toFixed(2));

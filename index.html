@@ -846,7 +846,7 @@ function mapToSupabase(key, arrOrObj) {
 
   const arr = Array.isArray(arrOrObj) ? arrOrObj : [];
 
-return arr.map(item => {
+  return arr.map(item => {
     const x = { ...item };
 
     if (key === 'staff') {
@@ -858,6 +858,7 @@ return arr.map(item => {
       x.contract_per_day = x.contractPerDay;
       x.contracted_hrs_per_week = x.contractedHrsPerWeek;
       x.auto_shift = x.autoShift;
+
       delete x.availNotes;
       delete x.contractStart;
       delete x.contractEnd;
@@ -868,26 +869,28 @@ return arr.map(item => {
       delete x.autoShift;
     }
 
-if (key === 'shifts') {
-  x.emp_id = x.empId;
-  x.break_min = x.breakMin;
-  x.paid_break_min = x.paidBreakMin;
-  x.is_ot = x.isOT;
-  x.ot_id = x.otId;
-  x.ot_original_start = x.otOriginalStart;
-  x.ot_original_end = x.otOriginalEnd;
-  x.ot_annotations = x.otAnnotations;
-  x.template_id = x.templateId;
-  delete x.empId;
-  delete x.breakMin;
-  delete x.paidBreakMin;
-  delete x.isOT;
-  delete x.otId;
-  delete x.otOriginalStart;
-  delete x.otOriginalEnd;
-  delete x.otAnnotations;
-  delete x.templateId;
-}
+    if (key === 'shifts') {
+      x.emp_id = x.empId;
+      x.break_min = x.breakMin;
+      x.paid_break_min = x.paidBreakMin;
+      x.is_ot = x.isOT;
+      x.ot_id = x.otId;
+      x.ot_original_start = x.otOriginalStart;
+      x.ot_original_end = x.otOriginalEnd;
+      x.ot_annotations = x.otAnnotations;
+      x.template_id = x.templateId;
+
+      delete x.empId;
+      delete x.breakMin;
+      delete x.paidBreakMin;
+      delete x.isOT;
+      delete x.otId;
+      delete x.otOriginalStart;
+      delete x.otOriginalEnd;
+      delete x.otAnnotations;
+      delete x.templateId;
+    }
+
     if (key === 'announcements') {
       x.description = x.desc;
       delete x.desc;

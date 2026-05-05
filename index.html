@@ -921,62 +921,94 @@ async set(k, v) {
 
   const rows = mapToSupabase(k, v);
 
-  if (k === 'settings') {
-    const { error } = await supabaseClient.from(table).upsert(rows, { onConflict: 'id' });
-    if (error) { console.error('Supabase save failed:', k, error); alert('Could not save ' + k + ': ' + error.message); }
-    return;
-  }
+  _setSyncIndicator('saving');
 
-  // Get current IDs in Supabase
-  const { data: existing } = await supabaseClient.from(table).select('id');
-  const existingIds = (existing || []).map(r => r.id).filter(Boolean);
-  const newIds = rows.map(r => r.id).filter(Boolean);
+  try {
+    if (k === 'settings') {
+      const { error } = await supabaseClient
+        .from(table)
+        .upsert(rows, { onConflict: 'id' });
 
-  // Delete rows that are no longer in the array
-  const toDelete = existingIds.filter(id => !newIds.includes(id));
-  if (toDelete.length) {
-    await supabaseClient.from(table).delete().in('id', toDelete);
-  }
+      if (error) throw error;
 
-  // Upsert remaining rows
-  if (rows.length) {
-    const { error } = await supabaseClient.from(table).upsert(rows, { onConflict: 'id' });
-    if (error) {
-      console.error('Supabase save failed:', k, error);
-      alert('Could not save ' + k + ': ' + error.message);
+      _setSyncIndicator('saved');
+      return;
     }
+
+    const { data: existing, error: fetchError } = await supabaseClient
+      .from(table)
+      .select('id');
+
+    if (fetchError) throw fetchError;
+
+    const existingIds = (existing || []).map(r => r.id).filter(Boolean);
+    const newIds = rows.map(r => r.id).filter(Boolean);
+
+    const toDelete = existingIds.filter(id => !newIds.includes(id));
+
+    if (toDelete.length) {
+      const { error: deleteError } = await supabaseClient
+        .from(table)
+        .delete()
+        .in('id', toDelete);
+
+      if (deleteError) throw deleteError;
+    }
+
+    if (rows.length) {
+      const { error: upsertError } = await supabaseClient
+        .from(table)
+        .upsert(rows, { onConflict: 'id' });
+
+      if (upsertError) throw upsertError;
+    }
+
+    _setSyncIndicator('saved');
+
+  } catch (error) {
+    console.error('Supabase save failed:', k, error);
+    _setSyncIndicator('error');
+    alert('Could not save ' + k + ': ' + error.message);
   }
 },
 
-  async preload(keys, callback) {
-    for (const k of keys) {
-      const table = TABLE_MAP[k];
-      if (!table) {
-        CACHE['rx3_' + k] = [];
-        continue;
-      }
+async preload(keys, callback) {
+  _setSyncIndicator('loading');
 
-      const { data, error } = await supabaseClient.from(table).select('*');
+  for (const k of keys) {
+    const table = TABLE_MAP[k];
 
-      if (error) {
-        console.warn('Could not load', k, error.message);
-        CACHE['rx3_' + k] = k === 'settings' ? {} : [];
-      } else {
-        CACHE['rx3_' + k] = mapFromSupabase(k, data || []);
-      }
+    if (!table) {
+      CACHE['rx3_' + k] = [];
+      continue;
     }
 
-    if (callback) callback();
-  },
+    const { data, error } = await supabaseClient
+      .from(table)
+      .select('*');
 
-  async refresh(keys, callback) {
-    await this.preload(keys, callback);
+    if (error) {
+      console.warn('Could not load', k, error.message);
+      CACHE['rx3_' + k] = k === 'settings' ? {} : [];
+    } else {
+      CACHE['rx3_' + k] = mapFromSupabase(k, data || []);
+    }
   }
+
+  _setSyncIndicator('saved');
+
+  if (callback) callback();
+},
+
+async refresh(keys, callback) {
+  await this.preload(keys, callback);
+}
 };
 
 function _setSyncIndicator(state) {
   const el = document.getElementById('sync-indicator');
   if (!el) return;
+
   const states = {
     idle:    { text: '', color: 'transparent' },
     loading: { text: '⟳ Loading...', color: '#BA7517' },
@@ -984,10 +1016,14 @@ function _setSyncIndicator(state) {
     saved:   { text: '✓ Saved', color: '#0F6E56' },
     error:   { text: '⚠ Sync error', color: '#A32D2D' }
   };
+
   const s = states[state] || states.idle;
   el.textContent = s.text;
   el.style.color = s.color;
-  if (state === 'saved') setTimeout(() => _setSyncIndicator('idle'), 3000);
+
+  if (state === 'saved') {
+    setTimeout(() => _setSyncIndicator('idle'), 3000);
+  }
 }
 
 const ALL_KEYS = [
@@ -1009,7 +1045,9 @@ function ROUND30(hrs){return Math.round(hrs*2)/2;}
 function NOW_TIME(){return new Date().toTimeString().slice(0,5);}
 
 function initDefaults() {
-  if (!DB.get('settings')) {
+  const s = DB.get('settings');
+
+  if (!s || Object.keys(s).length === 0) {
     DB.set('settings', {
       dailyOT: true,
       weeklyOT: true,
@@ -1021,17 +1059,6 @@ function initDefaults() {
     });
   }
 }
-  if(!DB.get('shifts')) DB.set('shifts',[]);
-  if(!DB.get('settings')) DB.set('settings',{dailyOT:true,weeklyOT:true,dailyOTHours:8,weeklyOTHours:38,otMultiplier:1.5,gracePeriod:5,dispensaryName:'Green Leaf Dispensary'});
-  if(!DB.get('clockEvents')) DB.set('clockEvents',[]);
-  if(!DB.get('leaveRequests')) DB.set('leaveRequests',[]);
-  if(!DB.get('sickDays')) DB.set('sickDays',[]);
-  if(!DB.get('medCerts')) DB.set('medCerts',[]);
-  if(!DB.get('otRequests')) DB.set('otRequests',[]);
-  if(!DB.get('rosterTemplates')) DB.set('rosterTemplates',[]);
-  if(!DB.get('customHours')) DB.set('customHours',[]);
-
-let currentWeekStart=null,showAvail=false,editingShiftId=null,editingStaffId=null,editingOTId=null,reviewingLeaveId=null,quickSickShiftId=null,viewingShiftId=null,currentLeaveFilter='pending',calMonth=new Date();
 
 // AUTH
 // DASHBOARD

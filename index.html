@@ -1491,10 +1491,10 @@ function editShiftPopup(shiftId) {
   editShiftFromDetail();
 }
 
-function deleteShiftConfirm(shiftId) {
-  viewingShiftId=shiftId;
-  if(!confirm('Delete this shift? This cannot be undone.')) return;
-  deleteShift();
+async function deleteShiftConfirm(shiftId) {
+  viewingShiftId = shiftId;
+  if (!confirm('Delete this shift? This cannot be undone.')) return;
+  await deleteShift();
 }
 
 function duplicateShift(shiftId) {
@@ -1921,8 +1921,19 @@ function editShiftFromDetail(){
   autoCalcBreak(false); // update detail line only
   OM('m-shift');
 }
-function deleteShift(){if(!viewingShiftId)return;DB.set('shifts',(DB.get('shifts')||[]).filter(s=>s.id!==viewingShiftId));CM('m-shift-detail');renderRoster();renderDashboard();}
+async function deleteShift() {
+  if (!viewingShiftId) return;
 
+  const shiftIdToDelete = viewingShiftId;
+  const shifts = (DB.get('shifts') || []).filter(s => s.id !== shiftIdToDelete);
+
+  await DB.set('shifts', shifts);
+
+  viewingShiftId = null;
+  CM('m-shift-detail');
+  renderRoster();
+  renderDashboard();
+}
 // PUBLISH
 // Creates a fingerprint of a shift for change detection
 

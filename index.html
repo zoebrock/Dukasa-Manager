@@ -3665,6 +3665,22 @@ async function manualSync() {
 function OM(id){document.getElementById(id).classList.add('open');}
 function CM(id){document.getElementById(id).classList.remove('open');}
 
+async function _gasPost(body) {
+  try {
+    const res = await fetch('/api/gas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const text = await res.text();
+    try { return JSON.parse(text); }
+    catch { return { ok: false, error: text }; }
+  } catch(err) {
+    console.error('_gasPost error:', err);
+    return { ok: false, error: err.message };
+  }
+}
+
 // INIT
 updateTopbar();
 document.body.insertAdjacentHTML('beforeend',

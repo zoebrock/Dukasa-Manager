@@ -912,49 +912,41 @@ const DB = {
     return CACHE['rx3_' + k] ?? null;
   },
 
-  async set(k, v) {
-    const key = 'rx3_' + k;
-    CACHE[key] = v;
+async set(k, v) {
+  const key = 'rx3_' + k;
+  CACHE[key] = v;
 
-    const table = TABLE_MAP[k];
-    if (!table) return;
+  const table = TABLE_MAP[k];
+  if (!table) return;
 
-    const rows = mapToSupabase(k, v);
+  const rows = mapToSupabase(k, v);
 
-    if (rows.length) {
-      const { error } = await supabaseClient.from(table).upsert(rows, { onConflict: 'id' });
-      if (error) {
-        console.error('Supabase save failed:', k, error);
-        alert('Could not save ' + k + ': ' + error.message);
-      }
-    }
-  },
-
-  async preload(keys, callback) {
-    for (const k of keys) {
-      const table = TABLE_MAP[k];
-      if (!table) {
-        CACHE['rx3_' + k] = [];
-        continue;
-      }
-
-      const { data, error } = await supabaseClient.from(table).select('*');
-
-      if (error) {
-        console.warn('Could not load', k, error.message);
-        CACHE['rx3_' + k] = k === 'settings' ? {} : [];
-      } else {
-        CACHE['rx3_' + k] = mapFromSupabase(k, data || []);
-      }
-    }
-
-    if (callback) callback();
-  },
-
-  async refresh(keys, callback) {
-    await this.preload(keys, callback);
+  if (k === 'settings') {
+    const { error } = await supabaseClient.from(table).upsert(rows, { onConflict: 'id' });
+    if (error) { console.error('Supabase save failed:', k, error); alert('Could not save ' + k + ': ' + error.message); }
+    return;
   }
-};
+
+  // Get current IDs in Supabase
+  const { data: existing } = await supabaseClient.from(table).select('id');
+  const existingIds = (existing || []).map(r => r.id).filter(Boolean);
+  const newIds = rows.map(r => r.id).filter(Boolean);
+
+  // Delete rows that are no longer in the array
+  const toDelete = existingIds.filter(id => !newIds.includes(id));
+  if (toDelete.length) {
+    await supabaseClient.from(table).delete().in('id', toDelete);
+  }
+
+  // Upsert remaining rows
+  if (rows.length) {
+    const { error } = await supabaseClient.from(table).upsert(rows, { onConflict: 'id' });
+    if (error) {
+      console.error('Supabase save failed:', k, error);
+      alert('Could not save ' + k + ': ' + error.message);
+    }
+  }
+},
 
 function _setSyncIndicator(state) {
   const el = document.getElementById('sync-indicator');

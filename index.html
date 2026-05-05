@@ -793,6 +793,20 @@ const TABLE_MAP = {
 };
 
 function mapFromSupabase(key, rows) {
+  if (key === 'staff') {
+    return rows.map(r => ({
+      ...r,
+      availNotes: r.avail_notes,
+      contractStart: r.contract_start,
+      contractEnd: r.contract_end,
+      contractBreak: r.contract_break,
+      contractDays: r.contract_days,
+      contractPerDay: r.contract_per_day,
+      contractedHrsPerWeek: r.contracted_hrs_per_week,
+      autoShift: r.auto_shift
+    }));
+  }
+  
   if (key === 'shifts') {
     return rows.map(s => ({
       ...s,
@@ -834,6 +848,27 @@ function mapToSupabase(key, arrOrObj) {
 
   return arr.map(item => {
     const x = { ...item };
+return arr.map(item => {
+    const x = { ...item };
+
+    if (key === 'staff') {
+      x.avail_notes = x.availNotes;
+      x.contract_start = x.contractStart;
+      x.contract_end = x.contractEnd;
+      x.contract_break = x.contractBreak;
+      x.contract_days = x.contractDays;
+      x.contract_per_day = x.contractPerDay;
+      x.contracted_hrs_per_week = x.contractedHrsPerWeek;
+      x.auto_shift = x.autoShift;
+      delete x.availNotes;
+      delete x.contractStart;
+      delete x.contractEnd;
+      delete x.contractBreak;
+      delete x.contractDays;
+      delete x.contractPerDay;
+      delete x.contractedHrsPerWeek;
+      delete x.autoShift;
+    }
 
 if (key === 'shifts') {
   x.emp_id = x.empId;

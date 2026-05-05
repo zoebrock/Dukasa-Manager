@@ -183,6 +183,18 @@ const SUPABASE_URL = 'https://jfowikvmnqlebranlggf.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_-x_b0RnXfUjoKML_cRYvjA_r2udt8PQ';
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const IS_GAS = false;
+
+// GLOBAL APP STATE (REQUIRED)
+let currentWeekStart = null;
+let showAvail = false;
+let editingShiftId = null;
+let editingStaffId = null;
+let editingOTId = null;
+let reviewingLeaveId = null;
+let quickSickShiftId = null;
+let viewingShiftId = null;
+let currentLeaveFilter = 'pending';
+let calMonth = new Date();
   
 // Inject apple-touch-icon dynamically (required for Google Apps Script hosted pages)
 (function(){

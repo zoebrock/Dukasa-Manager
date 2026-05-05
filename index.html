@@ -1716,7 +1716,7 @@ function saveShift(){
   };
   if(editingShiftId){const idx=shifts.findIndex(s=>s.id===editingShiftId);if(idx>=0)shifts[idx]=ns;}
   else shifts.push(ns);
-  DB.set('shifts',shifts);
+  await DB.set('shifts', shifts);
   CM('m-shift');renderRoster();renderDashboard();editingShiftId=null;
 
   // Only email if the notify row is visible AND the checkbox is ticked
@@ -3806,13 +3806,25 @@ DB.preload(ALL_KEYS, function(){
     const clean=shifts.filter(s=>staffIds.has(s.empId));
     if(clean.length!==shifts.length) changed=true;
 
-    if(changed){
-      DB.set('shifts',clean);
-      const ce=DB.get('clockEvents')||[];DB.set('clockEvents',ce.filter(e=>staffIds.has(e.empId)));
-      const sd=DB.get('sickDays')||[];DB.set('sickDays',sd.filter(s=>staffIds.has(s.empId)));
-      const ch=DB.get('customHours')||[];DB.set('customHours',ch.filter(c=>staffIds.has(c.empId)));
-      console.log('Shifts migrated/purged. Remaining:',clean.length);
-    }
+if (changed && clean.length !== shifts.length) {
+  console.log('AUTO WRITE SHIFTS:', {
+    before: shifts.length,
+    after: clean.length
+  });
+
+  DB.set('shifts', clean);
+
+  const ce = DB.get('clockEvents') || [];
+  DB.set('clockEvents', ce.filter(e => staffIds.has(e.empId)));
+
+  const sd = DB.get('sickDays') || [];
+  DB.set('sickDays', sd.filter(s => staffIds.has(s.empId)));
+
+  const ch = DB.get('customHours') || [];
+  DB.set('customHours', ch.filter(c => staffIds.has(c.empId)));
+
+  console.log('Shifts migrated/purged. Remaining:', clean.length);
+}
   })();
   // Restore session if previously logged in (survives page reload)
   try{

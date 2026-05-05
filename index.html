@@ -1716,7 +1716,7 @@ function saveShift(){
   };
   if(editingShiftId){const idx=shifts.findIndex(s=>s.id===editingShiftId);if(idx>=0)shifts[idx]=ns;}
   else shifts.push(ns);
-  await DB.set('shifts', shifts);
+  DB.set('shifts',shifts);
   CM('m-shift');renderRoster();renderDashboard();editingShiftId=null;
 
   // Only email if the notify row is visible AND the checkbox is ticked

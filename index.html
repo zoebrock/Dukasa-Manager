@@ -775,7 +775,14 @@ const ROLE_BADGE={'Dispensary Technician':'bp','Pharmacist':'bt','Logistics Tech
 const EMP_COLORS=['#534AB7','#0F6E56','#BA7517','#A32D2D','#185FA5','#3B6D11','#993556','#D85A30','#534AB7','#0F6E56'];
 const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 // ═══════════════════════════════════════════════════════
+const SUPABASE_URL = 'https://jfowikvmnqlebranlggf.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_-x_b0RnXfUjoKML_cRYvjA_r2udt8PQ';
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+const IS_GAS = false;
+const CACHE = {};
+let _syncStatus = 'idle';
+  
 const TABLE_MAP = {
   staff: 'staff',
   shifts: 'shifts',

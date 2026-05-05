@@ -2416,11 +2416,9 @@ function toggleContractDay(day, btn) {
 function calcDayHrs(day) {
   const s=document.getElementById(`cpd-start-${day}`)?.value;
   const e=document.getElementById(`cpd-end-${day}`)?.value;
-  const b=parseInt(document.getElementById(`cpd-break-${day}`)?.value)||0;
   if(!s||!e) return '0.0';
-  // Only 30min of any break is unpaid — rest is paid
-  const unpaidBreak = Math.max(0, b - 30);
-  return Math.max(0,(MD(s,e)-unpaidBreak)/60).toFixed(1);
+  // Always deduct exactly 30min paid break from gross hours
+  return Math.max(0,(MD(s,e)-30)/60).toFixed(1);
 }
 
 function recalcContractTotal() {
@@ -2467,8 +2465,7 @@ function saveStaff(){
   const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
   const total=days.reduce((s,d)=>{
     if(!contractPerDay[d]||!contractPerDay[d].on)return s;
-    const unpaidBreak=Math.max(0,(contractPerDay[d].break||30)-30);
-    return s+Math.max(0,(MD(contractPerDay[d].start,contractPerDay[d].end)-unpaidBreak)/60);
+    return s+Math.max(0,(MD(contractPerDay[d].start,contractPerDay[d].end)-30)/60);
   },0);
   let contractedHrsPerWeek=parseFloat(document.getElementById('sf-contracted-hrs')?.value)||0;
   if(!contractedHrsPerWeek) contractedHrsPerWeek=parseFloat(total.toFixed(2));

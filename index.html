@@ -295,6 +295,7 @@ const IS_GAS = false;
             Show availability
           </label>
           <button class="btn btn-sm" onclick="openTemplateModal()">📋 Templates</button>
+          <button class="btn btn-sm" onclick="saveWeekAsTemplate()">💾 Save week as template</button>
           <button class="btn btn-sm" onclick="openPublishModal()">📣 Publish</button>
           <button class="btn btn-primary btn-sm" onclick="openAddShiftModal()">+ Add shift</button>
         </div>
@@ -1896,6 +1897,27 @@ function confirmSickQuick(){
 
 // TEMPLATES
 let editingTemplateId = null;
+
+function saveWeekAsTemplate() {
+  const we = new Date(currentWeekStart); we.setDate(we.getDate()+6);
+  const ws = FD(currentWeekStart), wed = FD(we);
+  const shifts = (DB.get('shifts')||[]).filter(s=>s.date>=ws&&s.date<=wed&&s.published&&!s.isOT);
+  if (!shifts.length) { alert('No published shifts this week to save as template.'); return; }
+
+  const name = prompt('Template name:', `Week of ${FDS(currentWeekStart)}`);
+  if (!name) return;
+
+  const templateShifts = shifts.map(s => {
+    const d = new Date(s.date+'T00:00:00');
+    const dayOfWeek = (d.getDay()+6)%7; // Mon=0, Sun=6
+    return { dayOfWeek, empId: s.empId, start: s.start, end: s.end, breakMin: s.breakMin||30 };
+  });
+
+  const tmpls = DB.get('rosterTemplates')||[];
+  tmpls.push({ id:'t'+Date.now(), name, shifts: templateShifts });
+  DB.set('rosterTemplates', tmpls);
+  alert(`Template "${name}" saved with ${templateShifts.length} shifts!`);
+}
 
 function openTemplateModal(){
   editingTemplateId = null;

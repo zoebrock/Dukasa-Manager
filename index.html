@@ -979,19 +979,28 @@ async preload(keys, callback) {
     const table = TABLE_MAP[k];
 
     if (!table) {
-      CACHE['rx3_' + k] = [];
+      CACHE['rx3_' + k] = k === 'settings' ? {} : [];
       continue;
     }
 
-    const { data, error } = await supabaseClient
-      .from(table)
-      .select('*');
+    try {
+      const { data, error } = await supabaseClient
+        .from(table)
+        .select('*');
 
-    if (error) {
-      console.warn('Could not load', k, error.message);
-      CACHE['rx3_' + k] = k === 'settings' ? {} : [];
-    } else {
+      if (error) {
+        console.error('Could not load', k, error.message);
+        CACHE['rx3_' + k] = k === 'settings' ? {} : [];
+        continue;
+      }
+
       CACHE['rx3_' + k] = mapFromSupabase(k, data || []);
+
+      console.log('Loaded', k, CACHE['rx3_' + k]);
+
+    } catch (err) {
+      console.error('Preload failed for', k, err);
+      CACHE['rx3_' + k] = k === 'settings' ? {} : [];
     }
   }
 

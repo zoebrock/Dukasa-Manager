@@ -1828,8 +1828,11 @@ function notifyStaffMember(empId,weekStart,weekEnd,updatedShifts){
     });
 }
 
-// SH = paid hours (deducts only the paid 30-min portion of break)
-function SH(s){return Math.max(0,(MD(s.start,s.end)-(s.paidBreakMin||30))/60);}
+// SH = paid rostered hours, always rounded to nearest 0.5h
+function SH(s){
+  if(!s || !s.start || !s.end) return 0;
+  return ROUND30(Math.max(0,(MD(s.start,s.end)-30)/60));
+}
 // SH_GROSS = total time on shift including unpaid break portion
 function SH_GROSS(s){return Math.max(0,(MD(s.start,s.end))/60);}
 
@@ -3064,13 +3067,13 @@ function updateApprovedHrsDisplay(empId,date){
   if(!el)return;
   if(!c.approved){el.textContent='—';return;}
   // Always use customHrs — getOrCreateCustom keeps it synced to autoHrs when no manual entry
-  el.textContent=c.customHrs.toFixed(2)+'h';
+  el.textContent=ROUND30(c.customHrs).toFixed(1)+'h';
 }
 
 function updateCustomHrs(empId,date,val){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
-  if(idx>=0){ch[idx].customHrs=parseFloat(val)||0;ch[idx].autoRounded=false;ch[idx].manualEntry=true;DB.set('customHours',ch);}
+  if(idx>=0){ch[idx].customHrs=ROUND30(parseFloat(val)||0);ch[idx].autoRounded=false;ch[idx].manualEntry=true;DB.set('customHours',ch);}
   updateApprovedHrsDisplay(empId,date);
 }
 
@@ -3104,20 +3107,20 @@ function buildTSRows(dayDate){
   const rows=[];
 
   // Get contracted daily hours for a staff member on a given day
-  function getContractedDailyHrs(emp,dayStr){
-    if(!emp||!emp.contractStart||!emp.contractEnd) return 0;
-    const d=new Date(dayStr+'T00:00:00');
-    const dayKey=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][(d.getDay()+6)%7];
-    // Per-day contract data (new format)
-    if(emp.contractPerDay&&emp.contractPerDay[dayKey]){
-      const pd=emp.contractPerDay[dayKey];
-      if(!pd.on) return 0;
-      return Math.max(0,(MD(pd.start,pd.end)-(pd.break||30))/60);
-    }
-    // Legacy single-time contract
-    if(emp.contractDays&&emp.contractDays[dayKey]===false) return 0;
-    return Math.max(0,(MD(emp.contractStart,emp.contractEnd)-(emp.contractBreak||30))/60);
+function getContractedDailyHrs(emp,dayStr){
+  if(!emp||!emp.contractStart||!emp.contractEnd) return 0;
+  const d=new Date(dayStr+'T00:00:00');
+  const dayKey=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][(d.getDay()+6)%7];
+
+  if(emp.contractPerDay&&emp.contractPerDay[dayKey]){
+    const pd=emp.contractPerDay[dayKey];
+    if(!pd.on) return 0;
+    return ROUND30(Math.max(0,(MD(pd.start,pd.end)-30)/60));
   }
+
+  if(emp.contractDays&&emp.contractDays[dayKey]===false) return 0;
+  return ROUND30(Math.max(0,(MD(emp.contractStart,emp.contractEnd)-30)/60));
+}
 
   function roundUpTo30(t){const[h,m]=t.split(':').map(Number);const tot=h*60+m;const r=Math.ceil(tot/30)*30;return String(Math.floor(r/60)%24).padStart(2,'0')+':'+String(r%60).padStart(2,'0');}
 

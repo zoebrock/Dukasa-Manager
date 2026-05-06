@@ -2010,11 +2010,19 @@ function confirmSickQuick(){
   CM('m-sick-quick');renderRoster();renderDashboard();
   // Always send notification (even if already marked — manager may be re-notifying)
   // Capture values before async calls
-  const notifyEmpId=s.empId;
-  const notifyDate=s.date;
-  _gasPost({action:'sendEmail',fn:'sendSickNotification',payload:{empId:notifyEmpId,date:notifyDate}})
-    .then(r=>console.log('Sick notification sent:',r))
-    .catch(err=>console.error('Sick notification failed:',err));
+const notifyEmpId = s.empId;
+const notifyDate = s.date;
+const emp = (DB.get('staff') || []).find(x => x.id === notifyEmpId);
+
+sendNotification('sick_leave', {
+  empName: emp ? `${emp.first || ''} ${emp.last || ''}`.trim() : 'Staff member',
+  empEmail: emp?.email || '',
+  date: notifyDate,
+  notes: s.notes || '',
+  source: 'Manager Portal'
+})
+  .then(r => console.log('Sick notification sent:', r))
+  .catch(err => console.error('Sick notification failed:', err));
 }
 
 // TEMPLATES

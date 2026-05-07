@@ -1790,9 +1790,26 @@ function saveShift(){
   if(emp && isPublished && shouldEmail){
     el.textContent=(shouldAutoPublish?'Shift added — notifying ':'Shift updated — notifying ')+emp.first+'...';
     setTimeout(()=>el.style.display='none',6000);
-    _gasPost({action:'sendEmail',fn:'sendShiftUpdateEmail',payload:{empId:ns.empId,date:ns.date,start:ns.start,end:ns.end,breakMin:ns.breakMin,isNew:isNewShift||shouldAutoPublish}})
+    _gasPost({
+  action: 'sendEmail',
+  fn: 'sendShiftUpdateEmail',
+  payload: {
+    sendToStaff: true,
+    empId: ns.empId,
+    empFirst: emp?.first || '',
+    empLast: emp?.last || '',
+    empEmail: emp?.email || '',
+    date: ns.date,
+    start: ns.start,
+    end: ns.end,
+    breakMin: ns.breakMin,
+    isNew: isNewShift || shouldAutoPublish,
+    oldShift: wasPublished ? 'Previous rostered shift' : '',
+    newShift: `${ns.start}–${ns.end}`,
+    notes: ns.notes || ''
+  }
+})
       .then(r=>console.log('Shift email:',r)).catch(err=>console.error('Shift email failed:',err));
-    notifyStaffMember(empId,shiftDate,shiftDate,shifts);
   } else if(emp && isPublished) {
     el.textContent='Shift saved.';
     setTimeout(()=>el.style.display='none',3000);
@@ -2249,7 +2266,21 @@ function saveOT(){
   DB.set('otRequests',reqs);CM('m-ot');renderOT();
   // If availability not confirmed and this is a new/re-sent request, email staff to accept/decline
   if(!availConfirmed){
-    _gasPost({action:'sendEmail',fn:'sendOTAvailabilityRequest',payload:{otId:no.id,empId:no.empId,date:no.date,start:no.start,end:no.end,reason:no.reason||''}})
+    _gasPost({
+  action: 'sendEmail',
+  fn: 'sendOTAvailabilityRequest',
+  payload: {
+    otId: no.id,
+    empId: no.empId,
+    empEmail: emp?.email || '',
+    empFirst: emp?.first || '',
+    date: no.date,
+    start: no.start,
+    end: no.end,
+    reason: no.reason || '',
+    sendToStaff: true
+  }
+})
       .then(r=>console.log('OT avail sent:',r)).catch(err=>console.error('OT avail failed:',err));
   }
 }

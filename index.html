@@ -3627,7 +3627,10 @@ function exportCSV(){
             });
           });
         } else if(leaveDay){
-          const cHrs = getContractedDailyHrs(emp, ds) || 0;
+          const cHrs = emp.contractPerDay?.[new Date(ds + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' })] 
+  || emp.contractedHrsPerDay 
+  || emp.contractedHrs 
+  || 0;
 
           entries.push({
             employee: empName,

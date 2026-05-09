@@ -3527,239 +3527,213 @@ function viewPhoto(inPhoto,outPhoto){
     <div><div style="font-size:11px;color:var(--t2);margin-bottom:4px">Clock out</div>${outPhoto?`<img src="${outPhoto}" style="width:100%;border-radius:var(--rsm);border:1px solid var(--border)">`:'<div style="height:160px;background:var(--s2);border-radius:var(--rsm);display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:11px">No photo</div>'}</div>
   </div>`;OM('m-photo-view');
 }
-function exportCSV(){
-  const sv=document.getElementById('ts-week').value;
-  if(!sv){alert('Please select a week.');return;}
-  const wkS=new Date(sv);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
-  const ws=FD(wkS),we=FD(wkE);
-
-  const staffAll=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
-  const shifts=DB.get('shifts')||[];
-  const ce=DB.get('clockEvents')||[];
-  const lr=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');
-  const sd=DB.get('sickDays')||[];
-  const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8};
-  const ch=DB.get('customHours')||[];
-  const otReqs=(DB.get('otRequests')||[]).filter(o=>o.approved===true);
-
-  function getContractedDailyHrs(emp,dayStr){
-    if(!emp||!emp.contractStart||!emp.contractEnd) return 0;
-    const d=new Date(dayStr+'T00:00:00');
-    const dayKey=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][(d.getDay()+6)%7];
-    // Per-day contract data (new format)
-    if(emp.contractPerDay&&emp.contractPerDay[dayKey]){
-      const pd=emp.contractPerDay[dayKey];
-      if(!pd.on) return 0;
-      return Math.max(0,(MD(pd.start,pd.end)-(pd.break||30))/60);
-    }
-    // Legacy single-time contract
-    if(emp.contractDays&&emp.contractDays[dayKey]===false) return 0;
-    return Math.max(0,(MD(emp.contractStart,emp.contractEnd)-(emp.contractBreak||30))/60);
+function exportTSCSV(){
+  const sv = document.getElementById('ts-week')?.value;
+  if(!sv){
+    alert('Please select a week first.');
+    return;
   }
 
-  function csvRoundUpTo30(t){const[h,m]=t.split(':').map(Number);const tot=h*60+m;const r=Math.ceil(tot/30)*30;return String(Math.floor(r/60)%24).padStart(2,'0')+':'+String(r%60).padStart(2,'0');}
-  const cq=v=>'"'+(String(v||'').replace(/"/g,'""'))+'"';
+  const wkS = new Date(sv);
+  const wkE = new Date(wkS);
+  wkE.setDate(wkE.getDate()+6);
 
-  // Headers — contract row + separate OT row
-  const headers=['Employee','Role','Date','Day','Row Type','Status','Flags',
-    'Rostered Start','Rostered End','Rostered Hrs','Contract Hrs/Day',
-    'Clock In','Clock Out','Break (min)','Actual Hrs',
-    'Auto Rounded In','Auto Rounded Out',
-    'Custom Start','Custom End','Approved Hrs','Approved','Reason'];
-  const csvRows=[headers.join(',')];
+  const ws = FD(wkS);
+  const we = FD(wkE);
 
-  // Collect all entries: one per staff per worked/leave day, sorted alpha then date
-  const entries=[];
+  const staffAll = DB.get('staff') || [];
+  const shifts = DB.get('shifts') || [];
+  const lr = DB.get('leaveRequests') || [];
+  const sick = DB.get('sickDays') || [];
+  const otReqs = DB.get('otRequests') || [];
 
-  // 7 days of the week in date order
-  const days=[];
-  for(let i=0;i<7;i++){const d=new Date(wkS);d.setDate(d.getDate()+i);days.push(FD(d));}
+  const cq = v => '"' + String(v ?? '').replace(/"/g,'""') + '"';
 
-  staffAll.forEach(emp=>{
-    // Get all shifts this week for this employee
-    const empShifts=shifts.filter(s=>s.empId===emp.id&&s.date>=ws&&s.date<=we&&!s.isOT)
-      .sort((a,b)=>a.date.localeCompare(b.date));
+  const dayLabel = ds =>
+    new Date(ds + 'T00:00:00').toLocaleDateString('en-AU', { weekday:'long' });
 
-    // Also find leave days with no shift
-    const leaveDaysNoShift=[];
-    days.forEach(ds=>{
-      const hasShift=empShifts.some(s=>s.date===ds);
-      if(hasShift) return;
-      const isLeave=lr.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
-      if(!isLeave) return;
-      const cHrs=getContractedDailyHrs(emp,ds);
-      if(cHrs>0) leaveDaysNoShift.push({date:ds,leave:isLeave,cHrs});
+  const isWeekendDay = ds => {
+    const d = new Date(ds + 'T00:00:00').getDay();
+    return d === 0 || d === 6;
+  };
+
+  const cleanType = v => {
+    const t = String(v || '').toLowerCase();
+    if(t.includes('annual')) return 'Annual Leave';
+    if(t.includes('sick')) return 'Sick';
+    if(t.includes('personal')) return 'Personal Leave';
+    if(t.includes('unpaid')) return 'Unpaid Leave';
+    return v || 'Leave';
+  };
+
+  const entries = [];
+
+  staffAll
+    .slice()
+    .sort((a,b)=>((a.first||'')+' '+(a.last||'')).localeCompare((b.first||'')+' '+(b.last||'')))
+    .forEach(emp => {
+      const empName = `${emp.first || ''} ${emp.last || ''}`.trim();
+      const role = emp.role || '';
+
+      for(let i=0;i<7;i++){
+        const d = new Date(wkS);
+        d.setDate(d.getDate()+i);
+        const ds = FD(d);
+
+        const normalShifts = shifts
+          .filter(s => s.empId === emp.id && s.date === ds && !s.isOT)
+          .sort((a,b)=>(a.start || '').localeCompare(b.start || ''));
+
+        const approvedOTs = otReqs
+          .filter(o =>
+            o.empId === emp.id &&
+            o.date === ds &&
+            String(o.status || '').toLowerCase() === 'approved'
+          )
+          .sort((a,b)=>(a.start || '').localeCompare(b.start || ''));
+
+        const sickDay = sick.find(s => s.empId === emp.id && s.date === ds);
+        const leaveDay = lr.find(l =>
+          l.empId === emp.id &&
+          String(l.status || '').toLowerCase() === 'approved' &&
+          l.from <= ds &&
+          l.to >= ds
+        );
+
+        if(normalShifts.length){
+          normalShifts.forEach(s => {
+            let rowType = isWeekendDay(ds) ? 'Weekend' : 'Ordinary';
+            let status = rowType;
+            let hrs = SH(s);
+
+            if(sickDay){
+              rowType = 'Sick';
+              status = 'Sick';
+            } else if(leaveDay){
+              rowType = cleanType(leaveDay.type);
+              status = rowType;
+            }
+
+            entries.push({
+              employee: empName,
+              role,
+              date: ds,
+              day: dayLabel(ds),
+              rowType,
+              status,
+              start: s.start || '',
+              end: s.end || '',
+              hrs: ROUND30(hrs || 0)
+            });
+          });
+        } else if(leaveDay){
+          const cHrs = getContractedDailyHrs(emp, ds) || 0;
+
+          entries.push({
+            employee: empName,
+            role,
+            date: ds,
+            day: dayLabel(ds),
+            rowType: cleanType(leaveDay.type),
+            status: cleanType(leaveDay.type),
+            start: emp.contractStart || '',
+            end: emp.contractEnd || '',
+            hrs: ROUND30(cHrs)
+          });
+        }
+
+        // Only add OT where there is an APPROVED OT request.
+        approvedOTs.forEach(o => {
+          const otHrs = ROUND30(Math.max(0, MD(o.start, o.end) / 60));
+
+          if(otHrs > 0){
+            entries.push({
+              employee: empName,
+              role,
+              date: ds,
+              day: dayLabel(ds),
+              rowType: 'OT',
+              status: 'OT',
+              start: o.start || '',
+              end: o.end || '',
+              hrs: otHrs
+            });
+          }
+        });
+      }
+
+      const empEntries = entries.filter(r => r.employee === empName);
+
+      if(empEntries.length){
+        const ordinary = empEntries
+          .filter(r => r.rowType === 'Ordinary')
+          .reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
+
+        const weekend = empEntries
+          .filter(r => r.rowType === 'Weekend')
+          .reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
+
+        const overtime = empEntries
+          .filter(r => r.rowType === 'OT')
+          .reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
+
+        const leave = empEntries
+          .filter(r => ['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.rowType))
+          .reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
+
+        const total = ordinary + weekend + overtime + leave;
+
+        entries.push({
+          employee: empName,
+          role,
+          date: '',
+          day: '',
+          rowType: 'TOTAL',
+          status: `Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${overtime.toFixed(2)}h | Leave ${leave.toFixed(2)}h`,
+          start: '',
+          end: '',
+          hrs: ROUND30(total)
+        });
+      }
     });
 
-    // Combine and sort by date
-    const allDays=[
-      ...empShifts.map(s=>({type:'shift',date:s.date,s})),
-      ...leaveDaysNoShift.map(x=>({type:'leave',date:x.date,leave:x.leave,cHrs:x.cHrs}))
-    ].sort((a,b)=>a.date.localeCompare(b.date));
+  const csvRows = [];
 
-    allDays.forEach(entry=>{
-      const ds=entry.date;
-      const dayName=new Date(ds+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long'});
-      const contractedHrs=getContractedDailyHrs(emp,ds);
-
-      if(entry.type==='leave'){
-        // Leave day without a shift — use contracted hours
-        const leave=entry.leave;
-        const cHrs=entry.cHrs;
-        entries.push({emp,ds,dayName,status:leave.type,rowType:'Contract',flags:'Leave — contracted hours',
-          rostStart:emp.contractStart||'',rostEnd:emp.contractEnd||'',rostHrs:cHrs.toFixed(2),contractedHrs:cHrs.toFixed(2),
-          clockIn:'',clockOut:'',breakMin:emp.contractBreak||30,actualHrs:cHrs.toFixed(2),
-          autoIn:'',autoOut:'',
-          customStart:'',customEnd:'',approvedHrs:cHrs.toFixed(2),approved:'Yes',reason:'',
-          role:emp.role||''});
-        return;
-      }
-
-      const s=entry.s;
-      const sHrs=SH(s);
-      const ci=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='clock-in');
-      const co=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='clock-out');
-      const bs=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='break-start');
-      const be=ce.find(e=>e.empId===emp.id&&e.date===ds&&e.type==='break-end');
-      const isSick=sd.find(sk=>sk.empId===emp.id&&sk.date===ds);
-      const isLeave=lr.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
-      const approvedOT=otReqs.find(o=>o.empId===emp.id&&o.date===ds);
-      const custom=ch.find(x=>x.empId===emp.id&&x.date===ds);
-      let actualHrs=0,otHrs=0,bMin=s.breakMin;
-      let status=isSick?'Sick':isLeave?isLeave.type:'Rostered';
-      const flags=[];
-      let autoIn='',autoOut='';
-
-      if(isSick){
-        actualHrs=sHrs;autoIn=s.start;autoOut=s.end;status='Sick';
-        flags.push('Sick leave — rostered hours applied');
-      } else if(isLeave){
-        actualHrs=contractedHrs||sHrs;autoIn=emp.contractStart||s.start;autoOut=emp.contractEnd||s.end;
-        status=isLeave.type;flags.push(`${isLeave.type} — contracted hours applied`);
-      } else if(!ci&&!co){
-        const csvToday=FD(new Date());
-        if(ds>csvToday){status='Rostered';}
-        else{status='No clock events';actualHrs=sHrs;autoIn=s.start;autoOut=s.end;flags.push('No clock in or out — rostered hours applied');}
-      } else if(ci&&!co){
-        status='Missing clock out';
-        const ciD=MD(s.start,ci.time);
-        if(ciD>0){autoIn=csvRoundUpTo30(ci.time);flags.push('Late +'+ciD+'m → '+autoIn);}
-        else if(ciD<0){autoIn=s.start;flags.push('Early '+Math.abs(ciD)+'m → '+s.start);}
-        else{autoIn=ci.time;}
-        autoOut=s.end;flags.push('No clock out — rostered end applied');
-        actualHrs=Math.max(0,MD(autoIn,autoOut)-bMin)/60;
-      } else if(!ci&&co){
-        status='Missing clock in';autoIn=s.start;flags.push('No clock in — rostered start applied');
-        const coD=MD(s.end,co.time);
-        if(coD>0&&!approvedOT){autoOut=s.end;flags.push('Late out → capped');}else{autoOut=co.time;}
-        actualHrs=Math.max(0,MD(autoIn,autoOut)-bMin)/60;
-      } else if(ci&&co){
-        if(bs&&be)bMin=MD(bs.time,be.time);
-        actualHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);
-        const ciD=MD(s.start,ci.time);const coD=MD(s.end,co.time);
-        if(ciD>0){autoIn=csvRoundUpTo30(ci.time);flags.push('Late +'+ciD+'m → '+autoIn);}
-        else if(ciD<0){autoIn=s.start;flags.push('Early → capped to '+s.start);}
-        if(coD>0&&!approvedOT){autoOut=s.end;flags.push('Late out → capped to '+s.end);}
-        status='Completed';
-      }
-
-// Determine ordinary/weekend/OT split.
-// IMPORTANT: Do NOT auto-create OT merely because actual hours exceed contracted hours.
-// OT should only export when there is an approved OT request.
-const isWeekend = ['Saturday','Sunday'].includes(dayName);
-
-if (approvedOT) {
-  otHrs = ROUND30(Math.max(0, (MD(approvedOT.start, approvedOT.end) || 0) / 60));
-  flags.push('Approved OT ' + approvedOT.start + '–' + approvedOT.end + ' (' + otHrs.toFixed(2) + 'h)');
-}
-
-const ordinaryHrs = (!isWeekend && !approvedOT) ? ROUND30(actualHrs || 0) : 0;
-const weekendHrs  = (isWeekend && !approvedOT) ? ROUND30(actualHrs || 0) : 0;
-const contractHrs = ROUND30(actualHrs || 0);
-      const approvedHrs=custom&&custom.approved?custom.customHrs:null;
-      const flagStr=flags.join('; ');
-      const reason=ci&&ci.reason?ci.reason:co&&co.reason?co.reason:'';
-
-      const baseRow={emp,ds,dayName,status,flags:flagStr,
-        rostStart:s.start,rostEnd:s.end,rostHrs:sHrs.toFixed(2),contractedHrs:contractedHrs.toFixed(2),
-        clockIn:ci?ci.time:'',clockOut:co?co.time:'',breakMin:bMin,
-        autoIn,autoOut,
-        customStart:custom&&custom.customStart?custom.customStart:'',
-        customEnd:custom&&custom.customEnd?custom.customEnd:'',
-        approved:custom&&custom.approved?'Yes':'No',reason,role:s.role||emp.role||''};
-
-      // Contract hours row
-      entries.push({
-  ...baseRow,
-  rowType: isWeekend ? 'Weekend' : 'Ordinary',
-  actualHrs: contractHrs.toFixed(2),
-  approvedHrs: approvedHrs !== null ? approvedHrs.toFixed(2) : ''
-});
-
-      // OT row — only if OT > 0
-      if(otHrs>0){
-        entries.push({...baseRow,rowType:'Overtime',actualHrs:otHrs.toFixed(2),approvedHrs:'',status:'Overtime',flags:''});
-      }
-    });
-  });
-
-  entries.forEach(r=>{
-    csvRows.push([
-      cq(r.emp.first+' '+r.emp.last),cq(r.role),cq(r.ds),cq(r.dayName),cq(r.rowType),cq(r.status),
-      cq(r.flags),cq(r.rostStart),cq(r.rostEnd),r.rostHrs,r.contractedHrs,
-      cq(r.clockIn),cq(r.clockOut),r.breakMin,r.actualHrs,
-      cq(r.autoIn),cq(r.autoOut),
-      cq(r.customStart),cq(r.customEnd),cq(r.approvedHrs),cq(r.approved),cq(r.reason)
-    ].join(','));
-  });
-  
+  csvRows.push(cq(`timesheet_${ws}_${we}`));
   csvRows.push('');
 
-staffAll.forEach(emp => {
-  const empName = (emp.first + ' ' + emp.last).trim();
-
-  const empEntries = entries.filter(r =>
-    ((r.emp.first + ' ' + r.emp.last).trim()) === empName
-  );
-
-  if (!empEntries.length) return;
-
-  const ordinaryTotal = empEntries
-    .filter(r => r.rowType === 'Ordinary')
-    .reduce((t,r) => t + (parseFloat(r.actualHrs) || 0), 0);
-
-  const weekendTotal = empEntries
-    .filter(r => r.rowType === 'Weekend')
-    .reduce((t,r) => t + (parseFloat(r.actualHrs) || 0), 0);
-
-  const overtimeTotal = empEntries
-    .filter(r => r.rowType === 'Overtime')
-    .reduce((t,r) => t + (parseFloat(r.actualHrs) || 0), 0);
-
-  const grandTotal = ordinaryTotal + weekendTotal + overtimeTotal;
-
   csvRows.push([
-    cq(empName),
-    cq(emp.role || ''),
-    cq(ws + ' to ' + we),
-    cq('Weekly total'),
-    cq('TOTAL'),
-    cq(''),
-    cq('Ordinary: ' + ordinaryTotal.toFixed(2) + 'h; Weekend: ' + weekendTotal.toFixed(2) + 'h; Overtime: ' + overtimeTotal.toFixed(2) + 'h; Total: ' + grandTotal.toFixed(2) + 'h'),
-    '', '', '', '', '', '', '',
-    grandTotal.toFixed(2),
-    '', '', '', '',
-    '',
-    '',
-    ''
-  ].join(','));
-});
+    'Employee',
+    'Role',
+    'Date',
+    'Day',
+    'Row Type',
+    'Status',
+    'Rostered Start',
+    'Rostered End',
+    'Hrs'
+  ].map(cq).join(','));
 
-  const blob=new Blob([csvRows.join('\n')],{type:'text/csv'});
-  const a=document.createElement('a');
-  a.href=URL.createObjectURL(blob);
-  a.download='timesheet_'+ws+'_'+we+'.csv';
+  entries.forEach(r => {
+    csvRows.push([
+      cq(r.employee),
+      cq(r.role),
+      cq(r.date),
+      cq(r.day),
+      cq(r.rowType),
+      cq(r.status),
+      cq(r.start),
+      cq(r.end),
+      Number(r.hrs || 0).toFixed(2)
+    ].join(','));
+  });
+
+  const blob = new Blob([csvRows.join('\n')], { type:'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `timesheet_${ws}_${we}.csv`;
   a.click();
+  URL.revokeObjectURL(a.href);
 }
 function viewPhoto(inPhoto,outPhoto){
   document.getElementById('photo-view-body').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">

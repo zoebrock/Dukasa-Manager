@@ -1274,6 +1274,7 @@ else if(p==='timesheets'){
     renderTS();
   });
 }
+}
 
 // WEEK
 function initWeek(date){const d=new Date(date);const day=d.getDay();d.setDate(d.getDate()-day+(day===0?-6:1));d.setHours(0,0,0,0);currentWeekStart=d;}
@@ -3082,9 +3083,7 @@ function updateCustomTime(empId,date,field,val,shiftId){
   const cStart=ch[idx].customStart;const cEnd=ch[idx].customEnd;
   if(cStart&&cEnd){
     const shifts=DB.get('shifts')||[];const s=shifts.find(x=>x.id===shiftId);
-    const bMin=s?s.breakMin:30;
-    const mins=Math.max(0,MD(cStart,cEnd)-bMin);
-    ch[idx].customHrs=Math.round(mins/60*100)/100;
+ch[idx].customHrs=paidHrsFromTimes(cStart,cEnd);
     ch[idx].autoRounded=false;
   }
   DB.set('customHours',ch);
@@ -3254,11 +3253,38 @@ if(actualHrs!==null&&!isLeave&&!isSick){
   effectiveHrs=paidHrsFromTimes(effIn,effOut);
 }
 
-const totalPayableHrs=effectiveHrs!==null
-  ? ROUND30(effectiveHrs+(otHrs||0))
-  : null;
-    rows.push({s,emp,sHrs,actualHrs,otHrs,status,rowCls,ci,co,bs,be,bActMin,flags,isSick,isLeave,approvedOT,custom,approvedHrs,autoRoundedIn,autoRoundedOut,contractedHrs});
-  });
+if(isLeave || isSick){
+  effectiveHrs=ROUND30(actualHrs || sHrs || 0);
+}
+
+const custom=getOrCreateCustom(
+  s.empId,
+  ds,
+  actualHrs,
+  autoRoundedIn,
+  autoRoundedOut,
+  effectiveHrs
+);
+
+const approvedHrs=custom.approved ? custom.customHrs : null;
+
+rows.push({
+  s, emp, sHrs,
+  actualHrs: effectiveHrs,
+  otHrs,
+  status,
+  rowCls,
+  ci, co, bs, be, bActMin,
+  flags,
+  isSick,
+  isLeave,
+  approvedOT,
+  custom,
+  approvedHrs,
+  autoRoundedIn,
+  autoRoundedOut,
+  contractedHrs
+});
 
   // Step 2 — add rows for staff on LEAVE with no shift today
   staff.forEach(emp=>{

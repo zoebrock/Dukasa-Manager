@@ -1063,6 +1063,10 @@ function INI(e){return(e.first[0]+e.last[0]).toUpperCase()}
 function MD(a,b){if(!a||!b)return null;const[ah,am]=a.split(':').map(Number);const[bh,bm]=b.split(':').map(Number);return(bh*60+bm)-(ah*60+am);}
 function FMINS(m){if(m===null||m===undefined)return'—';const h=Math.floor(Math.abs(m)/60);const mn=Math.abs(m)%60;return(m<0?'-':'')+(h>0?h+'h ':'')+(mn+'m');}
 function ROUND30(hrs){return Math.round(hrs*2)/2;}
+  function paidHrsFromTimes(start,end){
+  if(!start || !end) return 0;
+  return ROUND30(Math.max(0,(MD(start,end)-30)/60));
+}
 function NOW_TIME(){return new Date().toTimeString().slice(0,5);}
 
 function initDefaults() {
@@ -1848,7 +1852,7 @@ function notifyStaffMember(empId,weekStart,weekEnd,updatedShifts){
 // SH = paid rostered hours, always rounded to nearest 0.5h
 function SH(s){
   if(!s || !s.start || !s.end) return 0;
-  return ROUND30(Math.max(0,(MD(s.start,s.end)-30)/60));
+  return paidHrsFromTimes(s.start,s.end);
 }
 // SH_GROSS = total time on shift including unpaid break portion
 function SH_GROSS(s){return Math.max(0,(MD(s.start,s.end))/60);}
@@ -3108,20 +3112,31 @@ function updateCustomHrs(empId,date,val){
   updateApprovedHrsDisplay(empId,date);
 }
 
-function toggleApproved(empId,date,btn){
+async function toggleApproved(empId,date,btn){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
-  if(idx>=0){
-    ch[idx].approved=!ch[idx].approved;
-    // When approving, lock in the correct hours:
-    // use manual customHrs if entered, otherwise use autoHrs
-    if(ch[idx].approved){
-      ch[idx].approvedHrs=ch[idx].customHrs; // customHrs is always correct (synced to autoHrs when no manual entry)
-    }
-    DB.set('customHours',ch);
-    btn.classList.toggle('checked',ch[idx].approved);
-    btn.textContent=ch[idx].approved?'✓':'';
+  if(idx<0) return;
+
+  const nextApproved=!ch[idx].approved;
+  ch[idx].approved=nextApproved;
+
+  if(nextApproved){
+    ch[idx].customHrs=ROUND30(ch[idx].customHrs || ch[idx].autoHrs || 0);
+    ch[idx].approvedHrs=ch[idx].customHrs;
+    ch[idx].approvedAt=new Date().toISOString();
+    ch[idx].manualEntry=true;
+  } else {
+    ch[idx].approvedHrs=null;
+  }
+
+  btn.classList.toggle('checked',nextApproved);
+  btn.textContent=nextApproved?'✓':'';
+
+  try{
+    await DB.set('customHours',ch);
     updateApprovedHrsDisplay(empId,date);
+  }catch(e){
+    alert('Could not save approval: '+e.message);
   }
 }
 
@@ -3231,16 +3246,17 @@ function getContractedDailyHrs(emp,dayStr){
       }
     }
 
-    let effectiveHrs=actualHrs;
-    if(actualHrs!==null&&!isLeave&&!isSick&&(autoRoundedIn||autoRoundedOut)){
-      const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
-      const effOut=autoRoundedOut||(co&&co.time)||s.end;
-      const effBreak=bActMin!==null?bActMin:s.breakMin;
-      effectiveHrs=Math.max(0,MD(effIn,effOut)-effBreak)/60;
-    }
-    const totalPayableHrs=effectiveHrs!==null?(effectiveHrs+(otHrs||0)):null;
-    const custom=getOrCreateCustom(s.empId,ds,actualHrs,autoRoundedIn,autoRoundedOut,totalPayableHrs);
-    const approvedHrs=custom.approved?custom.customHrs:null;
+let effectiveHrs=actualHrs;
+
+if(actualHrs!==null&&!isLeave&&!isSick){
+  const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
+  const effOut=autoRoundedOut||(co&&co.time)||s.end;
+  effectiveHrs=paidHrsFromTimes(effIn,effOut);
+}
+
+const totalPayableHrs=effectiveHrs!==null
+  ? ROUND30(effectiveHrs+(otHrs||0))
+  : null;
     rows.push({s,emp,sHrs,actualHrs,otHrs,status,rowCls,ci,co,bs,be,bActMin,flags,isSick,isLeave,approvedOT,custom,approvedHrs,autoRoundedIn,autoRoundedOut,contractedHrs});
   });
 

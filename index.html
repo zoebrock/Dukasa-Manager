@@ -3663,17 +3663,19 @@ function exportCSV(){
         status='Completed';
       }
 
-      // Determine contract vs OT split
-      const otThreshold=contractedHrs>0?contractedHrs:(parseFloat(settings.dailyOTHours)||8);
-      if(approvedOT){
-        otHrs=Math.max(0,(MD(approvedOT.start,approvedOT.end)||0)/60);
-        flags.push('OT '+approvedOT.start+'–'+approvedOT.end+' ('+otHrs.toFixed(2)+'h)');
-      } else if(actualHrs>otThreshold&&!isSick&&!isLeave){
-        otHrs=parseFloat((actualHrs-otThreshold).toFixed(2));
-        if(contractedHrs>0) flags.push('Above contracted '+contractedHrs.toFixed(1)+'h — '+actualHrs.toFixed(2)+'h worked');
-      }
+// Determine ordinary/weekend/OT split.
+// IMPORTANT: Do NOT auto-create OT merely because actual hours exceed contracted hours.
+// OT should only export when there is an approved OT request.
+const isWeekend = ['Saturday','Sunday'].includes(dayName);
 
-      const contractHrs=isLeave?actualHrs:isSick?actualHrs:Math.min(actualHrs,otThreshold);
+if (approvedOT) {
+  otHrs = ROUND30(Math.max(0, (MD(approvedOT.start, approvedOT.end) || 0) / 60));
+  flags.push('Approved OT ' + approvedOT.start + '–' + approvedOT.end + ' (' + otHrs.toFixed(2) + 'h)');
+}
+
+const ordinaryHrs = (!isWeekend && !approvedOT) ? ROUND30(actualHrs || 0) : 0;
+const weekendHrs  = (isWeekend && !approvedOT) ? ROUND30(actualHrs || 0) : 0;
+const contractHrs = ROUND30(actualHrs || 0);
       const approvedHrs=custom&&custom.approved?custom.customHrs:null;
       const flagStr=flags.join('; ');
       const reason=ci&&ci.reason?ci.reason:co&&co.reason?co.reason:'';
@@ -3687,7 +3689,12 @@ function exportCSV(){
         approved:custom&&custom.approved?'Yes':'No',reason,role:s.role||emp.role||''};
 
       // Contract hours row
-      entries.push({...baseRow,rowType:'Contract',actualHrs:contractHrs.toFixed(2),approvedHrs:approvedHrs!==null?approvedHrs.toFixed(2):''});
+      entries.push({
+  ...baseRow,
+  rowType: isWeekend ? 'Weekend' : 'Ordinary',
+  actualHrs: contractHrs.toFixed(2),
+  approvedHrs: approvedHrs !== null ? approvedHrs.toFixed(2) : ''
+});
 
       // OT row — only if OT > 0
       if(otHrs>0){
@@ -3705,6 +3712,48 @@ function exportCSV(){
       cq(r.customStart),cq(r.customEnd),cq(r.approvedHrs),cq(r.approved),cq(r.reason)
     ].join(','));
   });
+  
+  csvRows.push('');
+
+staffAll.forEach(emp => {
+  const empName = (emp.first + ' ' + emp.last).trim();
+
+  const empEntries = entries.filter(r =>
+    ((r.emp.first + ' ' + r.emp.last).trim()) === empName
+  );
+
+  if (!empEntries.length) return;
+
+  const ordinaryTotal = empEntries
+    .filter(r => r.rowType === 'Ordinary')
+    .reduce((t,r) => t + (parseFloat(r.actualHrs) || 0), 0);
+
+  const weekendTotal = empEntries
+    .filter(r => r.rowType === 'Weekend')
+    .reduce((t,r) => t + (parseFloat(r.actualHrs) || 0), 0);
+
+  const overtimeTotal = empEntries
+    .filter(r => r.rowType === 'Overtime')
+    .reduce((t,r) => t + (parseFloat(r.actualHrs) || 0), 0);
+
+  const grandTotal = ordinaryTotal + weekendTotal + overtimeTotal;
+
+  csvRows.push([
+    cq(empName),
+    cq(emp.role || ''),
+    cq(ws + ' to ' + we),
+    cq('Weekly total'),
+    cq('TOTAL'),
+    cq(''),
+    cq('Ordinary: ' + ordinaryTotal.toFixed(2) + 'h; Weekend: ' + weekendTotal.toFixed(2) + 'h; Overtime: ' + overtimeTotal.toFixed(2) + 'h; Total: ' + grandTotal.toFixed(2) + 'h'),
+    '', '', '', '', '', '', '',
+    grandTotal.toFixed(2),
+    '', '', '', '',
+    '',
+    '',
+    ''
+  ].join(','));
+});
 
   const blob=new Blob([csvRows.join('\n')],{type:'text/csv'});
   const a=document.createElement('a');

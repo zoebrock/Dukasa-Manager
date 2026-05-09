@@ -1268,11 +1268,11 @@ function SP(p){
   else if(p==='ot'){
     DB.refresh(['otRequests'],function(){renderOT('pending');updateBadges();});
   }
-  else if(p==='timesheets'){
-    // Always fetch fresh clock events when opening timesheets
-    DB.refresh(['clockEvents'],function(){popTSWeeks();renderTS();});
-  }
-  else if(p==='announcements'){renderAnnouncements(annFilter);}
+else if(p==='timesheets'){
+  DB.refresh(['staff','shifts','clockEvents','customHours','leaveRequests','sickDays','otRequests','settings'],function(){
+    popTSWeeks();
+    renderTS();
+  });
 }
 
 // WEEK
@@ -3285,15 +3285,7 @@ const totalPayableHrs=effectiveHrs!==null
 function renderTS(){
   const sv=document.getElementById('ts-week').value;
   if(!sv)return;
-  // Purge any non-manual customHours records so they are recalculated fresh
-  // This ensures stale auto-seeded records don't persist with wrong hours
-  // Purge stale auto-seeded records so they regenerate with correct hours
-  const chStale=DB.get('customHours')||[];
-  const chPurged=chStale.filter(x=>x.manualEntry===true);
-  if(chPurged.length!==chStale.length){
-    DB.set('customHours',chPurged);
-    console.log('Purged',chStale.length-chPurged.length,'stale auto-seeded custom hours records');
-  }
+
   const wkS=new Date(sv);const wkE=new Date(wkS);wkE.setDate(wkE.getDate()+6);
   // Build 7 days
   const days=[];

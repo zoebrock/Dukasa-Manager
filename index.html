@@ -3527,7 +3527,7 @@ function viewPhoto(inPhoto,outPhoto){
     <div><div style="font-size:11px;color:var(--t2);margin-bottom:4px">Clock out</div>${outPhoto?`<img src="${outPhoto}" style="width:100%;border-radius:var(--rsm);border:1px solid var(--border)">`:'<div style="height:160px;background:var(--s2);border-radius:var(--rsm);display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:11px">No photo</div>'}</div>
   </div>`;OM('m-photo-view');
 }
-function exportTSCSV(){
+function exportCSV(){
   const sv = document.getElementById('ts-week')?.value;
   if(!sv){
     alert('Please select a week first.');

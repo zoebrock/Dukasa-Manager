@@ -1474,6 +1474,28 @@ function editShiftPopup(shiftId) {
   editShiftFromDetail();
 }
 
+  async function deleteSupabaseRow(k, id) {
+  const table = TABLE_MAP[k];
+  if (!table || !id) return;
+
+  _setSyncIndicator('saving');
+
+  try {
+    const { error } = await supabaseClient
+      .from(table)
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    _setSyncIndicator('saved');
+  } catch (error) {
+    console.error('Supabase delete failed:', k, id, error);
+    _setSyncIndicator('error');
+    alert('Could not delete ' + k + ': ' + error.message);
+  }
+}
+  
 async function deleteShiftConfirm(shiftId) {
   viewingShiftId = shiftId;
   if (!confirm('Delete this shift? This cannot be undone.')) return;
@@ -1985,19 +2007,45 @@ function editShiftFromDetail(){
   autoCalcBreak(false); // update detail line only
   OM('m-shift');
 }
+
+async function deleteSupabaseRow(k, id) {
+  const table = TABLE_MAP[k];
+  if (!table || !id) return;
+
+  _setSyncIndicator('saving');
+
+  try {
+    const { error } = await supabaseClient
+      .from(table)
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    _setSyncIndicator('saved');
+  } catch (error) {
+    console.error('Supabase delete failed:', k, id, error);
+    _setSyncIndicator('error');
+    alert('Could not delete ' + k + ': ' + error.message);
+  }
+}
+  
 async function deleteShift() {
   if (!viewingShiftId) return;
 
   const shiftIdToDelete = viewingShiftId;
-  const shifts = (DB.get('shifts') || []).filter(s => s.id !== shiftIdToDelete);
 
-  await DB.set('shifts', shifts);
+  await deleteSupabaseRow('shifts', shiftIdToDelete);
+
+  const shifts = (DB.get('shifts') || []).filter(s => s.id !== shiftIdToDelete);
+  CACHE['rx3_shifts'] = shifts;
 
   viewingShiftId = null;
   CM('m-shift-detail');
   renderRoster();
   renderDashboard();
 }
+  
 // PUBLISH
 // Creates a fingerprint of a shift for change detection
 

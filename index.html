@@ -795,7 +795,7 @@ const TABLE_MAP = {
   shifts: 'shifts',
   clockEvents: 'clock_events',
   leaveRequests: 'leave_requests',
-  otRequests: 'ot_requests',
+  if (['clockEvents', 'leaveRequests', 'otRequests': 'ot_requests',
   sickDays: 'sick_days',
   medCerts: 'med_certs',
   customHours: 'custom_hours',
@@ -836,7 +836,7 @@ function mapFromSupabase(key, rows) {
     }));
   }
 
-  if (['clockEvents', 'leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
+  if (['clockEvents', 'leaveRequests', 'if (['clockEvents', ', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
     return rows.map(r => ({
       ...r,
       empId: r.emp_id,
@@ -908,12 +908,22 @@ function mapToSupabase(key, arrOrObj) {
       delete x.desc;
     }
 
-    if (['clockEvents', 'leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
-      x.emp_id = x.empId;
-      if (x.ts && !x.timestamp) x.timestamp = x.ts;
-      delete x.empId;
-      delete x.ts;
-    }
+if (['clockEvents', 'leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
+  x.emp_id = x.empId;
+  if (x.ts && !x.timestamp) x.timestamp = x.ts;
+  delete x.empId;
+  delete x.ts;
+}
+
+if (key === 'otRequests') {
+  x.requested_by = x.requestedBy;
+  x.staff_read = x.staffRead;
+  x.avail_confirmed = x.availConfirmed;
+
+  delete x.requestedBy;
+  delete x.staffRead;
+  delete x.availConfirmed;
+}
 
     return x;
   });
@@ -3298,7 +3308,7 @@ function buildTSRows(dayDate){
   const ce=DB.get('clockEvents')||[];
   const lr=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');
   const sd=DB.get('sickDays')||[];
-  const otReqs=(DB.get('otRequests')||[]).filter(o=>o.approved===true);
+  const otReqs=(DB.get('if (['clockEvents', 'leaveRequests', 'otRequests'')||[]).filter(o=>o.approved===true);
   const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8,gracePeriod:5};
   const ds=dayDate;
   const dayShifts=shifts.filter(s=>s.date===ds&&!s.isOT);
@@ -3692,7 +3702,7 @@ function exportCSV(){
   const shifts = DB.get('shifts') || [];
   const lr = DB.get('leaveRequests') || [];
   const sick = DB.get('sickDays') || [];
-  const otReqs = DB.get('otRequests') || [];
+  const otReqs = DB.get('if (['clockEvents', 'leaveRequests', 'otRequests'') || [];
 
   const cq = v => '"' + String(v ?? '').replace(/"/g,'""') + '"';
 

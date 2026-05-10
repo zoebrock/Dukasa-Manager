@@ -910,7 +910,11 @@ function mapToSupabase(key, arrOrObj) {
 
 if (['clockEvents', 'leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
   x.emp_id = x.empId;
-  if (x.ts && !x.timestamp) x.timestamp = x.ts;
+
+  if (x.ts && !x.timestamp) {
+    x.timestamp = x.ts;
+  }
+
   delete x.empId;
   delete x.ts;
 }
@@ -925,7 +929,7 @@ if (key === 'otRequests') {
   delete x.availConfirmed;
 }
 
-    return x;
+return x;
   });
 }
   

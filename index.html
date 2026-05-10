@@ -3708,11 +3708,11 @@ function exportCSV(){
   const ws = FD(wkS);
   const we = FD(wkE);
 
-  const staffAll = DB.get('staff') || [];
-  const shifts = DB.get('shifts') || [];
-  const lr = DB.get('leaveRequests') || [];
-  const sick = DB.get('sickDays') || [];
-  const otReqs = DB.get('if (['clockEvents', 'leaveRequests', 'otRequests'') || [];
+const staffAll = DB.get('staff') || [];
+const shifts = DB.get('shifts') || [];
+const lr = DB.get('leaveRequests') || [];
+const sick = DB.get('sickDays') || [];
+const otReqs = DB.get('otRequests') || [];
 
   const cq = v => '"' + String(v ?? '').replace(/"/g,'""') + '"';
 

@@ -1598,67 +1598,100 @@ function openLeaveFromShift(empId, date) {
 }
 
 function saveLeaveFromShift(empId) {
-  const type=document.getElementById('lfs-type')?.value;
-  const from=document.getElementById('lfs-from')?.value;
-  const to=document.getElementById('lfs-to')?.value;
-  const notes=(document.getElementById('lfs-notes')?.value||'').trim();
-  if(!from||!to||from>to){alert('Please enter valid dates.');return;}
-  const reqs=DB.get('leaveRequests')||[];
-  const newLeave={
-    id:'lr'+Date.now(),empId,type,from,to,notes,
-    status:'approved',
-    syncedToRoster:true,syncedToLeaveTracker:true,
-    submitted:new Date().toISOString(),
-    processedAt:new Date().toISOString()
+  const type = document.getElementById('lfs-type')?.value;
+  const from = document.getElementById('lfs-from')?.value;
+  const to = document.getElementById('lfs-to')?.value;
+  const notes = (document.getElementById('lfs-notes')?.value || '').trim();
+
+  if (!from || !to || from > to) {
+    alert('Please enter valid dates.');
+    return;
+  }
+
+  const reqs = DB.get('leaveRequests') || [];
+  const newLeave = {
+    id: 'lr' + Date.now(),
+    empId,
+    type,
+    from,
+    to,
+    notes,
+    status: 'approved',
+    syncedToRoster: true,
+    syncedToLeaveTracker: true,
+    submitted: new Date().toISOString(),
+    processedAt: new Date().toISOString()
   };
+
   reqs.push(newLeave);
-  DB.set('leaveRequests',reqs);
+  DB.set('leaveRequests', reqs);
+
   document.getElementById('m-leave-from-shift')?.remove();
-  renderRoster();renderDashboard();
-  // Notify staff member
-notify('leave_decision', {
-  sendToStaff: true,
-  ...staffPayload(empId),
-  decision: 'approved',
-  approved: true,
-  type,
-  from,
-  to,
-  notes,
-  denialReason: ''
-});
-  // Also notify manager (in case they're logging this for someone else)
-  const el=document.getElementById('pub-status');
-  if(el){el.style.display='block';el.textContent='Leave recorded and staff member notified.';setTimeout(()=>el.style.display='none',4000);}
+  renderRoster();
+  renderDashboard();
+
+  notify('leave_decision', {
+    sendToStaff: true,
+    ...staffPayload(empId),
+    decision: 'approved',
+    approved: true,
+    type,
+    from,
+    to,
+    notes,
+    denialReason: ''
+  });
+
+  const el = document.getElementById('pub-status');
+  if (el) {
+    el.style.display = 'block';
+    el.textContent = 'Leave recorded and staff member notified.';
+    setTimeout(() => el.style.display = 'none', 4000);
+  }
 }
 
 function removeLeaveFromShift(leaveId) {
-  if(!confirm('Remove this leave record? The shift will revert to rostered. The staff member will be notified.')) return;
-  let reqs=DB.get('leaveRequests')||[];
-  const lr=reqs.find(l=>l.id===leaveId);
-  if(!lr) return;
-  reqs=reqs.filter(l=>l.id!==leaveId);
-  DB.set('leaveRequests',reqs);
-  renderRoster();renderDashboard();
-  // Notify staff
-  const emp=(DB.get('staff')||[]).find(s=>s.id===lr.empId);
-  const shift=(DB.get('shifts')||[]).find(s=>s.empId===lr.empId&&s.date>=lr.from&&s.date<=lr.to&&s.published);
-  if(emp&&shift){
-notify('shift_updated', {
-  sendToStaff: true,
-  ...staffPayload(lr.empId),
-  date: lr.from,
-  start: shift.start,
-  end: shift.end,
-  breakMin: shift.breakMin,
-  isNew: false,
-  oldShift: 'Leave recorded',
-  newShift: `${shift.start}–${shift.end}`,
-  notes: 'Your leave record has been removed. You are rostered on as originally scheduled.'
-});
-}
-  const el=document.getElementById('pub-status');
-  if(el){el.style.display='block';el.textContent='Leave removed — staff member notified.';setTimeout(()=>el.style.display='none',4000);}
+  if (!confirm('Remove this leave record? The shift will revert to rostered. The staff member will be notified.')) return;
+
+  let reqs = DB.get('leaveRequests') || [];
+  const lr = reqs.find(l => l.id === leaveId);
+  if (!lr) return;
+
+  reqs = reqs.filter(l => l.id !== leaveId);
+  DB.set('leaveRequests', reqs);
+
+  renderRoster();
+  renderDashboard();
+
+  const emp = (DB.get('staff') || []).find(s => s.id === lr.empId);
+  const shift = (DB.get('shifts') || []).find(s =>
+    s.empId === lr.empId &&
+    s.date >= lr.from &&
+    s.date <= lr.to &&
+    s.published
+  );
+
+  if (emp && shift) {
+    notify('shift_updated', {
+      sendToStaff: true,
+      ...staffPayload(lr.empId),
+      date: lr.from,
+      start: shift.start,
+      end: shift.end,
+      breakMin: shift.breakMin,
+      isNew: false,
+      oldShift: 'Leave recorded',
+      newShift: `${shift.start}–${shift.end}`,
+      notes: 'Your leave record has been removed. You are rostered on as originally scheduled.'
+    });
+  }
+
+  const el = document.getElementById('pub-status');
+  if (el) {
+    el.style.display = 'block';
+    el.textContent = 'Leave removed — staff member notified.';
+    setTimeout(() => el.style.display = 'none', 4000);
+  }
 }
 
 // ── SICK DAY POPUP (from roster chip) ──────────────────────────

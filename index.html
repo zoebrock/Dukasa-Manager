@@ -2496,7 +2496,7 @@ function approveOT(id){
     newEnd=o.end>origEnd?o.end:origEnd;
     const annotations=s.otAnnotations||[];
     annotations.push({otId:id,start:o.start,end:o.end,reason:o.reason||''});
-    shifts[shiftIdx] = {
+  shifts[shiftIdx] = {
   ...s,
   start: newStart,
   end: newEnd,

@@ -2031,19 +2031,55 @@ async function deleteSupabaseRow(k, id) {
 }
   
 async function deleteShift() {
-  if (!viewingShiftId) return;
+  console.log('[DELETE SHIFT] viewingShiftId:', viewingShiftId);
+
+  if (!viewingShiftId) {
+    alert('No shift selected to delete.');
+    return;
+  }
 
   const shiftIdToDelete = viewingShiftId;
+  const table = TABLE_MAP['shifts'];
 
-  await deleteSupabaseRow('shifts', shiftIdToDelete);
+  console.log('[DELETE SHIFT] table:', table);
+  console.log('[DELETE SHIFT] deleting id:', shiftIdToDelete);
 
-  const shifts = (DB.get('shifts') || []).filter(s => s.id !== shiftIdToDelete);
-  CACHE['rx3_shifts'] = shifts;
+  try {
+    _setSyncIndicator('saving');
 
-  viewingShiftId = null;
-  CM('m-shift-detail');
-  renderRoster();
-  renderDashboard();
+    const { data, error } = await supabaseClient
+      .from(table)
+      .delete()
+      .eq('id', shiftIdToDelete)
+      .select();
+
+    if (error) {
+      console.error('[DELETE SHIFT] Supabase error:', error);
+      alert('Could not delete shift: ' + error.message);
+      _setSyncIndicator('error');
+      return;
+    }
+
+    console.log('[DELETE SHIFT] deleted rows:', data);
+
+    const shifts = (DB.get('shifts') || []).filter(
+      s => String(s.id) !== String(shiftIdToDelete)
+    );
+
+    CACHE['rx3_shifts'] = shifts;
+
+    viewingShiftId = null;
+    CM('m-shift-detail');
+    renderRoster();
+    renderDashboard();
+
+    _setSyncIndicator('saved');
+
+  } catch (err) {
+    console.error('[DELETE SHIFT] Unexpected error:', err);
+    alert('Unexpected delete error: ' + err.message);
+    _setSyncIndicator('error');
+  }
 }
   
 // PUBLISH

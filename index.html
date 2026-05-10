@@ -235,7 +235,7 @@ let calMonth = new Date();
     <div class="login-sub">Manager Portal — Dispensary Workforce</div>
     <div class="fr"><label>Username</label><input type="text" id="lu" value="manager" placeholder="manager"></div>
     <div class="fr"><label>Password</label><input type="password" id="lp" value="admin123" placeholder="••••••••"></div>
-    <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:4px" onclick="doLogin()">Sign in</button>
+    <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:4px" onclick="window.doLogin()">Sign in</button>
     <p style="font-size:10px;color:var(--t3);margin-top:10px">manager / admin123</p>
     <div id="lerr" class="alert ad" style="display:none;margin-top:10px"></div>
   </div>
@@ -4314,7 +4314,10 @@ function renderAnnouncements(filter, tabEl) {
         </div>
         <div style="display:flex;gap:5px;flex-shrink:0">
           <button class="btn btn-sm" onclick="openAnnModal('${ann.id}')">Edit</button>
-          ${isPast ? `<span class="badge ba" style="font-size:9px;align-self:center">Archived</span>` : `<span class="badge bg" style="font-size:9px;align-self:center">Active</span>`}
+          ${isPast 
+          ? '<span class="badge ba" style="font-size:9px;align-self:center">Archived</span>' 
+          : '<span class="badge bg" style="font-size:9px;align-self:center">Active</span>'
+}
         </div>
       </div>
     </div>`;

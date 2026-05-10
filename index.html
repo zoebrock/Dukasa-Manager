@@ -836,19 +836,19 @@ function mapFromSupabase(key, rows) {
     }));
   }
 
-  if (['clockEvents', 'leaveRequests', 'if (['clockEvents', ', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
-    return rows.map(r => ({
-      ...r,
-      empId: r.emp_id,
-      ts: r.timestamp || r.ts
-    }));
-  }
+if (['clockEvents', 'leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
+  return rows.map(r => ({
+    ...r,
+    empId: r.emp_id,
+    ts: r.timestamp || r.ts
+  }));
+}
 
-  if (key === 'settings') {
-    return rows[0]?.value || {};
-  }
+if (key === 'settings') {
+  return rows[0]?.value || {};
+}
 
-  return rows;
+return rows;
 }
 
 function mapToSupabase(key, arrOrObj) {

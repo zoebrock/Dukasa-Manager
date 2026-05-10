@@ -1542,11 +1542,18 @@ function deleteSickDay(empId, date) {
   const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
   const shift=(DB.get('shifts')||[]).find(s=>s.empId===empId&&s.date===date&&s.published);
   if(emp&&shift){
-    _gasPost({action:'sendEmail',fn:'sendShiftUpdateEmail',payload:{
-      empId,date,start:shift.start,end:shift.end,breakMin:shift.breakMin,
-      isNew:false,note:'Your sick day has been removed. You are rostered on as originally scheduled.'
-    }}).then(r=>console.log('Sick removal email sent:',r)).catch(err=>console.error('Sick removal email failed:',err));
-  }
+notify('shift_updated', {
+  sendToStaff: true,
+  ...staffPayload(empId),
+  date,
+  start: shift.start,
+  end: shift.end,
+  breakMin: shift.breakMin,
+  isNew: false,
+  oldShift: 'Sick day',
+  newShift: `${shift.start}–${shift.end}`,
+  notes: 'Your sick day has been removed. You are rostered on as originally scheduled.'
+});
   const el=document.getElementById('pub-status');
   if(el){el.style.display='block';el.textContent='Sick day removed — staff member notified.';setTimeout(()=>el.style.display='none',4000);}
 }
@@ -1608,13 +1615,18 @@ function saveLeaveFromShift(empId) {
   document.getElementById('m-leave-from-shift')?.remove();
   renderRoster();renderDashboard();
   // Notify staff member
-  _gasPost({action:'sendEmail',fn:'sendLeaveDecisionEmail',payload:{
-    empId,decision:'approved',type,from,to,notes,denialReason:''
-  }}).then(r=>console.log('Leave from shift email:',r)).catch(err=>console.error('Leave from shift email failed:',err));
+notify('leave_decision', {
+  sendToStaff: true,
+  ...staffPayload(empId),
+  decision: 'approved',
+  approved: true,
+  type,
+  from,
+  to,
+  notes,
+  denialReason: ''
+});
   // Also notify manager (in case they're logging this for someone else)
-  _gasPost({action:'sendEmail',fn:'sendLeaveAddedEmail',payload:{
-    empId,type,from,to,status:'approved',notes
-  }}).catch(()=>{});
   const el=document.getElementById('pub-status');
   if(el){el.style.display='block';el.textContent='Leave recorded and staff member notified.';setTimeout(()=>el.style.display='none',4000);}
 }
@@ -1631,11 +1643,18 @@ function removeLeaveFromShift(leaveId) {
   const emp=(DB.get('staff')||[]).find(s=>s.id===lr.empId);
   const shift=(DB.get('shifts')||[]).find(s=>s.empId===lr.empId&&s.date>=lr.from&&s.date<=lr.to&&s.published);
   if(emp&&shift){
-    _gasPost({action:'sendEmail',fn:'sendShiftUpdateEmail',payload:{
-      empId:lr.empId,date:lr.from,start:shift.start,end:shift.end,breakMin:shift.breakMin,
-      isNew:false,note:'Your leave record has been removed. You are rostered on as originally scheduled.'
-    }}).catch(()=>{});
-  }
+notify('shift_updated', {
+  sendToStaff: true,
+  ...staffPayload(lr.empId),
+  date: lr.from,
+  start: shift.start,
+  end: shift.end,
+  breakMin: shift.breakMin,
+  isNew: false,
+  oldShift: 'Leave recorded',
+  newShift: `${shift.start}–${shift.end}`,
+  notes: 'Your leave record has been removed. You are rostered on as originally scheduled.'
+});
   const el=document.getElementById('pub-status');
   if(el){el.style.display='block';el.textContent='Leave removed — staff member notified.';setTimeout(()=>el.style.display='none',4000);}
 }
@@ -1801,26 +1820,19 @@ function saveShift(){
   if(emp && isPublished && shouldEmail){
     el.textContent=(shouldAutoPublish?'Shift added — notifying ':'Shift updated — notifying ')+emp.first+'...';
     setTimeout(()=>el.style.display='none',6000);
-    _gasPost({
-  action: 'sendEmail',
-  fn: 'sendShiftUpdateEmail',
-  payload: {
-    sendToStaff: true,
-    empId: ns.empId,
-    empFirst: emp?.first || '',
-    empLast: emp?.last || '',
-    empEmail: emp?.email || '',
-    date: ns.date,
-    start: ns.start,
-    end: ns.end,
-    breakMin: ns.breakMin,
-    isNew: isNewShift || shouldAutoPublish,
-    oldShift: wasPublished ? 'Previous rostered shift' : '',
-    newShift: `${ns.start}–${ns.end}`,
-    notes: ns.notes || ''
-  }
-})
-      .then(r=>console.log('Shift email:',r)).catch(err=>console.error('Shift email failed:',err));
+notify('shift_updated', {
+  sendToStaff: true,
+  ...staffPayload(ns.empId),
+  date: ns.date,
+  start: ns.start,
+  end: ns.end,
+  breakMin: ns.breakMin,
+  isNew: isNewShift || shouldAutoPublish,
+  oldShift: wasPublished ? 'Previous rostered shift' : '',
+  newShift: `${ns.start}–${ns.end}`,
+  notes: ns.notes || ''
+}).then(r=>console.log('Shift email:',r))
+  .catch(err=>console.error('Shift email failed:',err));
   } else if(emp && isPublished) {
     el.textContent='Shift saved.';
     setTimeout(()=>el.style.display='none',3000);
@@ -2005,16 +2017,24 @@ function publishRoster(){
   // Pass shiftsOverride so server uses the just-published shifts without waiting
   // for PropertiesService to reflect the DB.set write (which can lag by seconds)
   const payload=JSON.stringify({weekStart:ws,weekEnd:wed,shiftsOverride:allShifts});
-  _gasPost({action:'sendEmail',fn:'sendRosterEmails',payload:JSON.parse(payload)})
-    .then(function(r){
-      el.textContent='Roster published — '+(r.sent||0)+' email(s) sent'+(r.skipped>0?' · '+r.skipped+' skipped':'')+'.';
-      setTimeout(()=>el.style.display='none',7000);
-    })
-    .catch(function(err){
-      el.textContent='Roster published. Email error: '+err.message;
-      setTimeout(()=>el.style.display='none',10000);
-    });
-}
+const shifts = DB.get('shifts') || [];
+const staff = DB.get('staff') || [];
+
+const empIds = [...new Set(
+  shifts
+    .filter(s => s.published && s.date >= currentWeekStart && s.date <= addDays(currentWeekStart, 6))
+    .map(s => s.empId)
+)];
+
+empIds.forEach(empId => {
+  notify('roster_published', {
+    sendToStaff: true,
+    ...staffPayload(empId),
+    weekStart: currentWeekStart,
+    weekEnd: addDays(currentWeekStart, 6),
+    weekLabel: `${currentWeekStart} to ${addDays(currentWeekStart, 6)}`
+  });
+});
 
 // QUICK SICK
 function openQuickSickFromDetail(){
@@ -2322,10 +2342,16 @@ function approveOT(id){
     DB.set('shifts',shifts);
   }
   renderOT();renderRoster();renderDashboard();
-  _gasPost({action:'sendEmail',fn:'sendOTDecisionEmail',payload:{empId:o.empId,decision:'approved',date:o.date,start:o.start,end:o.end,reason:o.reason||'',shiftStart:newStart,shiftEnd:newEnd}})
-    .then(r=>console.log('OT approval email:',r)).catch(err=>console.error('OT approval email failed:',err));
-  notifyStaffMember(o.empId,o.date,o.date,shifts);
-}
+notify('ot_decision', {
+  sendToStaff: true,
+  ...staffPayload(ot.empId),
+  decision,
+  approved: decision === 'approved',
+  date: ot.date,
+  start: ot.start,
+  end: ot.end,
+  notes: ot.notes || ot.reason || ''
+});
 function denyOT(id){
   const reqs=DB.get('otRequests')||[];const idx=reqs.findIndex(x=>x.id===id);if(idx<0)return;
   const wasApproved=reqs[idx].approved===true;
@@ -2334,9 +2360,16 @@ function denyOT(id){
   // If it was previously approved, reverse the shift extension
   if(wasApproved) reverseOTFromShift(id,o.empId,o.date);
   renderOT();renderRoster();renderDashboard();
-  _gasPost({action:'sendEmail',fn:'sendOTDecisionEmail',payload:{empId:o.empId,decision:'denied',date:o.date,start:o.start,end:o.end,reason:o.reason||''}})
-    .then(r=>console.log('OT denial email sent')).catch(err=>console.error('OT denial email failed:',err));
-}
+notify('ot_decision', {
+  sendToStaff: true,
+  ...staffPayload(o.empId),
+  decision: 'denied',
+  approved: false,
+  date: o.date,
+  start: o.start,
+  end: o.end,
+  notes: o.reason || ''
+});
 
 
 // OT detail modal — opened by clicking OT chip on roster
@@ -2982,12 +3015,19 @@ function processLeave(decision, denialReason){
     renderRoster();
   },150);
   const lr=reqs[idx];
-  _gasPost({action:'sendEmail',fn:'sendLeaveDecisionEmail',payload:{
-    empId:lr.empId,decision,type:lr.type,from:lr.from,to:lr.to,
-    notes:lr.notes||'',denialReason:denialReason||''
-  }}).then(r=>console.log('Leave email:',r)).catch(err=>console.error('Leave email failed:',err));
+notify('leave_decision', {
+  sendToStaff: true,
+  ...staffPayload(lr.empId),
+  decision,
+  approved: decision === 'approved',
+  type: lr.type,
+  from: lr.from,
+  to: lr.to,
+  notes: lr.notes || '',
+  denialReason: denialReason || ''
+});
 }
-
+  
 // CALENDAR
 let calYear=new Date().getFullYear(),calMo=new Date().getMonth();
 function calNav(dir){calMo+=dir;if(calMo>11){calMo=0;calYear++;}if(calMo<0){calMo=11;calYear--;}renderCalendar();}
@@ -3939,6 +3979,34 @@ async function _gasPost(body) {
   }
 }
 
+  function staffById(empId){
+  return (DB.get('staff') || []).find(s => s.id === empId) || {};
+}
+
+function staffPayload(empId){
+  const emp = staffById(empId);
+  return {
+    empId,
+    empEmail: emp.email || '',
+    empFirst: emp.first || '',
+    empLast: emp.last || '',
+    empName: `${emp.first || ''} ${emp.last || ''}`.trim()
+  };
+}
+
+function notify(type, payload = {}){
+  return _gasPost({
+    action: 'sendNotification',
+    type,
+    payload
+  }).then(r => {
+    console.log('Notification sent:', type, r);
+    return r;
+  }).catch(err => {
+    console.error('Notification failed:', type, err);
+  });
+}
+
 // INIT
 updateTopbar();
 document.body.insertAdjacentHTML('beforeend',
@@ -4128,17 +4196,30 @@ function saveAnnouncement() {
       .map(s => s.id);
   }
   if (empIdsToNotify.length > 0) {
-    _gasPost({action:'sendEmail', fn:'sendAnnouncementEmail', payload:{
-      empIds: empIdsToNotify, title, desc, date, time, location, roles, staffIds
-    }}).then(r => {
-      const el = document.getElementById('pub-status');
-      if (el) {
-        const result = typeof r === 'object' ? r : {};
-        el.style.display = 'block';
-        el.textContent = 'Announcement published' + (result.sent > 0 ? ' - ' + result.sent + ' email(s) sent.' : '.');
-        setTimeout(() => el.style.display = 'none', 5000);
-      }
-    }).catch(err => console.error('Announcement email failed:', err));
+const staff = DB.get('staff') || [];
+const recipients = staff.filter(emp => empIdsToNotify.includes(emp.id));
+
+Promise.all(
+  recipients.map(emp =>
+    notify('announcement', {
+      sendToStaff: true,
+      ...staffPayload(emp.id),
+      title,
+      message: desc || '',
+      date,
+      time,
+      location
+    })
+  )
+).then(results => {
+  const el = document.getElementById('pub-status');
+  if (el) {
+    const sent = results.filter(Boolean).length;
+    el.style.display = 'block';
+    el.textContent = 'Announcement published' + (sent > 0 ? ' - ' + sent + ' email(s) sent.' : '.');
+    setTimeout(() => el.style.display = 'none', 5000);
+  }
+}).catch(err => console.error('Announcement email failed:', err));
   }
 }
 

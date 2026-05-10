@@ -1554,6 +1554,7 @@ notify('shift_updated', {
   newShift: `${shift.start}–${shift.end}`,
   notes: 'Your sick day has been removed. You are rostered on as originally scheduled.'
 });
+}
   const el=document.getElementById('pub-status');
   if(el){el.style.display='block';el.textContent='Sick day removed — staff member notified.';setTimeout(()=>el.style.display='none',4000);}
 }
@@ -1655,6 +1656,7 @@ notify('shift_updated', {
   newShift: `${shift.start}–${shift.end}`,
   notes: 'Your leave record has been removed. You are rostered on as originally scheduled.'
 });
+}
   const el=document.getElementById('pub-status');
   if(el){el.style.display='block';el.textContent='Leave removed — staff member notified.';setTimeout(()=>el.style.display='none',4000);}
 }

@@ -2446,38 +2446,41 @@ function saveOT(){
   CM('m-ot');
   renderOT();
 
-  if (!availConfirmed) {
-    const staffInfo = staffPayload(no.empId);
+if (!availConfirmed) {
+  const staffInfo = staffPayload(no.empId);
 
-    _gasPost({
-      action: 'sendEmail',
-      fn: 'sendOTAvailabilityEmail',
-      payload: {
-        otId: no.id,
-        ...staffInfo,
-        date: no.date,
-        start: no.start,
-        end: no.end,
-        reason: no.reason || '',
-        task: no.task || '',
-        requestedBy: 'manager',
-        source: 'Manager Portal',
-        sendToStaff: true
+  _gasPost({
+    action: 'sendEmail',
+    fn: 'sendOTAvailabilityEmail',
+    payload: {
+      otId: no.id,
+      empId: no.empId,
+      empEmail: staffInfo.empEmail || staffInfo.email || '',
+      empFirst: staffInfo.empFirst || staffInfo.first || '',
+      empName: staffInfo.empName || staffInfo.name || '',
+      date: no.date,
+      start: no.start,
+      end: no.end,
+      reason: no.reason || '',
+      task: no.task || '',
+      requestedBy: 'manager',
+      source: 'Manager Portal',
+      sendToStaff: true
+    }
+  })
+    .then(r => {
+      console.log('OT availability email response:', r);
+
+      if (!r?.ok && !r?.result?.ok) {
+        alert('OT request saved, but email may not have sent: ' + (r?.error || r?.result?.error || 'unknown error'));
       }
     })
-      .then(r => {
-        console.log('OT availability email response:', r);
-
-        if (!r?.ok && !r?.result?.ok) {
-          alert('OT request saved, but email may not have sent: ' + (r?.error || r?.result?.error || 'unknown error'));
-        }
-      })
-      .catch(err => {
-        console.error('OT availability email failed:', err);
-        alert('OT request saved, but the email failed: ' + err.message);
-      });
-  }
+    .catch(err => {
+      console.error('OT availability email failed:', err);
+      alert('OT request saved, but the email failed: ' + err.message);
+    });
 }
+  
 function approveOT(id){
   const reqs=DB.get('otRequests')||[];const idx=reqs.findIndex(x=>x.id===id);if(idx<0)return;
   reqs[idx].approved=true;DB.set('otRequests',reqs);

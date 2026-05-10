@@ -2391,7 +2391,9 @@ function renderOT(filter){
 function filterOT(f,el){document.querySelectorAll('#pg-ot .btn').forEach(b=>b.classList.remove('active-filter'));if(el)el.classList.add('active-filter');renderOT(f);}
 function openAddOTModal(id, prefillEmpId, prefillDate){
   editingOTId=id;
-  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const staff = [...(DB.get('staff') || [])].sort((a,b) =>
+  a.first.localeCompare(b.first) || a.last.localeCompare(b.last)
+);
   document.getElementById('ot-emp').innerHTML=staff.map(s=>`<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
   if(id){
     const o=(DB.get('otRequests')||[]).find(x=>x.id===id);if(!o)return;

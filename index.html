@@ -2084,6 +2084,7 @@ empIds.forEach(empId => {
     weekLabel: `${currentWeekStart} to ${addDays(currentWeekStart, 6)}`
   });
 });
+}
 
 // QUICK SICK
 function openQuickSickFromDetail(){
@@ -2393,14 +2394,15 @@ function approveOT(id){
   renderOT();renderRoster();renderDashboard();
 notify('ot_decision', {
   sendToStaff: true,
-  ...staffPayload(ot.empId),
-  decision,
-  approved: decision === 'approved',
-  date: ot.date,
-  start: ot.start,
-  end: ot.end,
-  notes: ot.notes || ot.reason || ''
+  ...staffPayload(o.empId),
+  decision: 'approved',
+  approved: true,
+  date: o.date,
+  start: o.start,
+  end: o.end,
+  notes: o.reason || ''
 });
+}
 function denyOT(id){
   const reqs=DB.get('otRequests')||[];const idx=reqs.findIndex(x=>x.id===id);if(idx<0)return;
   const wasApproved=reqs[idx].approved===true;
@@ -2419,7 +2421,7 @@ notify('ot_decision', {
   end: o.end,
   notes: o.reason || ''
 });
-
+}
 
 // OT detail modal — opened by clicking OT chip on roster
 let viewingOTId=null;

@@ -2450,8 +2450,14 @@ function approveOT(id){
     newEnd=o.end>origEnd?o.end:origEnd;
     const annotations=s.otAnnotations||[];
     annotations.push({otId:id,start:o.start,end:o.end,reason:o.reason||''});
-    shifts[shiftIdx]={...s,start:newStart,end:newEnd,
-      otOriginalStart:origStart,otOriginalEnd:origEnd,otAnnotations:annotations};
+    shifts[shiftIdx] = {
+  ...s,
+  start: newStart,
+  end: newEnd,
+  otOriginalStart: origStart,
+  otOriginalEnd: origEnd,
+  otAnnotations: annotations
+};
     DB.set('shifts',shifts);
   } else {
     const emp=(DB.get('staff')||[]).find(s=>s.id===o.empId);

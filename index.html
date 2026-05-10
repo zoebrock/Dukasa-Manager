@@ -924,19 +924,23 @@ const DB = {
     return CACHE['rx3_' + k] ?? null;
   },
 
-async set(k, v) {
-  const key = 'rx3_' + k;
-  CACHE[key] = v;
+  async set(k, v) {
+    const key = 'rx3_' + k;
+    CACHE[key] = v;
 
-  const table = TABLE_MAP[k];
-  if (!table) return;
+    const table = TABLE_MAP[k];
+    if (!table) return;
 
-  const rows = mapToSupabase(k, v);
+    const rows = mapToSupabase(k, v);
 
-  _setSyncIndicator('saving');
+    _setSyncIndicator('saving');
 
-  try {
-    if (k === 'settings') {
+    try {
+      if (!rows.length) {
+        _setSyncIndicator('saved');
+        return;
+      }
+
       const { error } = await supabaseClient
         .from(table)
         .upsert(rows, { onConflict: 'id' });
@@ -944,86 +948,54 @@ async set(k, v) {
       if (error) throw error;
 
       _setSyncIndicator('saved');
-      return;
+
+    } catch (error) {
+      console.error('Supabase save failed:', k, error);
+      _setSyncIndicator('error');
+      alert('Could not save ' + k + ': ' + error.message);
     }
+  },
 
-    const { data: existing, error: fetchError } = await supabaseClient
-      .from(table)
-      .select('id');
+  async preload(keys, callback) {
+    _setSyncIndicator('loading');
 
-    if (fetchError) throw fetchError;
+    for (const k of keys) {
+      const table = TABLE_MAP[k];
 
-    const existingIds = (existing || []).map(r => r.id).filter(Boolean);
-    const newIds = rows.map(r => r.id).filter(Boolean);
-
-    const toDelete = existingIds.filter(id => !newIds.includes(id));
-
-    if (toDelete.length) {
-      const { error: deleteError } = await supabaseClient
-        .from(table)
-        .delete()
-        .in('id', toDelete);
-
-      if (deleteError) throw deleteError;
-    }
-
-    if (rows.length) {
-      const { error: upsertError } = await supabaseClient
-        .from(table)
-        .upsert(rows, { onConflict: 'id' });
-
-      if (upsertError) throw upsertError;
-    }
-
-    _setSyncIndicator('saved');
-
-  } catch (error) {
-    console.error('Supabase save failed:', k, error);
-    _setSyncIndicator('error');
-    alert('Could not save ' + k + ': ' + error.message);
-  }
-},
-
-async preload(keys, callback) {
-  _setSyncIndicator('loading');
-
-  for (const k of keys) {
-    const table = TABLE_MAP[k];
-
-    if (!table) {
-      CACHE['rx3_' + k] = k === 'settings' ? {} : [];
-      continue;
-    }
-
-    try {
-      const { data, error } = await supabaseClient
-        .from(table)
-        .select('*');
-
-      if (error) {
-        console.error('Could not load', k, error.message);
+      if (!table) {
         CACHE['rx3_' + k] = k === 'settings' ? {} : [];
         continue;
       }
 
-      CACHE['rx3_' + k] = mapFromSupabase(k, data || []);
+      try {
+        const { data, error } = await supabaseClient
+          .from(table)
+          .select('*');
 
-      console.log('Loaded', k, CACHE['rx3_' + k]);
+        if (error) {
+          console.error('Could not load', k, error.message);
+          CACHE['rx3_' + k] = k === 'settings' ? {} : [];
+          continue;
+        }
 
-    } catch (err) {
-      console.error('Preload failed for', k, err);
-      CACHE['rx3_' + k] = k === 'settings' ? {} : [];
+        CACHE['rx3_' + k] = mapFromSupabase(k, data || []);
+
+        console.log('Loaded', k, CACHE['rx3_' + k]);
+
+      } catch (err) {
+        console.error('Preload failed for', k, err);
+        CACHE['rx3_' + k] = k === 'settings' ? {} : [];
+      }
     }
+
+    _setSyncIndicator('saved');
+
+    if (callback) callback();
+  },
+
+  async refresh(keys, callback) {
+    await this.preload(keys, callback);
   }
-
-  _setSyncIndicator('saved');
-
-  if (callback) callback();
-},
-
-async refresh(keys, callback) {
-  await this.preload(keys, callback);
-}
 };
 
 function _setSyncIndicator(state) {

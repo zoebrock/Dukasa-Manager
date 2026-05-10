@@ -2416,7 +2416,9 @@ function saveOT(){
   const no={id:editingOTId||'ot'+Date.now(),empId:document.getElementById('ot-emp').value,date:document.getElementById('ot-date').value,start:document.getElementById('ot-start').value,end:document.getElementById('ot-end').value,reason:document.getElementById('ot-reason').value,task:document.getElementById('ot-task').value,availConfirmed,approved:editingOTId?(reqs.find(x=>x.id===editingOTId)||{}).approved:null,requestedBy:'manager',staffConfirmed:editingOTId?(reqs.find(x=>x.id===editingOTId)||{}).staffConfirmed:null};
   if(!no.reason.trim()){alert('Reason is required.');return;}
   if(editingOTId){const idx=reqs.findIndex(x=>x.id===editingOTId);if(idx>=0)reqs[idx]=no;}else reqs.push(no);
-  DB.set('otRequests',reqs);CM('m-ot');renderOT();
+  DDB.set('otRequests', reqs);
+CM('m-ot');
+renderOT();
   // If availability not confirmed and this is a new/re-sent request, email staff to accept/decline
 if (!availConfirmed) {
   const staffInfo = staffPayload(no.empId);

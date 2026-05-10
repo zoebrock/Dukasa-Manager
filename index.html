@@ -923,10 +923,12 @@ if (key === 'otRequests') {
   x.requested_by = x.requestedBy;
   x.staff_read = x.staffRead;
   x.avail_confirmed = x.availConfirmed;
+  x.staff_confirmed = x.staffConfirmed;
 
   delete x.requestedBy;
   delete x.staffRead;
   delete x.availConfirmed;
+  delete x.staffConfirmed;
 }
 
 return x;

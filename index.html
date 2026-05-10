@@ -1817,63 +1817,77 @@ function openAddShiftForED(empId,date){
 }
 
 function saveShift(){
-  const shifts=DB.get('shifts')||[];
-  const empId=document.getElementById('sh-emp').value;
-  const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
-  const shiftDate=document.getElementById('sh-date').value;
+  const shifts = DB.get('shifts') || [];
+  const empId = document.getElementById('sh-emp').value;
+  const emp = (DB.get('staff') || []).find(s => s.id === empId);
+  const shiftDate = document.getElementById('sh-date').value;
 
-  // Was the shift already published before this edit?
-  const wasPublished=editingShiftId?(shifts.find(s=>s.id===editingShiftId)||{}).published:false;
+  const previousShift = editingShiftId ? (shifts.find(s => s.id === editingShiftId) || null) : null;
+  const wasPublished = previousShift ? previousShift.published : false;
 
-  // Is this a new shift added to a week that already has published shifts?
-  const isNewShift=!editingShiftId;
-  const weekAlreadyPublished=isNewShift&&shifts.some(s=>s.date===shiftDate&&s.published);
-  const shouldAutoPublish=isNewShift&&weekAlreadyPublished;
+  const isNewShift = !editingShiftId;
+  const weekAlreadyPublished = isNewShift && shifts.some(s => s.date === shiftDate && s.published);
+  const shouldAutoPublish = isNewShift && weekAlreadyPublished;
+  const isPublished = wasPublished || shouldAutoPublish;
 
-  const isPublished=wasPublished||shouldAutoPublish;
-  const ns={
-    id:editingShiftId||'sh'+Date.now(),
-    empId,date:shiftDate,
-    start:document.getElementById('sh-start').value,
-    end:document.getElementById('sh-end').value,
-    breakMin:parseInt(document.getElementById('sh-break').value)||calcBreakMin(document.getElementById('sh-start').value,document.getElementById('sh-end').value),
-    paidBreakMin:30, // only 30 min of any break is paid
-    role:emp?emp.role:'',
-    notes:document.getElementById('sh-notes').value,
-    published:isPublished,status:isPublished?'published':'draft'
+  const ns = {
+    id: editingShiftId || 'sh' + Date.now(),
+    empId,
+    date: shiftDate,
+    start: document.getElementById('sh-start').value,
+    end: document.getElementById('sh-end').value,
+    breakMin: parseInt(document.getElementById('sh-break').value) || calcBreakMin(document.getElementById('sh-start').value, document.getElementById('sh-end').value),
+    paidBreakMin: 30,
+    role: emp ? emp.role : '',
+    notes: document.getElementById('sh-notes').value,
+    published: isPublished,
+    status: isPublished ? 'published' : 'draft'
   };
-  if(editingShiftId){const idx=shifts.findIndex(s=>s.id===editingShiftId);if(idx>=0)shifts[idx]=ns;}
-  else shifts.push(ns);
-  DB.set('shifts',shifts);
-  CM('m-shift');renderRoster();renderDashboard();editingShiftId=null;
 
-  // Only email if the notify row is visible AND the checkbox is ticked
+  if (editingShiftId) {
+    const idx = shifts.findIndex(s => s.id === editingShiftId);
+    if (idx >= 0) shifts[idx] = ns;
+  } else {
+    shifts.push(ns);
+  }
+
+  DB.set('shifts', shifts);
+  CM('m-shift');
+  renderRoster();
+  renderDashboard();
+  editingShiftId = null;
+
   const notifyRowVisible = document.getElementById('sh-notify-row')?.style.display !== 'none';
   const shouldEmail = notifyRowVisible && document.getElementById('sh-send-email')?.checked === true;
-  const el=document.getElementById('pub-status');
-  el.style.display='block';
-  if(emp && isPublished && shouldEmail){
-    el.textContent=(shouldAutoPublish?'Shift added — notifying ':'Shift updated — notifying ')+emp.first+'...';
-    setTimeout(()=>el.style.display='none',6000);
-notify('shift_updated', {
-  sendToStaff: true,
-  ...staffPayload(ns.empId),
-  date: ns.date,
-  start: ns.start,
-  end: ns.end,
-  breakMin: ns.breakMin,
-  isNew: isNewShift || shouldAutoPublish,
-  oldShift: wasPublished ? 'Previous rostered shift' : '',
-  newShift: `${ns.start}–${ns.end}`,
-  notes: ns.notes || ''
-}).then(r=>console.log('Shift email:',r))
-  .catch(err=>console.error('Shift email failed:',err));
-  } else if(emp && isPublished) {
-    el.textContent='Shift saved.';
-    setTimeout(()=>el.style.display='none',3000);
+  const el = document.getElementById('pub-status');
+
+  if (el) el.style.display = 'block';
+
+  if (emp && isPublished && shouldEmail) {
+    if (el) el.textContent = (shouldAutoPublish ? 'Shift added — notifying ' : 'Shift updated — notifying ') + emp.first + '...';
+
+    notify('shift_updated', {
+      sendToStaff: true,
+      ...staffPayload(ns.empId),
+      date: ns.date,
+      start: ns.start,
+      end: ns.end,
+      breakMin: ns.breakMin,
+      isNew: isNewShift || shouldAutoPublish,
+      oldShift: previousShift ? `${previousShift.start}–${previousShift.end}` : '',
+      newShift: `${ns.start}–${ns.end}`,
+      notes: ns.notes || ''
+    }).then(r => console.log('Shift email:', r))
+      .catch(err => console.error('Shift email failed:', err));
+
+    setTimeout(() => { if (el) el.style.display = 'none'; }, 6000);
+
+  } else if (emp && isPublished) {
+    if (el) el.textContent = 'Shift saved.';
+    setTimeout(() => { if (el) el.style.display = 'none'; }, 3000);
   }
 }
-
+  
 function notifyStaffMember(empId,weekStart,weekEnd,updatedShifts){
   const shiftDate=new Date(weekStart+'T00:00:00');
   const dow=shiftDate.getDay();

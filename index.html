@@ -3313,16 +3313,16 @@ async function toggleApproved(empId,date,btn){
 }
 
 function buildTSRows(dayDate){
-  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
-  const shifts=DB.get('shifts')||[];
-  const ce=DB.get('clockEvents')||[];
-  const lr=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');
-  const sd=DB.get('sickDays')||[];
-  const otReqs=(DB.get('if (['clockEvents', 'leaveRequests', 'otRequests'')||[]).filter(o=>o.approved===true);
-  const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8,gracePeriod:5};
-  const ds=dayDate;
-  const dayShifts=shifts.filter(s=>s.date===ds&&!s.isOT);
-  const rows=[];
+  const staff = [...(DB.get('staff') || [])].sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
+  const shifts = DB.get('shifts') || [];
+  const ce = DB.get('clockEvents') || [];
+  const lr = (DB.get('leaveRequests') || []).filter(l => l.status === 'approved');
+  const sd = DB.get('sickDays') || [];
+  const otReqs = (DB.get('otRequests') || []).filter(o => o.approved === true);
+  const settings = DB.get('settings') || { dailyOT: true, dailyOTHours: 8, gracePeriod: 5 };
+  const ds = dayDate;
+  const dayShifts = shifts.filter(s => s.date === ds && !s.isOT);
+  const rows = [];
 
   // Get contracted daily hours for a staff member on a given day
 function getContractedDailyHrs(emp,dayStr){

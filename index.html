@@ -4202,65 +4202,71 @@ DB.preload(ALL_KEYS, function(){
   initDefaults();
   loadSettings();
   if(!currentWeekStart) initWeek(new Date());
-  // Auto-purge orphaned shifts + migrate legacy isOT shifts into annotations
-  (function(){
-    const staffIds=new Set((DB.get('staff')||[]).map(s=>s.id));
-    let shifts=DB.get('shifts')||[];
-    let changed=false;
+// Auto-migrate legacy isOT shifts into annotations.
+// IMPORTANT: do not touch clockEvents here.
+// IMPORTANT: do not auto-write sickDays/customHours here.
+(function(){
+  const staffIds = new Set((DB.get('staff') || []).map(s => s.id));
+  let shifts = DB.get('shifts') || [];
+  let changed = false;
 
-    // Step 1: Migrate legacy isOT shifts → annotations on main shift
-    const otShifts=shifts.filter(s=>s.isOT);
-    if(otShifts.length){
-      otShifts.forEach(ots=>{
-        const mainIdx=shifts.findIndex(s=>s.empId===ots.empId&&s.date===ots.date&&!s.isOT&&s.published);
-        if(mainIdx>=0){
-          const main=shifts[mainIdx];
-          const origStart=main.otOriginalStart||main.start;
-          const origEnd=main.otOriginalEnd||main.end;
-          const newStart=ots.start<origStart?ots.start:origStart;
-          const newEnd=ots.end>origEnd?ots.end:origEnd;
-          const anns=main.otAnnotations||[];
-          const otId=ots.otId||ots.id;
-          if(!anns.find(a=>a.otId===otId)){
-            anns.push({otId,start:ots.start,end:ots.end,reason:ots.notes||''});
-          }
-          shifts[mainIdx] = {
-  ...main,
-  start: newStart,
-  end: newEnd,
-  otOriginalStart: origStart,
-  otOriginalEnd: origEnd,
-  otAnnotations: anns
-};
-          changed=true;
+  const otShifts = shifts.filter(s => s.isOT);
+
+  if (otShifts.length) {
+    otShifts.forEach(ots => {
+      const mainIdx = shifts.findIndex(s =>
+        s.empId === ots.empId &&
+        s.date === ots.date &&
+        !s.isOT &&
+        s.published
+      );
+
+      if (mainIdx >= 0) {
+        const main = shifts[mainIdx];
+        const origStart = main.otOriginalStart || main.start;
+        const origEnd = main.otOriginalEnd || main.end;
+        const newStart = ots.start < origStart ? ots.start : origStart;
+        const newEnd = ots.end > origEnd ? ots.end : origEnd;
+        const anns = main.otAnnotations || [];
+        const otId = ots.otId || ots.id;
+
+        if (!anns.find(a => a.otId === otId)) {
+          anns.push({
+            otId,
+            start: ots.start,
+            end: ots.end,
+            reason: ots.notes || ''
+          });
         }
-      });
-      // Remove all legacy isOT shifts
-      shifts=shifts.filter(s=>!s.isOT);
-      changed=true;
-    }
 
-    // Step 2: Purge orphaned shifts (no matching staff)
-    const clean=shifts.filter(s=>staffIds.has(s.empId));
-    if(clean.length!==shifts.length) changed=true;
+        shifts[mainIdx] = {
+          ...main,
+          start: newStart,
+          end: newEnd,
+          otOriginalStart: origStart,
+          otOriginalEnd: origEnd,
+          otAnnotations: anns
+        };
 
-if (changed && clean.length !== shifts.length) {
-  console.log('AUTO WRITE SHIFTS:', {
-    before: shifts.length,
-    after: clean.length
-  });
+        changed = true;
+      }
+    });
 
-  DB.set('shifts', clean);
+    shifts = shifts.filter(s => !s.isOT);
+    changed = true;
+  }
 
-  const sd = DB.get('sickDays') || [];
-  DB.set('sickDays', sd.filter(s => staffIds.has(s.empId)));
+  const clean = shifts.filter(s => staffIds.has(s.empId));
 
-  const ch = DB.get('customHours') || [];
-  DB.set('customHours', ch.filter(c => staffIds.has(c.empId)));
+  if (clean.length !== shifts.length) {
+    changed = true;
+  }
 
-  console.log('Shifts migrated/purged. Remaining:', clean.length);
-}
-  })();
+  if (changed) {
+    DB.set('shifts', clean);
+    console.log('Shifts migrated/purged. Remaining:', clean.length);
+  }
+})();
   // Restore session if previously logged in (survives page reload)
   try{
     if(localStorage.getItem('rx3_mgr_session')==='1'){

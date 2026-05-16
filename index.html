@@ -1116,7 +1116,7 @@ function renderDashboard(){
   if(ob){if(pendingOT.length){ob.textContent=pendingOT.length;ob.style.display='inline-flex';}else ob.style.display='none';}
 
   // MC notifications
-  const pendMC=sd.filter(sk=>{const mc=mcs.find(m=>m.empId===sk.empId&&m.date===sk.date);return mc&&!mc.managerNotified;});
+  const pendMC=sd.filter(sk=>{const mc=mcs.find(m=>m.empId===sk.empId&&m.date===sk.date);return mc&&!mc.manager_notified;});
   const mcNotifs=document.getElementById('mc-notifs');
   if(mcNotifs){
     mcNotifs.innerHTML=pendMC.map(sk=>{
@@ -3992,7 +3992,7 @@ function viewMC(mcId){
   const emp=staff.find(s=>s.id===mc.empId);
   // Mark as reviewed
   const midx=mcs.findIndex(m=>m.id===mcId);
-  if(midx>=0){mcs[midx].managerNotified=true;DB.set('medCerts',mcs);}
+  if(midx>=0){mcs[midx].manager_notified=true;DB.set('medCerts',mcs);}
 
   const fileName=mc.fileName||'certificate';
 

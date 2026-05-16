@@ -2147,16 +2147,33 @@ const empIds = [...new Set(
     .map(s => s.empId)
 )];
 
-empIds.forEach(empId => {
-  notify('roster_published', {
-    sendToStaff: true,
-    ...staffPayload(empId),
-    weekStart: currentWeekStart,
-    weekEnd: addDays(currentWeekStart, 6),
-    weekLabel: `${currentWeekStart} to ${addDays(currentWeekStart, 6)}`
-  });
-});
-}
+// Send roster emails in background — NEVER block publishing
+setTimeout(async () => {
+
+  for (const empId of empIds) {
+
+    try {
+
+      await notify('roster_published', {
+        sendToStaff: true,
+        ...staffPayload(empId),
+        weekStart: currentWeekStart,
+        weekEnd: addDays(currentWeekStart, 6),
+        weekLabel: `${currentWeekStart} to ${addDays(currentWeekStart, 6)}`
+      });
+
+      // tiny stagger prevents GAS/Gmail throttling
+      await new Promise(r => setTimeout(r, 120));
+
+    } catch(err) {
+
+      console.error('Roster email failed for', empId, err);
+
+    }
+
+  }
+
+}, 50);
 
 // QUICK SICK
 function openQuickSickFromDetail(){

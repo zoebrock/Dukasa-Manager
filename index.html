@@ -3272,7 +3272,9 @@ function popTSWeeks(){
 
   const today=new Date();
   const currentMon=new Date(today);
-  currentMon.setDate(today.getDate()-today.getDay()+1);
+
+  // Pay cycle anchor: current fortnight started Monday 18 May 2026
+  currentMon.setDate(today.getDate()-today.getDay()-6);
   currentMon.setHours(0,0,0,0);
 
   for(let f=0;f<8;f++){

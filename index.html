@@ -4117,7 +4117,7 @@ let _mgrLastModified = '0';
 function startManagerSync() {
   setInterval(async () => {
     try {
-      await DB.refresh(ALL_KEYS);
+      await DB.refresh(ALL_KEYS_WITH_CLOCK);
 
       const activePg = document.querySelector('.pg.active');
       if (activePg) {
@@ -4143,7 +4143,7 @@ async function manualSync() {
   const btn = document.getElementById('sync-now-btn');
   if (btn) { btn.textContent = '⟳'; btn.disabled = true; }
   _setSyncIndicator('loading');
-  await new Promise(resolve => DB.refresh(ALL_KEYS, resolve));
+  await new Promise(resolve => DB.refresh(ALL_KEYS_WITH_CLOCK, resolve));
   const activePg = document.querySelector('.pg.active');
   if (activePg) {
     const pid = activePg.id.replace('pg-', '');

@@ -505,10 +505,17 @@ let calMonth = new Date();
         <span>Notify staff member by email</span>
       </label>
     </div>
-    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
-      <button class="btn" onclick="CM('m-shift')">Cancel</button>
-      <button class="btn btn-primary" id="sh-save-btn" onclick="saveShift()">Save shift</button>
-    </div>
+<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+  <button class="btn" onclick="CM('m-shift')">Cancel</button>
+
+  <button class="btn" id="sh-draft-btn" onclick="saveShift('draft')">
+    Save as draft
+  </button>
+
+  <button class="btn btn-primary" id="sh-publish-btn" onclick="saveShift('publish')">
+    Publish shift
+  </button>
+</div>
   </div>
 </div>
 
@@ -1827,19 +1834,18 @@ function openAddShiftForED(empId,date){
   OM('m-shift');
 }
 
-function saveShift(){
+function saveShift(publishMode){
   const shifts = DB.get('shifts') || [];
   const empId = document.getElementById('sh-emp').value;
   const emp = (DB.get('staff') || []).find(s => s.id === empId);
   const shiftDate = document.getElementById('sh-date').value;
 
-  const previousShift = editingShiftId ? (shifts.find(s => s.id === editingShiftId) || null) : null;
-  const wasPublished = previousShift ? previousShift.published : false;
+  const previousShift = editingShiftId
+    ? (shifts.find(s => s.id === editingShiftId) || null)
+    : null;
 
   const isNewShift = !editingShiftId;
-  const weekAlreadyPublished = isNewShift && shifts.some(s => s.date === shiftDate && s.published);
-  const shouldAutoPublish = isNewShift && weekAlreadyPublished;
-  const isPublished = wasPublished || shouldAutoPublish;
+  const shouldPublish = publishMode === 'publish';
 
   const ns = {
     id: editingShiftId || 'sh' + Date.now(),
@@ -1851,8 +1857,8 @@ function saveShift(){
     paidBreakMin: 30,
     role: emp ? emp.role : '',
     notes: document.getElementById('sh-notes').value,
-    published: isPublished,
-    status: isPublished ? 'published' : 'draft'
+    published: shouldPublish,
+    status: shouldPublish ? 'published' : 'draft'
   };
 
   if (editingShiftId) {
@@ -1866,16 +1872,19 @@ function saveShift(){
   CM('m-shift');
   renderRoster();
   renderDashboard();
-  editingShiftId = null;
 
-  const notifyRowVisible = document.getElementById('sh-notify-row')?.style.display !== 'none';
-  const shouldEmail = notifyRowVisible && document.getElementById('sh-send-email')?.checked === true;
+  const shouldEmail =
+    shouldPublish &&
+    document.getElementById('sh-send-email')?.checked === true;
+
   const el = document.getElementById('pub-status');
+  if (el) {
+    el.style.display = 'block';
+    el.textContent = shouldPublish ? 'Shift published.' : 'Shift saved as draft.';
+  }
 
-  if (el) el.style.display = 'block';
-
-  if (emp && isPublished && shouldEmail) {
-    if (el) el.textContent = (shouldAutoPublish ? 'Shift added — notifying ' : 'Shift updated — notifying ') + emp.first + '...';
+  if (emp && shouldEmail) {
+    if (el) el.textContent = 'Shift published — notifying ' + emp.first + '...';
 
     notify('shift_updated', {
       sendToStaff: true,
@@ -1884,19 +1893,19 @@ function saveShift(){
       start: ns.start,
       end: ns.end,
       breakMin: ns.breakMin,
-      isNew: isNewShift || shouldAutoPublish,
+      isNew: isNewShift,
       oldShift: previousShift ? `${previousShift.start}–${previousShift.end}` : '',
       newShift: `${ns.start}–${ns.end}`,
       notes: ns.notes || ''
-    }).then(r => console.log('Shift email:', r))
-      .catch(err => console.error('Shift email failed:', err));
-
-    setTimeout(() => { if (el) el.style.display = 'none'; }, 6000);
-
-  } else if (emp && isPublished) {
-    if (el) el.textContent = 'Shift saved.';
-    setTimeout(() => { if (el) el.style.display = 'none'; }, 3000);
+    }).then(r => console.log('Individual shift email:', r))
+      .catch(err => console.error('Individual shift email failed:', err));
   }
+
+  editingShiftId = null;
+
+  setTimeout(() => {
+    if (el) el.style.display = 'none';
+  }, 5000);
 }
   
 function notifyStaffMember(empId,weekStart,weekEnd,updatedShifts){

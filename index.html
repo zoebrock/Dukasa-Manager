@@ -196,6 +196,9 @@ let quickSickShiftId = null;
 let viewingShiftId = null;
 let currentLeaveFilter = 'pending';
 let calMonth = new Date();
+
+let bulkShiftMode = false;
+let selectedShiftIds = new Set();
   
 // Inject apple-touch-icon dynamically (required for Google Apps Script hosted pages)
 (function(){
@@ -307,9 +310,25 @@ let calMonth = new Date();
             <button class="toggle" id="toggle-avail" onclick="toggleAvail()"></button>
             Show availability
           </label>
-          <button class="btn btn-sm" onclick="openTemplateModal()">📋 Templates</button>
-          <button class="btn btn-sm" onclick="openPublishModal()">📣 Publish</button>
-          <button class="btn btn-primary btn-sm" onclick="openAddShiftModal()">+ Add shift</button>
+<button class="btn btn-sm" onclick="openTemplateModal()">📋 Templates</button>
+
+<button class="btn btn-sm" onclick="openPublishModal()">📣 Publish</button>
+
+<button class="btn btn-sm" onclick="toggleBulkShiftMode()">
+  ✓ Select shifts
+</button>
+
+<button
+  class="btn btn-danger btn-sm"
+  id="bulk-delete-btn"
+  onclick="openBulkDeleteShifts()"
+  style="display:none">
+  Delete selected
+</button>
+
+<button class="btn btn-primary btn-sm" onclick="openAddShiftModal()">
+  + Add shift
+</button>
         </div>
       </div>
       <div class="alert ai" id="pub-status" style="display:none"></div>
@@ -1385,16 +1404,30 @@ function renderRoster(){
       let content='';
 
       // Shift chips — clicking opens the action popup instead of shift detail
-      dayShifts.forEach(s=>{
-        const chipClass=s.published?'chip-shift':'chip-draft';
-        const pubDot=s.published?'':'';
-        const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
-        const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
-        content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="openShiftPopup(event,'${s.id}')">
-          <span class="chip ${chipClass}" style="width:100%;justify-content:center" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">${s.start}–${s.end}</span>
-          ${otBadge}
-        </div>`;
-      });
+dayShifts.forEach(s=>{
+  const chipClass=s.published?'chip-shift':'chip-draft';
+  const pubDot=s.published?'':'';
+  const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
+  const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
+
+  content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="openShiftPopup(event,'${s.id}')">
+
+    <span class="chip ${chipClass}" style="width:100%;justify-content:center;gap:5px" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">
+
+      ${bulkShiftMode ? `
+        <input
+          type="checkbox"
+          ${selectedShiftIds.has(s.id) ? 'checked' : ''}
+          onclick="event.stopPropagation();toggleShiftSelected('${s.id}', this.checked)"
+          style="width:12px;height:12px">
+      ` : ''}
+
+      ${s.start}–${s.end}
+    </span>
+
+    ${otBadge}
+  </div>`;
+});
 
       // Status chips — clickable for sick/leave management
       if(isSick) content+=`<span class="chip chip-sick chip-small" style="cursor:pointer" onclick="openSickPopup(event,'${emp.id}','${ds}')" title="Click to manage sick day">🤒 Sick</span>`;
@@ -1834,7 +1867,7 @@ function openAddShiftForED(empId,date){
   OM('m-shift');
 }
 
-function saveShift(publishMode){
+async function saveShift(publishMode){
   const shifts = DB.get('shifts') || [];
   const empId = document.getElementById('sh-emp').value;
   const emp = (DB.get('staff') || []).find(s => s.id === empId);
@@ -1868,10 +1901,38 @@ function saveShift(publishMode){
     shifts.push(ns);
   }
 
-  DB.set('shifts', shifts);
-  CM('m-shift');
-  renderRoster();
-  renderDashboard();
+_setSyncIndicator('saving');
+
+const dbRow = {
+  id: ns.id,
+  emp_id: ns.empId,
+  date: ns.date,
+  start: ns.start,
+  end: ns.end,
+  break_min: ns.breakMin,
+  paid_break_min: ns.paidBreakMin,
+  role: ns.role,
+  notes: ns.notes,
+  published: ns.published,
+  status: ns.status
+};
+
+const { error } = await supabaseClient
+  .from('shifts')
+  .upsert(dbRow, { onConflict: 'id' });
+
+if (error) {
+  _setSyncIndicator('error');
+  alert('Shift was not saved: ' + error.message);
+  return;
+}
+
+CACHE['rx3_shifts'] = shifts;
+_setSyncIndicator('saved');
+
+CM('m-shift');
+renderRoster();
+renderDashboard();
 
   const shouldEmail =
     shouldPublish &&
@@ -2105,6 +2166,102 @@ async function deleteShift() {
     console.error('[DELETE SHIFT] Unexpected error:', err);
     alert('Unexpected delete error: ' + err.message);
     _setSyncIndicator('error');
+  }
+}
+
+  function toggleBulkShiftMode(){
+  bulkShiftMode = !bulkShiftMode;
+  selectedShiftIds.clear();
+
+  const btn = document.getElementById('bulk-delete-btn');
+  if(btn) btn.style.display = bulkShiftMode ? 'inline-flex' : 'none';
+
+  renderRoster();
+}
+
+function toggleShiftSelected(shiftId, checked){
+  if(checked) selectedShiftIds.add(shiftId);
+  else selectedShiftIds.delete(shiftId);
+
+  const btn = document.getElementById('bulk-delete-btn');
+  if(btn){
+    btn.textContent = selectedShiftIds.size
+      ? `Delete selected (${selectedShiftIds.size})`
+      : 'Delete selected';
+  }
+}
+
+async function openBulkDeleteShifts(){
+  const ids = Array.from(selectedShiftIds);
+
+  if(!ids.length){
+    alert('Please select at least one shift to delete.');
+    return;
+  }
+
+  const notifyStaff = confirm(
+    `Delete ${ids.length} selected shift(s)?\n\nPress OK to delete AND notify affected staff.\nPress Cancel to delete without notifying.`
+  );
+
+  if(!confirm(`Confirm delete ${ids.length} selected shift(s)?`)) return;
+
+  await bulkDeleteShifts(ids, notifyStaff);
+}
+
+async function bulkDeleteShifts(ids, notifyStaff){
+  const allShifts = DB.get('shifts') || [];
+  const deletedShifts = allShifts.filter(s => ids.includes(s.id));
+
+  try {
+    _setSyncIndicator('saving');
+
+    const { error } = await supabaseClient
+      .from(TABLE_MAP['shifts'])
+      .delete()
+      .in('id', ids);
+
+    if(error) throw error;
+
+    const remaining = allShifts.filter(s => !ids.includes(s.id));
+    CACHE['rx3_shifts'] = remaining;
+
+    if(notifyStaff){
+      const byEmp = {};
+
+      deletedShifts.forEach(s => {
+        if(!byEmp[s.empId]) byEmp[s.empId] = [];
+        byEmp[s.empId].push(s);
+      });
+
+      Object.entries(byEmp).forEach(([empId, empShifts]) => {
+        empShifts.forEach(s => {
+          notify('shift_updated', {
+            sendToStaff: true,
+            ...staffPayload(empId),
+            date: s.date,
+            start: s.start,
+            end: s.end,
+            breakMin: s.breakMin,
+            isNew: false,
+            oldShift: `${s.start}–${s.end}`,
+            newShift: 'Cancelled / removed',
+            notes: 'This shift has been removed from your roster.'
+          }).catch(err => console.error('Delete shift email failed:', err));
+        });
+      });
+    }
+
+    selectedShiftIds.clear();
+    bulkShiftMode = false;
+
+    renderRoster();
+    renderDashboard();
+    _setSyncIndicator('saved');
+
+  } catch(err) {
+    console.error('Bulk delete failed:', err);
+    _setSyncIndicator('error');
+    alert('Could not delete selected shifts: ' + err.message);
   }
 }
   

@@ -329,6 +329,10 @@ let selectedShiftIds = new Set();
 <button class="btn btn-primary btn-sm" onclick="openAddShiftModal()">
   + Add shift
 </button>
+
+<button class="btn btn-sm" onclick="openPartialLeaveModal()">
+  + Add leave
+</button>
         </div>
       </div>
       <div class="alert ai" id="pub-status" style="display:none"></div>
@@ -551,6 +555,35 @@ let selectedShiftIds = new Set();
         <button class="btn btn-sm" onclick="editShiftFromDetail()">Edit</button>
         <button class="btn" onclick="CM('m-shift-detail')">Close</button>
       </div>
+    </div>
+  </div>
+</div>
+
+  <div class="modal-overlay" id="m-partial-leave">
+  <div class="modal">
+    <div class="mh"><h2>Add partial leave</h2><button class="xbtn" onclick="CM('m-partial-leave')">×</button></div>
+
+    <div class="fr"><label>Employee</label><select id="pl-emp"></select></div>
+    <div class="fr"><label>Date</label><input type="date" id="pl-date"></div>
+
+    <div class="fg">
+      <div class="fr"><label>Leave start</label><input type="time" id="pl-start" value="13:00"></div>
+      <div class="fr"><label>Leave end</label><input type="time" id="pl-end" value="17:00"></div>
+    </div>
+
+    <div class="fr">
+      <label>Leave type</label>
+      <select id="pl-type">
+        <option value="Sick">Sick leave</option>
+        <option value="Annual Leave">Annual leave</option>
+      </select>
+    </div>
+
+    <div class="fr"><label>Notes</label><textarea id="pl-notes" rows="2"></textarea></div>
+
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="CM('m-partial-leave')">Cancel</button>
+      <button class="btn btn-primary" onclick="savePartialLeave()">Save leave</button>
     </div>
   </div>
 </div>
@@ -1405,7 +1438,10 @@ function renderRoster(){
 
       // Shift chips — clicking opens the action popup instead of shift detail
 dayShifts.forEach(s=>{
-  const chipClass=s.published?'chip-shift':'chip-draft';
+  const chipClass =
+  s.entryType === 'leave' && s.leaveType === 'Sick' ? 'chip-sick' :
+  s.entryType === 'leave' ? 'chip-leave' :
+  s.published ? 'chip-shift' : 'chip-draft';
   const pubDot=s.published?'':'';
   const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
   const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
@@ -1422,7 +1458,7 @@ dayShifts.forEach(s=>{
           style="width:12px;height:12px">
       ` : ''}
 
-      ${s.start}–${s.end}
+      ${s.entryType === 'leave' ? `${s.leaveType}: ` : ''}${s.start}–${s.end}
     </span>
 
     ${otBadge}
@@ -1967,6 +2003,84 @@ renderDashboard();
   setTimeout(() => {
     if (el) el.style.display = 'none';
   }, 5000);
+}
+
+function openPartialLeaveModal(prefillEmpId, prefillDate){
+  const staff = DB.get('staff') || [];
+  const empSel = document.getElementById('pl-emp');
+
+  empSel.innerHTML = staff
+    .map(s => `<option value="${s.id}">${s.first} ${s.last}</option>`)
+    .join('');
+
+  document.getElementById('pl-emp').value = prefillEmpId || '';
+  document.getElementById('pl-date').value = prefillDate || FD(new Date());
+  document.getElementById('pl-start').value = '13:00';
+  document.getElementById('pl-end').value = '17:00';
+  document.getElementById('pl-type').value = 'Sick';
+  document.getElementById('pl-notes').value = '';
+
+  OM('m-partial-leave');
+}
+
+async function savePartialLeave(){
+  const shifts = DB.get('shifts') || [];
+  const empId = document.getElementById('pl-emp').value;
+  const emp = (DB.get('staff') || []).find(s => s.id === empId);
+
+  const ns = {
+    id: 'lvseg' + Date.now(),
+    empId,
+    date: document.getElementById('pl-date').value,
+    start: document.getElementById('pl-start').value,
+    end: document.getElementById('pl-end').value,
+    breakMin: 0,
+    paidBreakMin: 0,
+    role: emp ? emp.role : '',
+    notes: document.getElementById('pl-notes').value,
+    published: true,
+    status: document.getElementById('pl-type').value,
+    entryType: 'leave',
+    leaveType: document.getElementById('pl-type').value,
+    leaveReason: document.getElementById('pl-notes').value
+  };
+
+  const dbRow = {
+    id: ns.id,
+    emp_id: ns.empId,
+    date: ns.date,
+    start: ns.start,
+    end: ns.end,
+    break_min: 0,
+    paid_break_min: 0,
+    role: ns.role,
+    notes: ns.notes,
+    published: true,
+    status: ns.status,
+    entry_type: 'leave',
+    leave_type: ns.leaveType,
+    leave_reason: ns.leaveReason
+  };
+
+  _setSyncIndicator('saving');
+
+  const { error } = await supabaseClient
+    .from(TABLE_MAP['shifts'])
+    .upsert(dbRow, { onConflict: 'id' });
+
+  if(error){
+    _setSyncIndicator('error');
+    alert('Leave segment was not saved: ' + error.message);
+    return;
+  }
+
+  shifts.push(ns);
+  CACHE['rx3_shifts'] = shifts;
+
+  CM('m-partial-leave');
+  renderRoster();
+  renderDashboard();
+  _setSyncIndicator('saved');
 }
   
 function notifyStaffMember(empId,weekStart,weekEnd,updatedShifts){
@@ -3593,10 +3707,55 @@ function getContractedDailyHrs(emp,dayStr){
     const ea=staff.find(s=>s.id===a.empId);const eb=staff.find(s=>s.id===b.empId);
     return(ea?ea.first:'').localeCompare(eb?eb.first:'');
   });
-  sortedShifts.forEach(s=>{
-    const emp=staff.find(e=>e.id===s.empId);
-    if(!emp) return;
-    const contractedHrs=getContractedDailyHrs(emp,ds);
+sortedShifts.forEach(s=>{
+  const emp=staff.find(e=>e.id===s.empId);
+  if(!emp) return;
+
+  // ── PARTIAL LEAVE SUPPORT ─────────────────────
+  if (s.entryType === 'leave' || s.entry_type === 'leave') {
+    const leaveType = s.leaveType || s.leave_type || s.status || 'Leave';
+    const leaveHrs = ROUND30(MD(s.start, s.end) / 60);
+
+    const custom = getOrCreateCustom(
+      s.empId,
+      ds,
+      leaveHrs,
+      s.start,
+      s.end,
+      leaveHrs
+    );
+
+    rows.push({
+      s,
+      emp,
+      sHrs: leaveHrs,
+      actualHrs: leaveHrs,
+      otHrs: 0,
+      status: leaveType,
+      rowCls: leaveType === 'Sick' ? 'tr-sick' : 'tr-leave',
+      ci: null,
+      co: null,
+      bs: null,
+      be: null,
+      bActMin: 0,
+      flags: [{
+        type: leaveType === 'Sick' ? 'sick' : 'leave',
+        msg: `${leaveType} — partial day ${s.start}–${s.end} (${leaveHrs.toFixed(1)}h)`
+      }],
+      isSick: leaveType === 'Sick',
+      isLeave: leaveType !== 'Sick',
+      approvedOT: null,
+      custom,
+approvedHrs: custom.approved ? custom.customHrs : null,
+autoRoundedIn: '',
+autoRoundedOut: '',
+contractedHrs: leaveHrs
+    });
+
+    return;
+  }
+
+  const contractedHrs=getContractedDailyHrs(emp,ds);
     const sHrs=SH(s);
     const ci=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-in');
     const co=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-out');

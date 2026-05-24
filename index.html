@@ -4025,13 +4025,43 @@ function viewMC(mcId){
     }
   }
 
+const directDriveUrl =
+  mc.fileUrl ||
+  mc.file_url ||
+  mc.fileURL ||
+  mc.fileUrl ||
+  (mc.fileId || mc.file_id
+    ? 'https://drive.google.com/file/d/' + (mc.fileId || mc.file_id) + '/view'
+    : '');
+
+if (directDriveUrl) {
+  showDriveLink(directDriveUrl);
+  return;
+}
+
 supabaseClient
   .from('med_certs')
-  .select('file_path')
+  .select('file_id,file_url,drive_folder_id,file_path')
   .eq('id', mcId)
   .single()
   .then(async ({ data, error }) => {
-    if (error || !data?.file_path) {
+    if (error || !data) {
+      showDriveLink(null);
+      return;
+    }
+
+    const dbDriveUrl =
+      data.file_url ||
+      (data.file_id
+        ? 'https://drive.google.com/file/d/' + data.file_id + '/view'
+        : '');
+
+    if (dbDriveUrl) {
+      showDriveLink(dbDriveUrl);
+      return;
+    }
+
+    if (!data.file_path) {
       showDriveLink(null);
       return;
     }

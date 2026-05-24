@@ -177,6 +177,7 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
 </style>
   
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 
 <script>
 const SUPABASE_URL = 'https://jfowikvmnqlebranlggf.supabase.co';
@@ -3769,25 +3770,35 @@ function viewPhoto(inPhoto,outPhoto){
 }
 function exportCSV(){
   const sv = document.getElementById('ts-week')?.value;
+
   if(!sv){
-    alert('Please select a week first.');
+    alert('Please select the Monday starting the fortnight first.');
     return;
   }
 
-  const wkS = new Date(sv);
+  if(typeof XLSX === 'undefined'){
+    alert('Excel export library has not loaded. Please refresh and try again.');
+    return;
+  }
+
+  const wkS = new Date(sv + 'T00:00:00');
   const wkE = new Date(wkS);
-  wkE.setDate(wkE.getDate()+6);
+  wkE.setDate(wkE.getDate() + 13);
 
   const ws = FD(wkS);
   const we = FD(wkE);
 
-const staffAll = DB.get('staff') || [];
-const shifts = DB.get('shifts') || [];
-const lr = DB.get('leaveRequests') || [];
-const sick = DB.get('sickDays') || [];
-const otReqs = DB.get('otRequests') || [];
+  const shortDate = d =>
+    String(d.getDate()).padStart(2,'0') + '.' +
+    String(d.getMonth()+1).padStart(2,'0');
 
-  const cq = v => '"' + String(v ?? '').replace(/"/g,'""') + '"';
+  const fileLabel = `Dukasa Timesheet_${shortDate(wkS)} - ${shortDate(wkE)}`;
+
+  const staffAll = DB.get('staff') || [];
+  const shifts = DB.get('shifts') || [];
+  const lr = DB.get('leaveRequests') || [];
+  const sick = DB.get('sickDays') || [];
+  const otReqs = DB.get('otRequests') || [];
 
   const dayLabel = ds =>
     new Date(ds + 'T00:00:00').toLocaleDateString('en-AU', { weekday:'long' });
@@ -3815,9 +3826,9 @@ const otReqs = DB.get('otRequests') || [];
       const empName = `${emp.first || ''} ${emp.last || ''}`.trim();
       const role = emp.role || '';
 
-      for(let i=0;i<7;i++){
+      for(let i=0; i<14; i++){
         const d = new Date(wkS);
-        d.setDate(d.getDate()+i);
+        d.setDate(d.getDate() + i);
         const ds = FD(d);
 
         const normalShifts = shifts
@@ -3828,11 +3839,15 @@ const otReqs = DB.get('otRequests') || [];
           .filter(o =>
             o.empId === emp.id &&
             o.date === ds &&
-            String(o.status || '').toLowerCase() === 'approved'
+            (
+              String(o.status || '').toLowerCase() === 'approved' ||
+              o.approved === true
+            )
           )
           .sort((a,b)=>(a.start || '').localeCompare(b.start || ''));
 
         const sickDay = sick.find(s => s.empId === emp.id && s.date === ds);
+
         const leaveDay = lr.find(l =>
           l.empId === emp.id &&
           String(l.status || '').toLowerCase() === 'approved' &&
@@ -3867,10 +3882,14 @@ const otReqs = DB.get('otRequests') || [];
             });
           });
         } else if(leaveDay){
-          const cHrs = emp.contractPerDay?.[new Date(ds + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short' })] 
-  || emp.contractedHrsPerDay 
-  || emp.contractedHrs 
-  || 0;
+          const dow = new Date(ds + 'T00:00:00')
+            .toLocaleDateString('en-US', { weekday: 'short' });
+
+          const cHrs =
+            emp.contractPerDay?.[dow] ||
+            emp.contractedHrsPerDay ||
+            emp.contractedHrs ||
+            0;
 
           entries.push({
             employee: empName,
@@ -3885,7 +3904,6 @@ const otReqs = DB.get('otRequests') || [];
           });
         }
 
-        // Only add OT where there is an APPROVED OT request.
         approvedOTs.forEach(o => {
           const otHrs = ROUND30(Math.max(0, MD(o.start, o.end) / 60));
 
@@ -3940,43 +3958,114 @@ const otReqs = DB.get('otRequests') || [];
       }
     });
 
-  const csvRows = [];
-
-  csvRows.push(cq(`timesheet_${ws}_${we}`));
-  csvRows.push('');
-
-  csvRows.push([
-    'Employee',
-    'Role',
-    'Date',
-    'Day',
-    'Row Type',
-    'Status',
-    'Rostered Start',
-    'Rostered End',
-    'Hrs'
-  ].map(cq).join(','));
+  const aoa = [
+    [fileLabel],
+    [],
+    ['Employee','Role','Date','Day','Row Type','Status','Rostered Start','Rostered End','Hrs']
+  ];
 
   entries.forEach(r => {
-    csvRows.push([
-      cq(r.employee),
-      cq(r.role),
-      cq(r.date),
-      cq(r.day),
-      cq(r.rowType),
-      cq(r.status),
-      cq(r.start),
-      cq(r.end),
-      Number(r.hrs || 0).toFixed(2)
-    ].join(','));
+    aoa.push([
+      r.employee,
+      r.role,
+      r.date,
+      r.day,
+      r.rowType,
+      r.status,
+      r.start,
+      r.end,
+      Number(r.hrs || 0)
+    ]);
   });
 
-  const blob = new Blob([csvRows.join('\n')], { type:'text/csv;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `timesheet_${ws}_${we}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  const wsSheet = XLSX.utils.aoa_to_sheet(aoa);
+
+  wsSheet['!merges'] = [{ s:{r:0,c:0}, e:{r:0,c:8} }];
+
+  wsSheet['!cols'] = [
+    { wch: 24 },
+    { wch: 22 },
+    { wch: 12 },
+    { wch: 14 },
+    { wch: 16 },
+    { wch: 48 },
+    { wch: 16 },
+    { wch: 16 },
+    { wch: 10 }
+  ];
+
+  const range = XLSX.utils.decode_range(wsSheet['!ref']);
+
+  for(let R = range.s.r; R <= range.e.r; R++){
+    for(let C = range.s.c; C <= range.e.c; C++){
+      const addr = XLSX.utils.encode_cell({r:R,c:C});
+      if(!wsSheet[addr]) continue;
+
+      wsSheet[addr].s = {
+        font: { name:'Arial', sz:10 },
+        alignment: { vertical:'center', horizontal:C === 8 ? 'right' : 'left', wrapText:true },
+        border: {
+          top: { style:'thin', color:{ rgb:'D9D9D9' } },
+          bottom: { style:'thin', color:{ rgb:'D9D9D9' } },
+          left: { style:'thin', color:{ rgb:'D9D9D9' } },
+          right: { style:'thin', color:{ rgb:'D9D9D9' } }
+        }
+      };
+    }
+  }
+
+  for(let C = 0; C <= 8; C++){
+    const addr = XLSX.utils.encode_cell({r:2,c:C});
+    if(wsSheet[addr]){
+      wsSheet[addr].s = {
+        font: { bold:true, color:{ rgb:'000000' }, name:'Arial', sz:10 },
+        fill: { fgColor:{ rgb:'F4D35E' } },
+        alignment: { vertical:'center', horizontal:'center', wrapText:true },
+        border: {
+          top: { style:'thin', color:{ rgb:'000000' } },
+          bottom: { style:'thin', color:{ rgb:'000000' } },
+          left: { style:'thin', color:{ rgb:'000000' } },
+          right: { style:'thin', color:{ rgb:'000000' } }
+        }
+      };
+    }
+  }
+
+  if(wsSheet['A1']){
+    wsSheet['A1'].s = {
+      font: { bold:true, sz:14, name:'Arial' },
+      alignment: { horizontal:'center', vertical:'center' }
+    };
+  }
+
+  for(let R = 3; R <= range.e.r; R++){
+    const rowTypeCell = wsSheet[XLSX.utils.encode_cell({r:R,c:4})];
+    if(rowTypeCell && rowTypeCell.v === 'TOTAL'){
+      for(let C = 0; C <= 8; C++){
+        const addr = XLSX.utils.encode_cell({r:R,c:C});
+        if(wsSheet[addr]){
+          wsSheet[addr].s = {
+            font: { bold:true, name:'Arial', sz:10 },
+            fill: { fgColor:{ rgb:'EFEFEF' } },
+            alignment: { vertical:'center', horizontal:C === 8 ? 'right' : 'left', wrapText:true },
+            border: {
+              top: { style:'thin', color:{ rgb:'000000' } },
+              bottom: { style:'thin', color:{ rgb:'000000' } },
+              left: { style:'thin', color:{ rgb:'D9D9D9' } },
+              right: { style:'thin', color:{ rgb:'D9D9D9' } }
+            }
+          };
+        }
+      }
+    }
+  }
+
+  wsSheet['!autofilter'] = { ref: `A3:I${aoa.length}` };
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, wsSheet, 'Timesheet');
+
+  XLSX.writeFile(wb, `${fileLabel}.xlsx`);
 }
 function viewPhoto(inPhoto,outPhoto){
   document.getElementById('photo-view-body').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">

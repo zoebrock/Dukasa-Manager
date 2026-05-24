@@ -3271,17 +3271,49 @@ function saveLeaveRequest(){
     .then(r=>console.log('Leave added email:',r)).catch(err=>console.error('Leave added email failed:',err));
 }
 
-function deleteLeaveRequest(){
+async function deleteLeaveRequest(){
   if(!editingLeaveId) return;
-  if(!confirm('Delete this leave request? This cannot be undone.')) return;
-  let reqs = DB.get('leaveRequests')||[];
-  reqs = reqs.filter(l=>l.id!==editingLeaveId);
-  DB.set('leaveRequests', reqs);
-  CM('m-add-leave');
-  editingLeaveId = null;
-  renderLeave(currentLeaveFilter);
-  renderDashboard();
-  renderRoster();
+
+  const leaveId = editingLeaveId;
+  const reqs = DB.get('leaveRequests') || [];
+  const leave = reqs.find(l => String(l.id) === String(leaveId));
+
+  if(!leave){
+    alert('Leave request not found.');
+    return;
+  }
+
+  if(!confirm('Delete this leave request? This will remove it from the roster, timesheets and staff portal.')) return;
+
+  try{
+    _setSyncIndicator('saving');
+
+    const { error } = await supabaseClient
+      .from(TABLE_MAP['leaveRequests'] || 'leave_requests')
+      .delete()
+      .eq('id', leaveId);
+
+    if(error) throw error;
+
+    const updated = reqs.filter(l => String(l.id) !== String(leaveId));
+    CACHE['rx3_leaveRequests'] = updated;
+
+    CM('m-add-leave');
+    editingLeaveId = null;
+
+    renderLeave(currentLeaveFilter);
+    renderDashboard();
+    renderRoster();
+
+    if(typeof renderCalendar === 'function') renderCalendar();
+
+    _setSyncIndicator('saved');
+
+  } catch(err){
+    console.error('Delete leave failed:', err);
+    _setSyncIndicator('error');
+    alert('Could not delete leave: ' + err.message);
+  }
 }
 
 // LEAVE

@@ -87,6 +87,11 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
 .chip-draft{background:var(--s3);color:var(--t2);border:1px dashed var(--border2)}
 .chip-draft:hover{background:var(--border);color:var(--text)}
 .chip-leave{background:var(--al);color:var(--ad);border:1px solid #FAC775}
+.chip-partial-leave{
+  background:var(--cl);
+  color:var(--cd);
+  border:1px solid #E7A58F;
+}
 .chip-sick{background:var(--rl);color:var(--rd);border:1px solid #F7C1C1}
 .chip-ot{background:var(--gl);color:var(--gd);border:1px solid #C0DD97}
 .chip-unavail{background:var(--s2);color:var(--t3);border:1px solid var(--border);cursor:default}
@@ -879,15 +884,19 @@ function mapFromSupabase(key, rows) {
     }));
   }
   
-  if (key === 'shifts') {
-    return rows.map(s => ({
-      ...s,
-      empId: s.emp_id,
-      breakMin: s.break_min,
-      isOT: s.is_ot,
-      otId: s.ot_id
-    }));
-  }
+if (key === 'shifts') {
+  return rows.map(s => ({
+    ...s,
+    empId: s.emp_id,
+    breakMin: s.break_min,
+    paidBreakMin: s.paid_break_min,
+    isOT: s.is_ot,
+    otId: s.ot_id,
+    entryType: s.entry_type,
+    leaveType: s.leave_type,
+    leaveReason: s.leave_reason
+  }));
+}
 
   if (key === 'announcements') {
     return rows.map(r => ({
@@ -1438,10 +1447,16 @@ function renderRoster(){
 
       // Shift chips — clicking opens the action popup instead of shift detail
 dayShifts.forEach(s=>{
-  const chipClass =
-  s.entryType === 'leave' && s.leaveType === 'Sick' ? 'chip-sick' :
-  s.entryType === 'leave' ? 'chip-leave' :
+const isPartialLeave = s.entryType === 'leave' || s.entry_type === 'leave';
+const leaveType = s.leaveType || s.leave_type || s.status || 'Leave';
+
+const chipClass =
+  isPartialLeave ? 'chip-partial-leave' :
   s.published ? 'chip-shift' : 'chip-draft';
+
+const chipText = isPartialLeave
+  ? `Partial leave - ${leaveType}: ${s.start}–${s.end}`
+  : `${s.start}–${s.end}`;
   const pubDot=s.published?'':'';
   const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
   const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
@@ -1458,7 +1473,7 @@ dayShifts.forEach(s=>{
           style="width:12px;height:12px">
       ` : ''}
 
-      ${s.entryType === 'leave' ? `${s.leaveType}: ` : ''}${s.start}–${s.end}
+      ${chipText}
     </span>
 
     ${otBadge}

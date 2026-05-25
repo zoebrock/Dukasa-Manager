@@ -950,27 +950,35 @@ function mapToSupabase(key, arrOrObj) {
       delete x.autoShift;
     }
 
-    if (key === 'shifts') {
-      x.emp_id = x.empId;
-      x.break_min = x.breakMin;
-      x.paid_break_min = x.paidBreakMin;
-      x.is_ot = x.isOT;
-      x.ot_id = x.otId;
-      x.ot_original_start = x.otOriginalStart;
-      x.ot_original_end = x.otOriginalEnd;
-      x.ot_annotations = x.otAnnotations;
-      x.template_id = x.templateId;
+if (key === 'shifts') {
+  x.emp_id = x.empId;
+  x.break_min = x.breakMin;
+  x.paid_break_min = x.paidBreakMin;
+  x.is_ot = x.isOT;
+  x.ot_id = x.otId;
+  x.ot_original_start = x.otOriginalStart;
+  x.ot_original_end = x.otOriginalEnd;
+  x.ot_annotations = x.otAnnotations;
+  x.template_id = x.templateId;
 
-      delete x.empId;
-      delete x.breakMin;
-      delete x.paidBreakMin;
-      delete x.isOT;
-      delete x.otId;
-      delete x.otOriginalStart;
-      delete x.otOriginalEnd;
-      delete x.otAnnotations;
-      delete x.templateId;
-    }
+  x.entry_type = x.entryType || x.entry_type || 'shift';
+  x.leave_type = x.leaveType || x.leave_type || null;
+  x.leave_reason = x.leaveReason || x.leave_reason || null;
+
+  delete x.empId;
+  delete x.breakMin;
+  delete x.paidBreakMin;
+  delete x.isOT;
+  delete x.otId;
+  delete x.otOriginalStart;
+  delete x.otOriginalEnd;
+  delete x.otAnnotations;
+  delete x.templateId;
+
+  delete x.entryType;
+  delete x.leaveType;
+  delete x.leaveReason;
+}
 
     if (key === 'announcements') {
       x.description = x.desc;

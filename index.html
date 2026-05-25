@@ -1965,7 +1965,10 @@ const dbRow = {
   role: ns.role,
   notes: ns.notes,
   published: ns.published,
-  status: ns.status
+  status: ns.status,
+  entry_type: ns.entryType || 'shift',
+  leave_type: ns.leaveType || null,
+  leave_reason: ns.leaveReason || null
 };
 
 const { error } = await supabaseClient

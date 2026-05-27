@@ -1450,7 +1450,12 @@ function renderRoster(){
       const dayShifts=shifts.filter(s=>s.empId===emp.id&&s.date===ds&&!s.isOT);
       const onLeave=leaveReqs.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
       const isSick=sickDays.find(sk=>sk.empId===emp.id&&sk.date===ds);
-      const hasOT=otReqs.filter(o=>o.empId===emp.id&&o.date===ds);
+      
+      const hasOT = otReqs.filter(o =>
+  o.empId === emp.id &&
+  o.date === ds &&
+  o.approved === true
+);
       const avail=emp.availability?emp.availability[dname]:true;
       const isToday=ds===today;
 

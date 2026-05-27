@@ -3309,131 +3309,118 @@ let editingLeaveId = null;
 
 function openAddLeaveModal(){
   editingLeaveId = null;
+
   document.getElementById('add-leave-title').textContent = 'Add leave request';
   document.getElementById('al-delete-btn').style.display = 'none';
-  // Populate staff dropdown
-  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
-  document.getElementById('al-emp').innerHTML = staff.map(s=>`<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
-  // Reset fields
+
+  const staff = [...(DB.get('staff') || [])]
+    .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
+
+  document.getElementById('al-emp').innerHTML =
+    staff.map(s => `<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
+
   document.getElementById('al-type').value = 'Annual Leave';
   document.getElementById('al-from').value = FD(new Date());
   document.getElementById('al-to').value = FD(new Date());
   document.getElementById('al-status').value = 'pending';
   document.getElementById('al-notes').value = '';
+
   document.getElementById('al-conflict-warn').style.display = 'none';
-  // Wire conflict check
+
   document.getElementById('al-from').onchange = checkLeaveConflictsModal;
   document.getElementById('al-to').onchange = checkLeaveConflictsModal;
+
   OM('m-add-leave');
 }
 
 function openEditLeaveModal(id){
-  const reqs = DB.get('leaveRequests')||[];
-  const lr = reqs.find(l=>l.id===id);
+  const reqs = DB.get('leaveRequests') || [];
+  const lr = reqs.find(l => l.id === id);
   if(!lr) return;
+
   editingLeaveId = id;
+
   document.getElementById('add-leave-title').textContent = 'Edit leave request';
   document.getElementById('al-delete-btn').style.display = 'inline-flex';
-  // Populate staff dropdown and select correct person
-  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
-  document.getElementById('al-emp').innerHTML = staff.map(s=>`<option value="${s.id}" ${s.id===lr.empId?'selected':''}>${s.first} ${s.last}</option>`).join('');
-  // Fill fields
+
+  const staff = [...(DB.get('staff') || [])]
+    .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
+
+  document.getElementById('al-emp').innerHTML =
+    staff.map(s => `<option value="${s.id}" ${s.id === lr.empId ? 'selected' : ''}>${s.first} ${s.last}</option>`).join('');
+
   document.getElementById('al-type').value = lr.type || 'Annual Leave';
   document.getElementById('al-from').value = lr.from || '';
   document.getElementById('al-to').value = lr.to || '';
   document.getElementById('al-status').value = lr.status || 'pending';
   document.getElementById('al-notes').value = lr.notes || '';
+
   document.getElementById('al-conflict-warn').style.display = 'none';
+
   document.getElementById('al-from').onchange = checkLeaveConflictsModal;
   document.getElementById('al-to').onchange = checkLeaveConflictsModal;
+
   OM('m-add-leave');
 }
 
-function checkLeaveConflictsModal(){
-  const from = document.getElementById('al-from').value;
-  const to = document.getElementById('al-to').value;
-  const empId = document.getElementById('al-emp').value;
-  if(!from||!to||!empId) return;
-  const shifts = DB.get('shifts')||[];
-  const conflicts = shifts.filter(s=>s.empId===empId&&s.date>=from&&s.date<=to&&s.published);
-  const warn = document.getElementById('al-conflict-warn');
-  if(conflicts.length){
-    warn.style.display = 'block';
-    warn.textContent = `⚠ This staff member has ${conflicts.length} published shift(s) during this period.`;
-  } else {
-    warn.style.display = 'none';
-  }
-}
-
-function saveLeaveRequest(){
+async function saveLeaveRequest(){
   const empId = document.getElementById('al-emp').value;
   const type = document.getElementById('al-type').value;
   const from = document.getElementById('al-from').value;
   const to = document.getElementById('al-to').value;
   const status = document.getElementById('al-status').value;
-  const notes = document.getElementById('al-notes').value.trim();
-  if(!empId||!from||!to){alert('Please fill in all required fields.');return;}
-  if(from>to){alert('From date must be on or before To date.');return;}
-  let reqs = DB.get('leaveRequests')||[];
-  if(editingLeaveId){
-    // Edit existing
-    const idx = reqs.findIndex(l=>l.id===editingLeaveId);
-    if(idx>=0){
-      reqs[idx] = {...reqs[idx], empId, type, from, to, status, notes,
-        syncedToRoster: status==='approved',
-        syncedToLeaveTracker: status==='approved',
-        updatedAt: new Date().toISOString()
-      };
-    }
-  } else {
-    // Add new
-    reqs.push({
-      id: 'lr'+Date.now(),
-      empId, type, from, to, status, notes,
-      syncedToRoster: status==='approved',
-      syncedToLeaveTracker: status==='approved',
-      submitted: new Date().toISOString(),
-      processedAt: status!=='pending'?new Date().toISOString():null
-    });
+  const notes = document.getElementById('al-notes').value || '';
+
+  if(!empId || !from || !to || from > to){
+    alert('Please enter valid leave details.');
+    return;
   }
-  DB.set('leaveRequests', reqs);
+
+  let reqs = DB.get('leaveRequests') || [];
+
+  const row = {
+    id: editingLeaveId || 'lr' + Date.now(),
+    empId,
+    type,
+    from,
+    to,
+    status,
+    notes,
+    submitted: editingLeaveId
+      ? (reqs.find(l => l.id === editingLeaveId)?.submitted || new Date().toISOString())
+      : new Date().toISOString()
+  };
+
+  if(editingLeaveId){
+    reqs = reqs.map(l => l.id === editingLeaveId ? {...l, ...row} : l);
+  } else {
+    reqs.push(row);
+  }
+
+  await DB.set('leaveRequests', reqs);
+
   CM('m-add-leave');
-  const savedEmpId = empId, savedType = type, savedFrom = from, savedTo = to, savedStatus = status, savedNotes = notes;
   editingLeaveId = null;
+
   renderLeave(currentLeaveFilter);
-  renderDashboard();
   renderRoster();
-  // Notify staff member that leave has been added/updated
-  _gasPost({action:'sendEmail',fn:'sendLeaveAddedEmail',payload:{empId:savedEmpId,type:savedType,from:savedFrom,to:savedTo,status:savedStatus,notes:savedNotes}})
-    .then(r=>console.log('Leave added email:',r)).catch(err=>console.error('Leave added email failed:',err));
+  renderDashboard();
 }
 
 async function deleteLeaveRequest(){
   if(!editingLeaveId) return;
 
   const leaveId = editingLeaveId;
-  const reqs = DB.get('leaveRequests') || [];
-  const leave = reqs.find(l => String(l.id) === String(leaveId));
 
-  if(!leave){
-    alert('Leave request not found.');
-    return;
-  }
-
-  if(!confirm('Delete this leave request? This will remove it from the roster, timesheets and staff portal.')) return;
+  if(!confirm('Delete this leave request? This will remove it from the Leave & Sick page, roster, timesheets and staff portal.')) return;
 
   try{
-    _setSyncIndicator('saving');
+    await deleteSupabaseRow('leaveRequests', leaveId);
 
-    const { error } = await supabaseClient
-      .from(TABLE_MAP['leaveRequests'] || 'leave_requests')
-      .delete()
-      .eq('id', leaveId);
+    const reqs = (DB.get('leaveRequests') || [])
+      .filter(l => String(l.id) !== String(leaveId));
 
-    if(error) throw error;
-
-    const updated = reqs.filter(l => String(l.id) !== String(leaveId));
-    CACHE['rx3_leaveRequests'] = updated;
+    CACHE['rx3_leaveRequests'] = reqs;
 
     CM('m-add-leave');
     editingLeaveId = null;
@@ -3444,11 +3431,8 @@ async function deleteLeaveRequest(){
 
     if(typeof renderCalendar === 'function') renderCalendar();
 
-    _setSyncIndicator('saved');
-
   } catch(err){
     console.error('Delete leave failed:', err);
-    _setSyncIndicator('error');
     alert('Could not delete leave: ' + err.message);
   }
 }

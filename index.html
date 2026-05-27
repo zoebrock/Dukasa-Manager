@@ -1484,7 +1484,7 @@ const chipText = isPartialLeave
   const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
   const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
 
-  content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="openShiftPopup(event,'${s.id}')">
+  content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="${isPartialLeave ? `openPartialLeaveModal('${s.empId}','${s.date}','${s.id}')` : `openShiftPopup(event,'${s.id}')`}">
 
     <span class="chip ${chipClass}" style="width:100%;justify-content:center;gap:5px" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">
 
@@ -2046,7 +2046,11 @@ renderDashboard();
   }, 5000);
 }
 
-function openPartialLeaveModal(prefillEmpId, prefillDate){
+let editingPartialLeaveId = null;
+
+function openPartialLeaveModal(prefillEmpId, prefillDate, partialLeaveId){
+  editingPartialLeaveId = partialLeaveId || null;
+
   const staff = DB.get('staff') || [];
   const empSel = document.getElementById('pl-emp');
 
@@ -2054,12 +2058,32 @@ function openPartialLeaveModal(prefillEmpId, prefillDate){
     .map(s => `<option value="${s.id}">${s.first} ${s.last}</option>`)
     .join('');
 
-  document.getElementById('pl-emp').value = prefillEmpId || '';
-  document.getElementById('pl-date').value = prefillDate || FD(new Date());
-  document.getElementById('pl-start').value = '13:00';
-  document.getElementById('pl-end').value = '17:00';
-  document.getElementById('pl-type').value = 'Sick';
-  document.getElementById('pl-notes').value = '';
+  const shifts = DB.get('shifts') || [];
+  const existing = editingPartialLeaveId
+    ? shifts.find(s => s.id === editingPartialLeaveId)
+    : null;
+
+  document.getElementById('pl-emp').value = existing?.empId || prefillEmpId || '';
+  document.getElementById('pl-date').value = existing?.date || prefillDate || FD(new Date());
+  document.getElementById('pl-start').value = existing?.start || '13:00';
+  document.getElementById('pl-end').value = existing?.end || '17:00';
+  document.getElementById('pl-type').value = existing?.leaveType || existing?.leave_type || existing?.status || 'Sick';
+  document.getElementById('pl-notes').value = existing?.leaveReason || existing?.leave_reason || existing?.notes || '';
+
+  let delBtn = document.getElementById('pl-delete-btn');
+
+  if(!delBtn){
+    const saveBtn = document.querySelector('#m-partial-leave .btn-primary');
+    if(saveBtn){
+      saveBtn.insertAdjacentHTML(
+        'beforebegin',
+        `<button id="pl-delete-btn" class="btn btn-danger" type="button" onclick="deletePartialLeave()" style="display:none">Delete partial leave</button>`
+      );
+    }
+  }
+
+  delBtn = document.getElementById('pl-delete-btn');
+  if(delBtn) delBtn.style.display = editingPartialLeaveId ? 'inline-flex' : 'none';
 
   OM('m-partial-leave');
 }
@@ -2069,8 +2093,13 @@ async function savePartialLeave(){
   const empId = document.getElementById('pl-emp').value;
   const emp = (DB.get('staff') || []).find(s => s.id === empId);
 
+  const existing = editingPartialLeaveId
+    ? shifts.find(s => s.id === editingPartialLeaveId)
+    : null;
+
   const ns = {
-    id: 'lvseg' + Date.now(),
+    ...(existing || {}),
+    id: editingPartialLeaveId || 'lvseg' + Date.now(),
     empId,
     date: document.getElementById('pl-date').value,
     start: document.getElementById('pl-start').value,
@@ -2115,12 +2144,52 @@ async function savePartialLeave(){
     return;
   }
 
-  shifts.push(ns);
-  CACHE['rx3_shifts'] = shifts;
+  const updated = editingPartialLeaveId
+    ? shifts.map(s => s.id === editingPartialLeaveId ? ns : s)
+    : [...shifts, ns];
 
+  CACHE['rx3_shifts'] = updated;
+
+  editingPartialLeaveId = null;
   CM('m-partial-leave');
+
   renderRoster();
   renderDashboard();
+  if(typeof renderTimesheets === 'function') renderTimesheets();
+
+  _setSyncIndicator('saved');
+}
+
+async function deletePartialLeave(){
+  if(!editingPartialLeaveId) return;
+
+  if(!confirm('Delete this partial leave? This will remove it from the roster and timesheet.')) return;
+
+  _setSyncIndicator('saving');
+
+  const { error } = await supabaseClient
+    .from(TABLE_MAP['shifts'])
+    .delete()
+    .eq('id', editingPartialLeaveId);
+
+  if(error){
+    _setSyncIndicator('error');
+    alert('Partial leave could not be deleted: ' + error.message);
+    return;
+  }
+
+  const shifts = (DB.get('shifts') || [])
+    .filter(s => s.id !== editingPartialLeaveId);
+
+  CACHE['rx3_shifts'] = shifts;
+
+  editingPartialLeaveId = null;
+  CM('m-partial-leave');
+
+  renderRoster();
+  renderDashboard();
+  if(typeof renderTimesheets === 'function') renderTimesheets();
+
   _setSyncIndicator('saved');
 }
   

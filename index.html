@@ -2828,49 +2828,66 @@ async function approveOT(id){
     s.published
   );
 
-  if (shiftIdx >= 0) {
-    const s = shifts[shiftIdx];
+if (shiftIdx >= 0) {
+  const s = shifts[shiftIdx];
 
-    const origStart = s.otOriginalStart || s.start;
-    const origEnd = s.otOriginalEnd || s.end;
+  const origStart = s.otOriginalStart || s.start;
+  const origEnd = s.otOriginalEnd || s.end;
 
-    const newStart = o.start < origStart ? o.start : origStart;
-    const newEnd = o.end > origEnd ? o.end : origEnd;
+  const newStart = o.start < origStart ? o.start : origStart;
+  const newEnd = o.end > origEnd ? o.end : origEnd;
 
-    const annotations = Array.isArray(s.otAnnotations) ? [...s.otAnnotations] : [];
+  const annotations = Array.isArray(s.otAnnotations)
+    ? [...s.otAnnotations]
+    : [];
 
-    if (!annotations.find(a => a.otId === id)) {
-      annotations.push({
-        otId: id,
-        start: o.start,
-        end: o.end,
-        reason: o.reason || ''
-      });
-    }
-
-    shifts[shiftIdx] = {
-      ...s,
-      start: newStart,
-      end: newEnd,
-      otOriginalStart: origStart,
-      otOriginalEnd: origEnd,
-      otAnnotations: annotations
-    };
-
-    await DB.set('shifts', shifts);
+  if (!annotations.find(a => a.otId === id)) {
+    annotations.push({
+      otId: id,
+      start: o.start,
+      end: o.end,
+      reason: o.reason || ''
+    });
   }
 
-  renderOT();
-  renderRoster();
-  renderDashboard();
+  shifts[shiftIdx] = {
+    ...s,
+    start: newStart,
+    end: newEnd,
+    otOriginalStart: origStart,
+    otOriginalEnd: origEnd,
+    otAnnotations: annotations
+  };
+
+  await DB.set('shifts', shifts);
+
 } else {
-    const emp=(DB.get('staff')||[]).find(s=>s.id===o.empId);
-    shifts.push({id:'sh-ot'+Date.now(),empId:o.empId,date:o.date,start:o.start,end:o.end,
-      breakMin:0,role:emp?emp.role:'',notes:'OT: '+o.reason,
-      published:true,status:'ot',isOT:true,otId:id,
-      otAnnotations:[{otId:id,start:o.start,end:o.end,reason:o.reason||''}]});
-    DB.set('shifts',shifts);
-  }
+
+  const emp = (DB.get('staff') || []).find(s => s.id === o.empId);
+
+  shifts.push({
+    id:'sh-ot'+Date.now(),
+    empId:o.empId,
+    date:o.date,
+    start:o.start,
+    end:o.end,
+    breakMin:0,
+    role:emp ? emp.role : '',
+    notes:'OT: ' + o.reason,
+    published:true,
+    status:'ot',
+    isOT:true,
+    otId:id,
+    otAnnotations:[{
+      otId:id,
+      start:o.start,
+      end:o.end,
+      reason:o.reason || ''
+    }]
+  });
+
+  await DB.set('shifts', shifts);
+}
   renderOT();renderRoster();renderDashboard();
 notify('ot_decision', {
   sendToStaff: true,

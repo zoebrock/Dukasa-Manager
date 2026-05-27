@@ -1944,7 +1944,9 @@ function openAddShiftForED(empId,date){
 async function saveShift(publishMode){
   const shifts = DB.get('shifts') || [];
   const empId = document.getElementById('sh-emp').value;
-  const emp = (DB.get('staff') || []).find(s => s.id === empId);
+  const emp = (DB.get('staff') || []).find(s =>
+  String(s.id) === String(empId)
+);
   const shiftDate = document.getElementById('sh-date').value;
 
   const previousShift = editingShiftId
@@ -2091,7 +2093,9 @@ function openPartialLeaveModal(prefillEmpId, prefillDate, partialLeaveId){
 async function savePartialLeave(){
   const shifts = DB.get('shifts') || [];
   const empId = document.getElementById('pl-emp').value;
-  const emp = (DB.get('staff') || []).find(s => s.id === empId);
+  const emp = (DB.get('staff') || []).find(s =>
+  String(s.id) === String(empId)
+);
 
   const existing = editingPartialLeaveId
     ? shifts.find(s => s.id === editingPartialLeaveId)
@@ -4882,7 +4886,9 @@ async function _gasPost(body) {
 }
 
   function staffById(empId){
-  return (DB.get('staff') || []).find(s => s.id === empId) || {};
+  return (DB.get('staff') || []).find(s =>
+    String(s.id) === String(empId)
+  ) || {};
 }
 
 function staffPayload(empId){

@@ -2966,24 +2966,25 @@ function saveOT(){
 if (!availConfirmed) {
   const staffInfo = staffPayload(no.empId);
 
-  _gasPost({
-    action: 'sendOTAvailabilityEmail',
-    payload: {
-      otId: no.id,
-      empId: no.empId,
-      empEmail: staffInfo.empEmail || staffInfo.email || '',
-      empFirst: staffInfo.empFirst || staffInfo.first || '',
-      empName: staffInfo.empName || staffInfo.name || '',
-      date: no.date,
-      start: no.start,
-      end: no.end,
-      reason: no.reason || '',
-      task: no.task || '',
-      requestedBy: 'manager',
-      source: 'Manager Portal',
-      sendToStaff: true
-    }
-  })
+_gasPost({
+  action: 'sendEmail',
+  fn: 'sendOTAvailabilityEmail',
+  payload: {
+    otId: no.id,
+    empId: no.empId,
+    empEmail: staffInfo.empEmail || staffInfo.email || '',
+    empFirst: staffInfo.empFirst || staffInfo.first || '',
+    empName: staffInfo.empName || staffInfo.name || '',
+    date: no.date,
+    start: no.start,
+    end: no.end,
+    reason: no.reason || '',
+    task: no.task || '',
+    requestedBy: 'manager',
+    source: 'Manager Portal',
+    sendToStaff: true
+  }
+})
     .then(r => console.log('OT availability email response:', r))
     .catch(err => {
       console.error('OT availability email failed:', err);

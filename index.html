@@ -892,6 +892,9 @@ if (key === 'shifts') {
     paidBreakMin: s.paid_break_min,
     isOT: s.is_ot,
     otId: s.ot_id,
+    otOriginalStart: s.ot_original_start,
+    otOriginalEnd: s.ot_original_end,
+    otAnnotations: s.ot_annotations || [],
     entryType: s.entry_type,
     leaveType: s.leave_type,
     leaveReason: s.leave_reason
@@ -1458,13 +1461,20 @@ dayShifts.forEach(s=>{
 const isPartialLeave = s.entryType === 'leave' || s.entry_type === 'leave';
 const leaveType = s.leaveType || s.leave_type || s.status || 'Leave';
 
+const hasApprovedOT =
+  (s.otAnnotations && s.otAnnotations.length) ||
+  hasOT.length;
+
 const chipClass =
   isPartialLeave ? 'chip-partial-leave' :
+  hasApprovedOT ? 'chip-ot' :
   s.published ? 'chip-shift' : 'chip-draft';
 
 const chipText = isPartialLeave
   ? `Partial leave - ${leaveType}: ${s.start}–${s.end}`
-  : `${s.start}–${s.end}`;
+  : hasApprovedOT
+    ? `${s.start}–${s.end} · OT added`
+    : `${s.start}–${s.end}`;
   const pubDot=s.published?'':'';
   const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
   const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';

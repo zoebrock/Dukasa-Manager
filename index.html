@@ -2968,13 +2968,14 @@ if (!availConfirmed) {
 
 _gasPost({
   action: 'sendEmail',
-  fn: 'sendOTAvailabilityEmail',
+  fn: 'sendOTRequestNotification',
   payload: {
-    otId: no.id,
     empId: no.empId,
-    empEmail: staffInfo.empEmail || staffInfo.email || '',
-    empFirst: staffInfo.empFirst || staffInfo.first || '',
     empName: staffInfo.empName || staffInfo.name || '',
+    empFirst: staffInfo.empFirst || staffInfo.first || '',
+    empLast: staffInfo.empLast || staffInfo.last || '',
+    empEmail: staffInfo.empEmail || staffInfo.email || '',
+    empRole: staffInfo.empRole || staffInfo.role || '',
     date: no.date,
     start: no.start,
     end: no.end,
@@ -2982,7 +2983,7 @@ _gasPost({
     task: no.task || '',
     requestedBy: 'manager',
     source: 'Manager Portal',
-    sendToStaff: true
+    requiresStaffResponse: true
   }
 })
     .then(r => console.log('OT availability email response:', r))

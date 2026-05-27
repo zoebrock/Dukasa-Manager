@@ -2817,24 +2817,37 @@ function approveOT(id){
   let shifts=DB.get('shifts')||[];
   let newStart=o.start,newEnd=o.end; // fallback to OT times if no existing shift
   const shiftIdx=shifts.findIndex(s=>s.empId===o.empId&&s.date===o.date&&!s.isOT&&s.published);
-  if(shiftIdx>=0){
-    const s=shifts[shiftIdx];
-    const origStart=s.otOriginalStart||s.start;
-    const origEnd=s.otOriginalEnd||s.end;
-    newStart=o.start<origStart?o.start:origStart;
-    newEnd=o.end>origEnd?o.end:origEnd;
-    const annotations=s.otAnnotations||[];
-    annotations.push({otId:id,start:o.start,end:o.end,reason:o.reason||''});
+if (shiftIdx >= 0) {
+  const s = shifts[shiftIdx];
+
+  const origStart = s.otOriginalStart || s.start;
+  const origEnd = s.otOriginalEnd || s.end;
+
+  const newStart = o.start < origStart ? o.start : origStart;
+  const newEnd = o.end > origEnd ? o.end : origEnd;
+
+  const annotations = s.otAnnotations || [];
+
+  if (!annotations.find(a => a.otId === id)) {
+    annotations.push({
+      otId: id,
+      start: o.start,
+      end: o.end,
+      reason: o.reason || ''
+    });
+  }
+
   shifts[shiftIdx] = {
-  ...s,
-  start: newStart,
-  end: newEnd,
-  otOriginalStart: origStart,
-  otOriginalEnd: origEnd,
-  otAnnotations: annotations
-};
-    DB.set('shifts',shifts);
-  } else {
+    ...s,
+    start: newStart,
+    end: newEnd,
+    otOriginalStart: origStart,
+    otOriginalEnd: origEnd,
+    otAnnotations: annotations
+  };
+
+  DB.set('shifts', shifts);
+} else {
     const emp=(DB.get('staff')||[]).find(s=>s.id===o.empId);
     shifts.push({id:'sh-ot'+Date.now(),empId:o.empId,date:o.date,start:o.start,end:o.end,
       breakMin:0,role:emp?emp.role:'',notes:'OT: '+o.reason,

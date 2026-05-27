@@ -4981,12 +4981,25 @@ async function _gasPost(body) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
+
     const text = await res.text();
-    try { return JSON.parse(text); }
-    catch { return { ok: false, error: text }; }
+    let json;
+
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = { ok: false, error: text };
+    }
+
+    if (!json.ok) {
+      throw new Error(json.error || 'Email/backend request failed');
+    }
+
+    return json;
+
   } catch(err) {
     console.error('_gasPost error:', err);
-    return { ok: false, error: err.message };
+    throw err;
   }
 }
 

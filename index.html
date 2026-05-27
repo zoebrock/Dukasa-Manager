@@ -2810,43 +2810,59 @@ if (!availConfirmed) {
   }
 }
   
-function approveOT(id){
-  const reqs=DB.get('otRequests')||[];const idx=reqs.findIndex(x=>x.id===id);if(idx<0)return;
-  reqs[idx].approved=true;DB.set('otRequests',reqs);
-  const o=reqs[idx];
-  let shifts=DB.get('shifts')||[];
-  let newStart=o.start,newEnd=o.end; // fallback to OT times if no existing shift
-  const shiftIdx=shifts.findIndex(s=>s.empId===o.empId&&s.date===o.date&&!s.isOT&&s.published);
-if (shiftIdx >= 0) {
-  const s = shifts[shiftIdx];
+async function approveOT(id){
+  const reqs = DB.get('otRequests') || [];
+  const idx = reqs.findIndex(x => x.id === id);
+  if (idx < 0) return;
 
-  const origStart = s.otOriginalStart || s.start;
-  const origEnd = s.otOriginalEnd || s.end;
+  reqs[idx].approved = true;
+  await DB.set('otRequests', reqs);
 
-  const newStart = o.start < origStart ? o.start : origStart;
-  const newEnd = o.end > origEnd ? o.end : origEnd;
+  const o = reqs[idx];
+  let shifts = DB.get('shifts') || [];
 
-  const annotations = s.otAnnotations || [];
+  const shiftIdx = shifts.findIndex(s =>
+    s.empId === o.empId &&
+    s.date === o.date &&
+    !s.isOT &&
+    s.published
+  );
 
-  if (!annotations.find(a => a.otId === id)) {
-    annotations.push({
-      otId: id,
-      start: o.start,
-      end: o.end,
-      reason: o.reason || ''
-    });
+  if (shiftIdx >= 0) {
+    const s = shifts[shiftIdx];
+
+    const origStart = s.otOriginalStart || s.start;
+    const origEnd = s.otOriginalEnd || s.end;
+
+    const newStart = o.start < origStart ? o.start : origStart;
+    const newEnd = o.end > origEnd ? o.end : origEnd;
+
+    const annotations = Array.isArray(s.otAnnotations) ? [...s.otAnnotations] : [];
+
+    if (!annotations.find(a => a.otId === id)) {
+      annotations.push({
+        otId: id,
+        start: o.start,
+        end: o.end,
+        reason: o.reason || ''
+      });
+    }
+
+    shifts[shiftIdx] = {
+      ...s,
+      start: newStart,
+      end: newEnd,
+      otOriginalStart: origStart,
+      otOriginalEnd: origEnd,
+      otAnnotations: annotations
+    };
+
+    await DB.set('shifts', shifts);
   }
 
-  shifts[shiftIdx] = {
-    ...s,
-    start: newStart,
-    end: newEnd,
-    otOriginalStart: origStart,
-    otOriginalEnd: origEnd,
-    otAnnotations: annotations
-  };
-
-  DB.set('shifts', shifts);
+  renderOT();
+  renderRoster();
+  renderDashboard();
 } else {
     const emp=(DB.get('staff')||[]).find(s=>s.id===o.empId);
     shifts.push({id:'sh-ot'+Date.now(),empId:o.empId,date:o.date,start:o.start,end:o.end,

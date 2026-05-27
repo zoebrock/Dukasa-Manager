@@ -2947,6 +2947,8 @@ function saveOT(){
     staffConfirmed: editingOTId ? (reqs.find(x => x.id === editingOTId) || {}).staffConfirmed : null
   };
 
+  const staffInfo = staffPayload(no.empId);
+
   if (!no.reason.trim()) {
     alert('Reason is required.');
     return;
@@ -2982,6 +2984,8 @@ if (!no.availConfirmed) {
   })
   .then(r => console.log('OT request email sent', r))
   .catch(err => alert('OT request saved, but the email failed: ' + err.message));
+}
+
 }
   
 async function approveOT(id){

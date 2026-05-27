@@ -2968,14 +2968,13 @@ if (!availConfirmed) {
 
 _gasPost({
   action: 'sendEmail',
-  fn: 'sendOTRequestNotification',
+  fn: 'sendManagerOTRequestToStaff',
   payload: {
     empId: no.empId,
     empName: staffInfo.empName || staffInfo.name || '',
     empFirst: staffInfo.empFirst || staffInfo.first || '',
     empLast: staffInfo.empLast || staffInfo.last || '',
     empEmail: staffInfo.empEmail || staffInfo.email || '',
-    empRole: staffInfo.empRole || staffInfo.role || '',
     date: no.date,
     start: no.start,
     end: no.end,
@@ -2983,13 +2982,13 @@ _gasPost({
     task: no.task || '',
     requestedBy: 'manager',
     source: 'Manager Portal',
-    requiresStaffResponse: true
+    staffPortalUrl: 'https://dukasa-portal.vercel.app'
   }
 })
     .then(r => console.log('OT availability email response:', r))
     .catch(err => {
       console.error('OT availability email failed:', err);
-      alert('OT request saved, but the email failed: ' + err.message);
+      alert('OT request saved, but the staff email failed: ' + err.message);
     });
   }
 }

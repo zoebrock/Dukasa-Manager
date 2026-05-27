@@ -2979,12 +2979,9 @@ if (!no.availConfirmed) {
     requestedBy: 'manager',
     source: 'Manager Portal',
     sendToStaff: true
-  });
-}
-.then(r => console.log('OT request email sent', r))
-.catch(err => alert('OT request saved, but the email failed: ' + err.message));
-    });
-  }
+  })
+  .then(r => console.log('OT request email sent', r))
+  .catch(err => alert('OT request saved, but the email failed: ' + err.message));
 }
   
 async function approveOT(id){

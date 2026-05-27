@@ -323,6 +323,10 @@ let selectedShiftIds = new Set();
   ✓ Select shifts
 </button>
 
+<button class="btn btn-danger btn-sm" onclick="deleteDuplicateShiftRows()">
+  Clean duplicates
+</button>
+
 <button
   class="btn btn-danger btn-sm"
   id="bulk-delete-btn"
@@ -1423,12 +1427,49 @@ function dayName(d){return['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()
 // ROSTER
 function toggleAvail(){showAvail=!showAvail;document.getElementById('toggle-avail').classList.toggle('on',showAvail);renderRoster();}
 
+  function dedupeShifts(shifts){
+  const seen = new Map();
+
+  shifts.forEach(s => {
+    const type =
+      s.entryType === 'leave' || s.entry_type === 'leave'
+        ? 'leave'
+        : s.isOT
+          ? 'ot'
+          : 'shift';
+
+    const key = [
+      String(s.empId || s.emp_id || ''),
+      String(s.date || ''),
+      String(type),
+      String(s.start || ''),
+      String(s.end || '')
+    ].join('|');
+
+    const existing = seen.get(key);
+
+    if(!existing){
+      seen.set(key, s);
+      return;
+    }
+
+    const existingTime = Number(String(existing.id || '').replace(/\D/g,'')) || 0;
+    const thisTime = Number(String(s.id || '').replace(/\D/g,'')) || 0;
+
+    if(thisTime > existingTime){
+      seen.set(key, s);
+    }
+  });
+
+  return [...seen.values()];
+}
+  
 function renderRoster(){
   if(!currentWeekStart){initWeek(new Date());}
   const days=getWD();const we=new Date(currentWeekStart);we.setDate(we.getDate()+6);
   document.getElementById('wk-lbl').textContent=`${FDISP(currentWeekStart)} – ${FDISP(we)}`;updateTodayBtn();
   const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
-  const shifts=DB.get('shifts')||[];
+  const shifts = dedupeShifts(DB.get('shifts') || []);
   const leaveReqs=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');
   const sickDays=DB.get('sickDays')||[];
   const otReqs=(DB.get('otRequests')||[]).filter(o=>o.approved);
@@ -2345,6 +2386,63 @@ async function deleteSupabaseRow(k, id) {
   }
 }
   
+  async function deleteDuplicateShiftRows(){
+  const shifts = DB.get('shifts') || [];
+  const seen = new Map();
+  const keep = [];
+  const remove = [];
+
+  shifts.forEach(s => {
+    const type =
+      s.entryType === 'leave' || s.entry_type === 'leave'
+        ? 'leave'
+        : s.isOT
+          ? 'ot'
+          : 'shift';
+
+    const key = [
+      String(s.empId || s.emp_id || ''),
+      String(s.date || ''),
+      String(type),
+      String(s.start || ''),
+      String(s.end || '')
+    ].join('|');
+
+    if(!seen.has(key)){
+      seen.set(key, s);
+      keep.push(s);
+    } else {
+      remove.push(s);
+    }
+  });
+
+  if(!remove.length){
+    alert('No duplicate shift rows found.');
+    return;
+  }
+
+  if(!confirm(`Delete ${remove.length} duplicate shift row(s) from Supabase?`)) return;
+
+  _setSyncIndicator('saving');
+
+  for(const s of remove){
+    await supabaseClient
+      .from(TABLE_MAP['shifts'])
+      .delete()
+      .eq('id', s.id);
+  }
+
+  CACHE['rx3_shifts'] = keep;
+
+  renderRoster();
+  renderDashboard();
+  if(typeof renderTS === 'function') renderTS();
+  if(typeof renderTimesheets === 'function') renderTimesheets();
+
+  _setSyncIndicator('saved');
+  alert(`Deleted ${remove.length} duplicate shift row(s).`);
+}
+  
 async function deleteShift() {
   console.log('[DELETE SHIFT] viewingShiftId:', viewingShiftId);
 
@@ -2687,7 +2785,13 @@ function applyTemplate(){
   // Remove all existing DRAFT shifts for this week (keep published ones)
   let shifts=DB.get('shifts')||[];
   const removedDrafts=shifts.filter(s=>s.date>=wkStartStr&&s.date<=wkEndStr&&!s.published).length;
-  shifts=shifts.filter(s=>!(s.date>=wkStartStr&&s.date<=wkEndStr&&!s.published));
+  shifts = shifts.filter(s =>
+  !(s.date >= wkStartStr &&
+    s.date <= wkEndStr &&
+    !s.isOT &&
+    s.entryType !== 'leave' &&
+    s.entry_type !== 'leave')
+);
   // Add new shifts from template
   t.shifts.forEach(s=>{
     const d=new Date(wkStart);d.setDate(wkStart.getDate()+s.dayOfWeek);

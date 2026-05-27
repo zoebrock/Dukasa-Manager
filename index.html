@@ -2944,67 +2944,117 @@ function openOTDetailModal(otId,shiftId){
     </div>`;
   OM('m-ot-detail');
 }
-function deleteOTFromDetail(){
-  if(!viewingOTId)return;
-  if(!confirm('Cancel this OT and notify the staff member?'))return;
+async function deleteOTFromDetail(){
+  if(!viewingOTId) return;
+
+  const id = viewingOTId;
+
   CM('m-ot-detail');
-  const reqs=DB.get('otRequests')||[];
-  const o=reqs.find(x=>x.id===viewingOTId);
-  if(!o)return;
-  const wasApproved=o.approved===true;
-  // Remove from otRequests
-  DB.set('otRequests',reqs.filter(x=>x.id!==viewingOTId));
-  if(wasApproved) reverseOTFromShift(viewingOTId,o.empId,o.date);
-  renderOT();renderRoster();renderDashboard();
-  // Send cancellation email
-  _gasPost({action:'sendEmail',fn:'sendOTDecisionEmail',payload:{empId:o.empId,decision:'cancelled',date:o.date,start:o.start,end:o.end,reason:o.reason||''}})
-    .then(r=>console.log('OT cancel sent')).catch(err=>console.error('OT cancel failed:',err));
-  viewingOTId=null;
+  viewingOTId = null;
+
+  await deleteOT(id);
 }
+
 function editOTFromDetail(){
-  if(!viewingOTId)return;
+  if(!viewingOTId) return;
+
   CM('m-ot-detail');
   openAddOTModal(viewingOTId);
-  viewingOTId=null;
+  viewingOTId = null;
 }
 
-function deleteOT(id){
+async function deleteOT(id){
   if(!confirm('Delete this OT request? If already approved, the shift will be restored to original hours and the staff member will be notified.')) return;
-  let reqs=DB.get('otRequests')||[];
-  const o=reqs.find(x=>x.id===id);if(!o)return;
-  const wasApproved=o.approved===true;
-  reqs=reqs.filter(x=>x.id!==id);DB.set('otRequests',reqs);
-  if(wasApproved) reverseOTFromShift(id,o.empId,o.date);
-  renderOT();renderRoster();renderDashboard();
-  // Notify staff if OT was approved
+
+  let reqs = DB.get('otRequests') || [];
+  const o = reqs.find(x => x.id === id);
+  if(!o) return;
+
+  const wasApproved = o.approved === true;
+
   if(wasApproved){
-    _gasPost({action:'sendEmail',fn:'sendOTDecisionEmail',payload:{empId:o.empId,decision:'cancelled',date:o.date,start:o.start,end:o.end,reason:o.reason||''}})
-      .then(r=>console.log('OT cancel sent')).catch(err=>console.error('OT cancel failed:',err));
+    await reverseOTFromShift(id, o.empId, o.date);
+  }
+
+  await deleteSupabaseRow('otRequests', id);
+
+  reqs = reqs.filter(x => x.id !== id);
+  CACHE['rx3_otRequests'] = reqs;
+
+  renderOT();
+  renderRoster();
+  renderDashboard();
+
+  if(wasApproved){
+    _gasPost({
+      action:'sendEmail',
+      fn:'sendOTDecisionEmail',
+      payload:{
+        empId:o.empId,
+        decision:'cancelled',
+        date:o.date,
+        start:o.start,
+        end:o.end,
+        reason:o.reason || ''
+      }
+    })
+    .then(r => console.log('OT cancel sent'))
+    .catch(err => console.error('OT cancel failed:', err));
   }
 }
 
-function reverseOTFromShift(otId,empId,date){
-  // Remove OT annotation from shift and recalculate shift times
-  let shifts=DB.get('shifts')||[];
-  const shiftIdx=shifts.findIndex(s=>s.empId===empId&&s.date===date&&!s.isOT);
-  if(shiftIdx<0) return;
-  const s=shifts[shiftIdx];
-  const annotations=(s.otAnnotations||[]).filter(a=>a.otId!==otId);
-  // Recalculate shift bounds: start from original shift times stored as otOriginalStart/End
-  // If we have remaining OT annotations, re-extend from the original base
-  // We need to track the pre-OT shift times — stored as otOriginalStart/otOriginalEnd
-  const origStart=s.otOriginalStart||s.start;
-  const origEnd=s.otOriginalEnd||s.end;
-  if(annotations.length===0){
-    // No more OT — restore to original times
-    shifts[shiftIdx]={...s,start:origStart,end:origEnd,otAnnotations:[],otOriginalStart:undefined,otOriginalEnd:undefined};
-  } else {
-    // Recalculate from remaining annotations
-    let newStart=origStart,newEnd=origEnd;
-    annotations.forEach(a=>{if(a.start<newStart)newStart=a.start;if(a.end>newEnd)newEnd=a.end;});
-    shifts[shiftIdx]={...s,start:newStart,end:newEnd,otAnnotations:annotations};
+async function reverseOTFromShift(otId, empId, date){
+  let shifts = DB.get('shifts') || [];
+
+  const standalone = shifts.find(s =>
+    s.empId === empId &&
+    s.date === date &&
+    s.isOT &&
+    s.otId === otId
+  );
+
+  if(standalone){
+    await deleteSupabaseRow('shifts', standalone.id);
+    shifts = shifts.filter(s => s.id !== standalone.id);
+    CACHE['rx3_shifts'] = shifts;
+    return;
   }
-  DB.set('shifts',shifts);
+
+  const shiftIdx = shifts.findIndex(s =>
+    s.empId === empId &&
+    s.date === date &&
+    !s.isOT
+  );
+
+  if(shiftIdx < 0) return;
+
+  const s = shifts[shiftIdx];
+
+  const annotations = Array.isArray(s.otAnnotations)
+    ? s.otAnnotations.filter(a => a.otId !== otId)
+    : [];
+
+  const origStart = s.otOriginalStart || s.start;
+  const origEnd = s.otOriginalEnd || s.end;
+
+  let newStart = origStart;
+  let newEnd = origEnd;
+
+  annotations.forEach(a => {
+    if(a.start && a.start < newStart) newStart = a.start;
+    if(a.end && a.end > newEnd) newEnd = a.end;
+  });
+
+  shifts[shiftIdx] = {
+    ...s,
+    start: newStart,
+    end: newEnd,
+    otAnnotations: annotations,
+    otOriginalStart: annotations.length ? origStart : null,
+    otOriginalEnd: annotations.length ? origEnd : null
+  };
+
+  await DB.set('shifts', shifts);
 }
 
 // STAFF

@@ -2989,8 +2989,6 @@ async function saveOT(){
     .catch(err => alert('OT request saved, but the staff email failed: ' + err.message));
   }
 }
-
-}
   
 async function approveOT(id){
   const reqs = DB.get('otRequests') || [];

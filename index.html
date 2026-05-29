@@ -2929,7 +2929,7 @@ function openAddOTModal(id, prefillEmpId, prefillDate){
   }
   OM('m-ot');
 }
-function saveOT(){
+async function saveOT(){
   const reqs = DB.get('otRequests') || [];
   const availConfirmed = document.getElementById('tog-ot-avail').classList.contains('on');
 
@@ -2944,7 +2944,8 @@ function saveOT(){
     availConfirmed,
     approved: editingOTId ? (reqs.find(x => x.id === editingOTId) || {}).approved : null,
     requestedBy: 'manager',
-    staffConfirmed: editingOTId ? (reqs.find(x => x.id === editingOTId) || {}).staffConfirmed : null
+    staffConfirmed: editingOTId ? (reqs.find(x => x.id === editingOTId) || {}).staffConfirmed : null,
+    submitted: editingOTId ? (reqs.find(x => x.id === editingOTId) || {}).submitted : new Date().toISOString()
   };
 
   const staffInfo = staffPayload(no.empId);
@@ -2961,29 +2962,32 @@ function saveOT(){
     reqs.push(no);
   }
 
-  DB.set('otRequests', reqs);
+  await DB.set('otRequests', reqs);
+
   CM('m-ot');
   renderOT();
+  renderDashboard();
 
-if (!no.availConfirmed) {
-  notify('manager_ot_request', {
-    otId: no.id,
-    empId: no.empId,
-    empEmail: staffInfo.empEmail || '',
-    empFirst: staffInfo.empFirst || '',
-    empLast: staffInfo.empLast || '',
-    empName: staffInfo.empName || '',
-    date: no.date,
-    start: no.start,
-    end: no.end,
-    reason: no.reason || '',
-    task: no.task || '',
-    requestedBy: 'manager',
-    source: 'Manager Portal',
-    sendToStaff: true
-  })
-  .then(r => console.log('OT request email sent', r))
-  .catch(err => alert('OT request saved, but the email failed: ' + err.message));
+  if (!no.availConfirmed) {
+    notify('manager_ot_request', {
+      otId: no.id,
+      empId: no.empId,
+      empEmail: staffInfo.empEmail || '',
+      empFirst: staffInfo.empFirst || '',
+      empLast: staffInfo.empLast || '',
+      empName: staffInfo.empName || '',
+      date: no.date,
+      start: no.start,
+      end: no.end,
+      reason: no.reason || '',
+      task: no.task || '',
+      requestedBy: 'manager',
+      source: 'Manager Portal',
+      sendToStaff: true
+    })
+    .then(r => console.log('OT request email sent', r))
+    .catch(err => alert('OT request saved, but the staff email failed: ' + err.message));
+  }
 }
 
 }

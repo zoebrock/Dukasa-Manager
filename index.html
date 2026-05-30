@@ -4000,16 +4000,67 @@ async function toggleApproved(empId,date,btn){
   }
 }
 
+function normaliseTimesheetShifts(shifts, staffIds){
+  const seen = new Map();
+
+  (shifts || []).forEach(s => {
+    if(!s) return;
+
+    const empId = String(s.empId || s.emp_id || '');
+    const date = String(s.date || '');
+    const entryType = s.entryType || s.entry_type || '';
+    const isLeave = entryType === 'leave';
+    const isOT = s.isOT === true || s.is_ot === true;
+
+    if(!empId || !date) return;
+    if(!staffIds.has(empId)) return;
+    if(isOT) return;
+    if(s.published !== true && s.published !== 'true' && s.published !== 1) return;
+
+    const type = isLeave ? 'partial-leave' : 'shift';
+
+    const key = [
+      empId,
+      date,
+      type,
+      String(s.start || ''),
+      String(s.end || ''),
+      String(s.leaveType || s.leave_type || s.status || '')
+    ].join('|');
+
+    const existing = seen.get(key);
+
+    if(!existing){
+      seen.set(key, s);
+      return;
+    }
+
+    const oldTime = Number(String(existing.id || '').replace(/\D/g,'')) || 0;
+    const newTime = Number(String(s.id || '').replace(/\D/g,'')) || 0;
+
+    if(newTime > oldTime){
+      seen.set(key, s);
+    }
+  });
+
+  return [...seen.values()];
+}
+
 function buildTSRows(dayDate){
   const staff = [...(DB.get('staff') || [])].sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
-  const shifts = DB.get('shifts') || [];
+  const rawShifts = DB.get('shifts') || [];
   const ce = DB.get('clockEvents') || [];
   const lr = (DB.get('leaveRequests') || []).filter(l => l.status === 'approved');
   const sd = DB.get('sickDays') || [];
   const otReqs = (DB.get('otRequests') || []).filter(o => o.approved === true);
   const settings = DB.get('settings') || { dailyOT: true, dailyOTHours: 8, gracePeriod: 5 };
   const ds = dayDate;
-  const dayShifts = shifts.filter(s => s.date === ds && !s.isOT);
+  const staffIds = new Set(staff.map(s => String(s.id)));
+const shifts = normaliseTimesheetShifts(rawShifts, staffIds);
+
+const dayShifts = shifts.filter(s =>
+  String(s.date) === String(ds)
+);
   const rows = [];
 
   // Get contracted daily hours for a staff member on a given day
@@ -4040,48 +4091,53 @@ sortedShifts.forEach(s=>{
   if(!emp) return;
 
   // ── PARTIAL LEAVE SUPPORT ─────────────────────
-  if (s.entryType === 'leave' || s.entry_type === 'leave') {
-    const leaveType = s.leaveType || s.leave_type || s.status || 'Leave';
-    const leaveHrs = ROUND30(MD(s.start, s.end) / 60);
+if (s.entryType === 'leave' || s.entry_type === 'leave') {
+  const leaveType = s.leaveType || s.leave_type || s.status || 'Annual Leave';
+  const leaveHrs = ROUND30(Math.max(0, MD(s.start, s.end) / 60));
 
-    const custom = getOrCreateCustom(
-      s.empId,
-      ds,
-      leaveHrs,
-      s.start,
-      s.end,
-      leaveHrs
-    );
+  const custom = getOrCreateCustom(
+    s.empId,
+    ds,
+    leaveHrs,
+    s.start,
+    s.end,
+    leaveHrs
+  );
 
-    rows.push({
-      s,
-      emp,
-      sHrs: leaveHrs,
-      actualHrs: leaveHrs,
-      otHrs: 0,
-      status: leaveType,
-      rowCls: leaveType === 'Sick' ? 'tr-sick' : 'tr-leave',
-      ci: null,
-      co: null,
-      bs: null,
-      be: null,
-      bActMin: 0,
-      flags: [{
-        type: leaveType === 'Sick' ? 'sick' : 'leave',
-        msg: `${leaveType} — partial day ${s.start}–${s.end} (${leaveHrs.toFixed(1)}h)`
-      }],
-      isSick: leaveType === 'Sick',
-      isLeave: leaveType !== 'Sick',
-      approvedOT: null,
-      custom,
-approvedHrs: custom.approved ? custom.customHrs : null,
-autoRoundedIn: '',
-autoRoundedOut: '',
-contractedHrs: leaveHrs
-    });
+  rows.push({
+    s: {
+      ...s,
+      role: s.role || emp.role || '',
+      breakMin: 0
+    },
+    emp,
+    sHrs: leaveHrs,
+    actualHrs: leaveHrs,
+    otHrs: 0,
+    status: leaveType,
+    rowCls: leaveType === 'Sick' ? 'tr-sick' : 'tr-leave',
+    ci: null,
+    co: null,
+    bs: null,
+    be: null,
+    bActMin: 0,
+    flags: [{
+      type: leaveType === 'Sick' ? 'sick' : 'leave',
+      msg: `${leaveType} — partial leave ${s.start}–${s.end} (${leaveHrs.toFixed(1)}h)`
+    }],
+    isSick: leaveType === 'Sick',
+    isLeave: leaveType !== 'Sick',
+    approvedOT: null,
+    custom,
+    approvedHrs: custom.approved ? custom.customHrs : leaveHrs,
+    autoRoundedIn: s.start,
+    autoRoundedOut: s.end,
+    contractedHrs: leaveHrs,
+    isPartialLeave: true
+  });
 
-    return;
-  }
+  return;
+}
 
   const contractedHrs=getContractedDailyHrs(emp,ds);
     const sHrs=SH(s);
@@ -4233,7 +4289,9 @@ for(let i=0;i<14;i++){
   days.push(FD(d));
 }
   // Summary totals across whole week
-  const shifts=DB.get('shifts')||[];const ce=DB.get('clockEvents')||[];const ch=DB.get('customHours')||[];
+  const staffForTS = DB.get('staff') || [];
+  const staffIdsForTS = new Set(staffForTS.map(s => String(s.id)));
+  const shifts = normaliseTimesheetShifts(DB.get('shifts') || [], staffIdsForTS);const ce=DB.get('clockEvents')||[];const ch=DB.get('customHours')||[];
   const lr=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');const sd=DB.get('sickDays')||[];
   const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8};
   const ws=FD(wkS),we=FD(wkE);

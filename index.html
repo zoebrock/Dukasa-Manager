@@ -4381,7 +4381,7 @@ function renderTS(){
   const sv = document.getElementById('ts-week').value;
   if(!sv) return;
 
-  const wkS = new Date(sv + 'T00:00:00');
+  const wkS = new Date(sv);
   const wkE = new Date(wkS);
   wkE.setDate(wkE.getDate() + 13);
 

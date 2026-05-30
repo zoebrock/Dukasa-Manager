@@ -4046,6 +4046,111 @@ function normaliseTimesheetShifts(shifts, staffIds){
   return [...seen.values()];
 }
 
+  function tsIsPublished(s){
+  return s.published === true || s.published === 'true' || s.published === 1;
+}
+
+function tsIsPartialLeave(s){
+  return s.entryType === 'leave' || s.entry_type === 'leave';
+}
+
+function tsStamp(s){
+  return Number(String(s.id || '').replace(/\D/g,'')) || 0;
+}
+
+function getCleanTSShiftsForRange(startDs, endDs){
+  const staffIds = new Set((DB.get('staff') || []).map(s => String(s.id)));
+  const raw = DB.get('shifts') || [];
+
+  const normal = new Map();
+  const partialLeave = new Map();
+
+  raw.forEach(s => {
+    const empId = String(s.empId || s.emp_id || '');
+    const date = String(s.date || '').slice(0,10);
+
+    if(!empId || !date) return;
+    if(!staffIds.has(empId)) return;
+    if(date < startDs || date > endDs) return;
+    if(!tsIsPublished(s)) return;
+    if(s.isOT === true || s.is_ot === true) return;
+
+    const clean = {
+      ...s,
+      empId,
+      date,
+      breakMin: Number(s.breakMin ?? s.break_min ?? 30),
+      entryType: s.entryType || s.entry_type,
+      leaveType: s.leaveType || s.leave_type,
+      leaveReason: s.leaveReason || s.leave_reason
+    };
+
+    if(tsIsPartialLeave(clean)){
+      const key = [
+        empId,
+        date,
+        'partial-leave',
+        clean.start || '',
+        clean.end || '',
+        clean.leaveType || clean.status || ''
+      ].join('|');
+
+      const existing = partialLeave.get(key);
+      if(!existing || tsStamp(clean) > tsStamp(existing)){
+        partialLeave.set(key, clean);
+      }
+
+      return;
+    }
+
+    // One ordinary roster shift per staff member per day.
+    // This prevents stale/duplicate shifts with different times being counted.
+    const key = [empId, date, 'normal-shift'].join('|');
+    const existing = normal.get(key);
+
+    if(!existing || tsStamp(clean) > tsStamp(existing)){
+      normal.set(key, clean);
+    }
+  });
+
+  return [...normal.values(), ...partialLeave.values()];
+}
+
+function getApprovedTSOTsForRange(startDs, endDs){
+  const staffIds = new Set((DB.get('staff') || []).map(s => String(s.id)));
+  const seen = new Map();
+
+  (DB.get('otRequests') || []).forEach(o => {
+    const empId = String(o.empId || o.emp_id || '');
+    const date = String(o.date || '').slice(0,10);
+
+    if(!empId || !date) return;
+    if(!staffIds.has(empId)) return;
+    if(date < startDs || date > endDs) return;
+
+    const approved =
+      o.approved === true ||
+      String(o.status || '').toLowerCase() === 'approved';
+
+    if(!approved) return;
+
+    const key = [
+      empId,
+      date,
+      o.start || '',
+      o.end || '',
+      o.reason || ''
+    ].join('|');
+
+    const existing = seen.get(key);
+    if(!existing || tsStamp(o) > tsStamp(existing)){
+      seen.set(key, {...o, empId, date});
+    }
+  });
+
+  return [...seen.values()];
+}
+
 function buildTSRows(dayDate){
   const staff = [...(DB.get('staff') || [])].sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
   const rawShifts = DB.get('shifts') || [];
@@ -4058,8 +4163,7 @@ function buildTSRows(dayDate){
   const staffIds = new Set(staff.map(s => String(s.id)));
 const shifts = normaliseTimesheetShifts(rawShifts, staffIds);
 
-const dayShifts = shifts.filter(s =>
-  String(s.date) === String(ds)
+const dayShifts = shifts.filter(s => String(s.date) === String(ds));
 );
   const rows = [];
 
@@ -4518,7 +4622,7 @@ function viewPhoto(inPhoto,outPhoto){
   </div>`;OM('m-photo-view');
 }
 
-  function exportCSV(){
+function exportCSV(){
   const sv = document.getElementById('ts-week')?.value;
 
   if(!sv){
@@ -4531,9 +4635,12 @@ function viewPhoto(inPhoto,outPhoto){
     return;
   }
 
-  const wkS = new Date(sv);
+  const wkS = new Date(sv + 'T00:00:00');
   const wkE = new Date(wkS);
   wkE.setDate(wkE.getDate() + 13);
+
+  const ws = FD(wkS);
+  const we = FD(wkE);
 
   const shortDate = d =>
     String(d.getDate()).padStart(2,'0') + '.' +
@@ -4541,19 +4648,19 @@ function viewPhoto(inPhoto,outPhoto){
 
   const fileLabel = `Dukasa Timesheet_${shortDate(wkS)} - ${shortDate(wkE)}`;
 
-  const staffAll = DB.get('staff') || [];
-  const shifts = DB.get('shifts') || [];
-  const lr = DB.get('leaveRequests') || [];
-  const sick = DB.get('sickDays') || [];
-  const otReqs = DB.get('otRequests') || [];
+  const staffAll = (DB.get('staff') || [])
+    .slice()
+    .sort((a,b)=>((a.first||'')+' '+(a.last||'')).localeCompare((b.first||'')+' '+(b.last||'')));
 
-  const dayLabel = ds =>
-    new Date(ds + 'T00:00:00').toLocaleDateString('en-AU', { weekday:'long' });
+  const staffById = {};
+  staffAll.forEach(s => staffById[String(s.id)] = s);
 
-  const isWeekendDay = ds => {
-    const d = new Date(ds + 'T00:00:00').getDay();
-    return d === 0 || d === 6;
-  };
+  const days = [];
+  for(let i=0; i<14; i++){
+    const d = new Date(wkS);
+    d.setDate(d.getDate() + i);
+    days.push(FD(d));
+  }
 
   const cleanType = v => {
     const t = String(v || '').toLowerCase();
@@ -4564,176 +4671,272 @@ function viewPhoto(inPhoto,outPhoto){
     return v || 'Leave';
   };
 
-  const paidHrsFromTimes = (start, end, breakMin = 30) => {
-    if(!start || !end) return 0;
-    return ROUND30(Math.max(0, (MD(start, end) - (breakMin || 0)) / 60));
+  const isWeekendDay = ds => {
+    const d = new Date(ds + 'T00:00:00').getDay();
+    return d === 0 || d === 6;
   };
 
-  const entries = [];
+  const dayLabel = ds =>
+    new Date(ds + 'T00:00:00').toLocaleDateString('en-AU', { weekday:'long' });
 
-  staffAll
-    .slice()
-    .sort((a,b)=>((a.first||'')+' '+(a.last||'')).localeCompare((b.first||'')+' '+(b.last||'')))
-    .forEach(emp => {
-      const empName = `${emp.first || ''} ${emp.last || ''}`.trim();
-      const role = emp.role || '';
+  const byEmp = {};
+  staffAll.forEach(emp => {
+    byEmp[String(emp.id)] = [];
+  });
 
-      for(let i=0; i<14; i++){
-        const d = new Date(wkS);
-        d.setDate(d.getDate() + i);
-        const ds = FD(d);
+  // Use the same cleaned rows as the on-screen timesheet.
+  days.forEach(ds => {
+    const rows = buildTSRows(ds);
 
-        const normalShifts = shifts
-          .filter(s =>
-            String(s.empId) === String(emp.id) &&
-            s.date === ds &&
-            !s.isOT &&
-            s.entryType !== 'leave' &&
-            s.entry_type !== 'leave'
-          )
-          .sort((a,b)=>(a.start || '').localeCompare(b.start || ''));
+    rows.forEach(r => {
+      const empId = String(r.emp?.id || r.s?.empId || '');
+      if(!empId || !byEmp[empId]) return;
 
-        const approvedOTs = otReqs
-          .filter(o =>
-            String(o.empId) === String(emp.id) &&
-            o.date === ds &&
-            (
-              String(o.status || '').toLowerCase() === 'approved' ||
-              o.approved === true
-            )
-          )
-          .sort((a,b)=>(a.start || '').localeCompare(b.start || ''));
+      const isPartialLeave = tsIsPartialLeave(r.s);
+      const type = isPartialLeave
+        ? cleanType(r.status || r.s.leaveType || r.s.status)
+        : r.isSick
+          ? 'Sick'
+          : r.isLeave
+            ? cleanType(r.status)
+            : isWeekendDay(ds)
+              ? 'Weekend'
+              : 'Ordinary';
 
-        const sickDay = sick.find(s =>
-          String(s.empId) === String(emp.id) &&
-          s.date === ds
-        );
+      const hrs = ROUND30(Number(
+        r.approvedHrs ??
+        r.actualHrs ??
+        r.sHrs ??
+        0
+      ));
 
-        const leaveDay = lr.find(l =>
-          String(l.empId) === String(emp.id) &&
-          String(l.status || '').toLowerCase() === 'approved' &&
-          l.from <= ds &&
-          l.to >= ds
-        );
+      if(hrs <= 0) return;
 
-        if(normalShifts.length){
-          normalShifts.forEach(s => {
-            const baseStart = s.otOriginalStart || s.ot_original_start || s.start;
-            const baseEnd = s.otOriginalEnd || s.ot_original_end || s.end;
+      byEmp[empId].push({
+        date: ds,
+        day: dayLabel(ds),
+        type,
+        status: isPartialLeave ? `${type} - Partial Leave` : type,
+        start: r.s?.start || '',
+        end: r.s?.end || '',
+        hrs
+      });
+    });
+  });
 
-            let rowType = isWeekendDay(ds) ? 'Weekend' : 'Ordinary';
-            let status = rowType;
-            let hrs = paidHrsFromTimes(baseStart, baseEnd, s.breakMin || s.break_min || 30);
+  // Add approved OT as its own separate payroll line.
+  getApprovedTSOTsForRange(ws, we).forEach(o => {
+    const empId = String(o.empId || '');
+    if(!byEmp[empId]) return;
 
-            if(sickDay){
-              rowType = 'Sick';
-              status = 'Sick';
-            } else if(leaveDay){
-              rowType = cleanType(leaveDay.type);
-              status = rowType;
-            }
+    const hrs = ROUND30(Math.max(0, MD(o.start, o.end) / 60));
+    if(hrs <= 0) return;
 
-            entries.push({
-              employee: empName,
-              role,
-              date: ds,
-              day: dayLabel(ds),
-              rowType,
-              status,
-              start: baseStart || '',
-              end: baseEnd || '',
-              hrs: ROUND30(hrs || 0)
-            });
-          });
-        } else if(leaveDay){
-          const dow = new Date(ds + 'T00:00:00')
-            .toLocaleDateString('en-US', { weekday: 'short' });
+    byEmp[empId].push({
+      date: o.date,
+      day: dayLabel(o.date),
+      type: 'OT',
+      status: 'OT',
+      start: o.start || '',
+      end: o.end || '',
+      hrs
+    });
+  });
 
-          const cHrs =
-            emp.contractPerDay?.[dow] ||
-            emp.contractedHrsPerDay ||
-            emp.contractedHrs ||
-            0;
+  const aoa = [];
+  const rowMeta = [];
 
-          entries.push({
-            employee: empName,
-            role,
-            date: ds,
-            day: dayLabel(ds),
-            rowType: cleanType(leaveDay.type),
-            status: cleanType(leaveDay.type),
-            start: emp.contractStart || '',
-            end: emp.contractEnd || '',
-            hrs: ROUND30(cHrs)
-          });
-        }
+  aoa.push([fileLabel, '', '', '', '', '', '', '', '']);
+  rowMeta.push('title');
 
-        approvedOTs.forEach(o => {
-          const otHrs = ROUND30(Math.max(0, MD(o.start, o.end) / 60));
+  aoa.push(['', '', '', '', '', '', '', '', '']);
+  rowMeta.push('blank');
 
-          if(otHrs > 0){
-            entries.push({
-              employee: empName,
-              role,
-              date: ds,
-              day: dayLabel(ds),
-              rowType: 'OT',
-              status: 'OT',
-              start: o.start || '',
-              end: o.end || '',
-              hrs: otHrs
-            });
-          }
-        });
-      }
+  staffAll.forEach(emp => {
+    const empId = String(emp.id);
+    const empRows = (byEmp[empId] || [])
+      .sort((a,b)=>(a.date || '').localeCompare(b.date || '') || (a.start || '').localeCompare(b.start || ''));
 
-      const empEntries = entries.filter(r => r.employee === empName);
+    if(!empRows.length) return;
 
-      if(empEntries.length){
-        const ordinary = empEntries.filter(r => r.rowType === 'Ordinary').reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
-        const weekend = empEntries.filter(r => r.rowType === 'Weekend').reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
-        const overtime = empEntries.filter(r => r.rowType === 'OT').reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
-        const leave = empEntries.filter(r => ['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.rowType)).reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
+    const empName = `${emp.first || ''} ${emp.last || ''}`.trim();
 
-        entries.push({
-          employee: empName,
-          role,
-          date: '',
-          day: '',
-          rowType: 'TOTAL',
-          status: `Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${overtime.toFixed(2)}h | Leave ${leave.toFixed(2)}h`,
-          start: '',
-          end: '',
-          hrs: ROUND30(ordinary + weekend + overtime + leave)
-        });
-      }
+    aoa.push([empName, emp.role || '', '', '', '', '', '', '', '']);
+    rowMeta.push('employee');
+
+    aoa.push(['Date','Day','Type','Status','Start','End','Hours','','']);
+    rowMeta.push('header');
+
+    empRows.forEach(r => {
+      aoa.push([
+        r.date,
+        r.day,
+        r.type,
+        r.status,
+        r.start,
+        r.end,
+        Number(r.hrs || 0),
+        '',
+        ''
+      ]);
+      rowMeta.push(r.type);
     });
 
-  const aoa = [
-    [fileLabel],
-    [],
-    ['Employee','Role','Date','Day','Row Type','Status','Rostered Start','Rostered End','Hrs']
-  ];
+    const ordinary = empRows.filter(r=>r.type === 'Ordinary').reduce((t,r)=>t+Number(r.hrs||0),0);
+    const weekend = empRows.filter(r=>r.type === 'Weekend').reduce((t,r)=>t+Number(r.hrs||0),0);
+    const ot = empRows.filter(r=>r.type === 'OT').reduce((t,r)=>t+Number(r.hrs||0),0);
+    const leave = empRows.filter(r=>['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.type)).reduce((t,r)=>t+Number(r.hrs||0),0);
+    const total = ordinary + weekend + ot + leave;
 
-  entries.forEach(r => {
-    aoa.push([r.employee, r.role, r.date, r.day, r.rowType, r.status, r.start, r.end, Number(r.hrs || 0)]);
+    aoa.push([
+      'TOTAL',
+      '',
+      '',
+      `Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${ot.toFixed(2)}h | Leave ${leave.toFixed(2)}h`,
+      '',
+      '',
+      ROUND30(total),
+      '',
+      ''
+    ]);
+    rowMeta.push('total');
+
+    aoa.push(['', '', '', '', '', '', '', '', '']);
+    rowMeta.push('blank');
   });
 
   const wsSheet = XLSX.utils.aoa_to_sheet(aoa);
-  wsSheet['!merges'] = [{ s:{r:0,c:0}, e:{r:0,c:8} }];
-  wsSheet['!autofilter'] = { ref: `A3:I${aoa.length}` };
+
+  wsSheet['!merges'] = [
+    { s:{r:0,c:0}, e:{r:0,c:8} }
+  ];
+
+  // Merge employee name rows and total description rows.
+  rowMeta.forEach((m, idx) => {
+    if(m === 'employee'){
+      wsSheet['!merges'].push({ s:{r:idx,c:0}, e:{r:idx,c:8} });
+    }
+    if(m === 'total'){
+      wsSheet['!merges'].push({ s:{r:idx,c:0}, e:{r:idx,c:2} });
+      wsSheet['!merges'].push({ s:{r:idx,c:3}, e:{r:idx,c:5} });
+    }
+  });
+
+  wsSheet['!cols'] = [
+    { wch: 13 },
+    { wch: 14 },
+    { wch: 16 },
+    { wch: 42 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 3 },
+    { wch: 3 }
+  ];
+
+  wsSheet['!rows'] = rowMeta.map(m => ({
+    hpt:
+      m === 'title' ? 26 :
+      m === 'blank' ? 12 :
+      m === 'employee' ? 22 :
+      m === 'header' ? 20 :
+      m === 'total' ? 22 :
+      18
+  }));
+
+  const range = XLSX.utils.decode_range(wsSheet['!ref']);
+
+  const borderThin = {
+    top: { style:'thin', color:{ rgb:'000000' } },
+    bottom: { style:'thin', color:{ rgb:'000000' } },
+    left: { style:'thin', color:{ rgb:'000000' } },
+    right: { style:'thin', color:{ rgb:'000000' } }
+  };
+
+  for(let R = range.s.r; R <= range.e.r; R++){
+    for(let C = range.s.c; C <= range.e.c; C++){
+      const addr = XLSX.utils.encode_cell({r:R,c:C});
+      if(!wsSheet[addr]) wsSheet[addr] = { t:'s', v:'' };
+
+      const meta = rowMeta[R];
+
+      wsSheet[addr].s = {
+        font: { name:'Arial', sz:10, color:{ rgb:'000000' } },
+        alignment: {
+          vertical:'center',
+          horizontal: C === 6 ? 'right' : 'left',
+          wrapText:true
+        },
+        border: meta === 'blank' ? {} : borderThin
+      };
+
+      if(meta === 'title'){
+        wsSheet[addr].s = {
+          font: { name:'Arial', sz:14, bold:true, color:{ rgb:'000000' } },
+          fill: { fgColor:{ rgb:'F4D35E' } },
+          alignment: { horizontal:'center', vertical:'center' },
+          border: borderThin
+        };
+      }
+
+      if(meta === 'employee'){
+        wsSheet[addr].s = {
+          font: { name:'Arial', sz:11, bold:true, color:{ rgb:'000000' } },
+          fill: { fgColor:{ rgb:'D9D9D9' } },
+          alignment: { horizontal:'left', vertical:'center' },
+          border: borderThin
+        };
+      }
+
+      if(meta === 'header'){
+        wsSheet[addr].s = {
+          font: { name:'Arial', sz:10, bold:true, color:{ rgb:'000000' } },
+          fill: { fgColor:{ rgb:'F4D35E' } },
+          alignment: { horizontal:'center', vertical:'center', wrapText:true },
+          border: borderThin
+        };
+      }
+
+      if(meta === 'Annual Leave' || meta === 'Personal Leave' || meta === 'Unpaid Leave' || meta === 'Leave'){
+        wsSheet[addr].s.fill = { fgColor:{ rgb:'FFF2CC' } };
+      }
+
+      if(meta === 'Sick'){
+        wsSheet[addr].s.fill = { fgColor:{ rgb:'FCE4D6' } };
+      }
+
+      if(meta === 'OT'){
+        wsSheet[addr].s.fill = { fgColor:{ rgb:'E2F0D9' } };
+      }
+
+      if(meta === 'Weekend'){
+        wsSheet[addr].s.fill = { fgColor:{ rgb:'EDEDED' } };
+      }
+
+      if(meta === 'total'){
+        wsSheet[addr].s = {
+          font: { name:'Arial', sz:10, bold:true, color:{ rgb:'000000' } },
+          fill: { fgColor:{ rgb:'D9D9D9' } },
+          alignment: {
+            horizontal: C === 6 ? 'right' : 'left',
+            vertical:'center',
+            wrapText:true
+          },
+          border: borderThin
+        };
+      }
+
+      if(C === 6 && meta !== 'title' && meta !== 'employee' && meta !== 'header' && meta !== 'blank'){
+        wsSheet[addr].z = '0.00';
+      }
+    }
+  }
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, wsSheet, 'Timesheet');
   XLSX.writeFile(wb, `${fileLabel}.xlsx`);
 }
   
-function viewPhoto(inPhoto,outPhoto){
-  document.getElementById('photo-view-body').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-    <div><div style="font-size:11px;color:var(--t2);margin-bottom:4px">Clock in</div>${inPhoto?`<img src="${inPhoto}" style="width:100%;border-radius:var(--rsm);border:1px solid var(--border)">`:'<div style="height:160px;background:var(--s2);border-radius:var(--rsm);display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:11px">No photo</div>'}</div>
-    <div><div style="font-size:11px;color:var(--t2);margin-bottom:4px">Clock out</div>${outPhoto?`<img src="${outPhoto}" style="width:100%;border-radius:var(--rsm);border:1px solid var(--border)">`:'<div style="height:160px;background:var(--s2);border-radius:var(--rsm);display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:11px">No photo</div>'}</div>
-  </div>`;OM('m-photo-view');
-}
 // MC
 function viewMC(mcId){
   const mcs=DB.get('medCerts')||[];

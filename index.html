@@ -4459,7 +4459,8 @@ function viewPhoto(inPhoto,outPhoto){
     <div><div style="font-size:11px;color:var(--t2);margin-bottom:4px">Clock out</div>${outPhoto?`<img src="${outPhoto}" style="width:100%;border-radius:var(--rsm);border:1px solid var(--border)">`:'<div style="height:160px;background:var(--s2);border-radius:var(--rsm);display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:11px">No photo</div>'}</div>
   </div>`;OM('m-photo-view');
 }
-function exportCSV(){
+
+  function exportCSV(){
   const sv = document.getElementById('ts-week')?.value;
 
   if(!sv){
@@ -4472,12 +4473,9 @@ function exportCSV(){
     return;
   }
 
-  const wkS = new Date(sv + 'T00:00:00');
+  const wkS = new Date(sv);
   const wkE = new Date(wkS);
   wkE.setDate(wkE.getDate() + 13);
-
-  const ws = FD(wkS);
-  const we = FD(wkE);
 
   const shortDate = d =>
     String(d.getDate()).padStart(2,'0') + '.' +
@@ -4508,6 +4506,11 @@ function exportCSV(){
     return v || 'Leave';
   };
 
+  const paidHrsFromTimes = (start, end, breakMin = 30) => {
+    if(!start || !end) return 0;
+    return ROUND30(Math.max(0, (MD(start, end) - (breakMin || 0)) / 60));
+  };
+
   const entries = [];
 
   staffAll
@@ -4523,12 +4526,18 @@ function exportCSV(){
         const ds = FD(d);
 
         const normalShifts = shifts
-          .filter(s => s.empId === emp.id && s.date === ds && !s.isOT)
+          .filter(s =>
+            String(s.empId) === String(emp.id) &&
+            s.date === ds &&
+            !s.isOT &&
+            s.entryType !== 'leave' &&
+            s.entry_type !== 'leave'
+          )
           .sort((a,b)=>(a.start || '').localeCompare(b.start || ''));
 
         const approvedOTs = otReqs
           .filter(o =>
-            o.empId === emp.id &&
+            String(o.empId) === String(emp.id) &&
             o.date === ds &&
             (
               String(o.status || '').toLowerCase() === 'approved' ||
@@ -4537,10 +4546,13 @@ function exportCSV(){
           )
           .sort((a,b)=>(a.start || '').localeCompare(b.start || ''));
 
-        const sickDay = sick.find(s => s.empId === emp.id && s.date === ds);
+        const sickDay = sick.find(s =>
+          String(s.empId) === String(emp.id) &&
+          s.date === ds
+        );
 
         const leaveDay = lr.find(l =>
-          l.empId === emp.id &&
+          String(l.empId) === String(emp.id) &&
           String(l.status || '').toLowerCase() === 'approved' &&
           l.from <= ds &&
           l.to >= ds
@@ -4548,9 +4560,12 @@ function exportCSV(){
 
         if(normalShifts.length){
           normalShifts.forEach(s => {
+            const baseStart = s.otOriginalStart || s.ot_original_start || s.start;
+            const baseEnd = s.otOriginalEnd || s.ot_original_end || s.end;
+
             let rowType = isWeekendDay(ds) ? 'Weekend' : 'Ordinary';
             let status = rowType;
-            let hrs = SH(s);
+            let hrs = paidHrsFromTimes(baseStart, baseEnd, s.breakMin || s.break_min || 30);
 
             if(sickDay){
               rowType = 'Sick';
@@ -4567,8 +4582,8 @@ function exportCSV(){
               day: dayLabel(ds),
               rowType,
               status,
-              start: s.start || '',
-              end: s.end || '',
+              start: baseStart || '',
+              end: baseEnd || '',
               hrs: ROUND30(hrs || 0)
             });
           });
@@ -4617,23 +4632,10 @@ function exportCSV(){
       const empEntries = entries.filter(r => r.employee === empName);
 
       if(empEntries.length){
-        const ordinary = empEntries
-          .filter(r => r.rowType === 'Ordinary')
-          .reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
-
-        const weekend = empEntries
-          .filter(r => r.rowType === 'Weekend')
-          .reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
-
-        const overtime = empEntries
-          .filter(r => r.rowType === 'OT')
-          .reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
-
-        const leave = empEntries
-          .filter(r => ['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.rowType))
-          .reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
-
-        const total = ordinary + weekend + overtime + leave;
+        const ordinary = empEntries.filter(r => r.rowType === 'Ordinary').reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
+        const weekend = empEntries.filter(r => r.rowType === 'Weekend').reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
+        const overtime = empEntries.filter(r => r.rowType === 'OT').reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
+        const leave = empEntries.filter(r => ['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.rowType)).reduce((t,r)=>t + (Number(r.hrs) || 0), 0);
 
         entries.push({
           employee: empName,
@@ -4644,7 +4646,7 @@ function exportCSV(){
           status: `Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${overtime.toFixed(2)}h | Leave ${leave.toFixed(2)}h`,
           start: '',
           end: '',
-          hrs: ROUND30(total)
+          hrs: ROUND30(ordinary + weekend + overtime + leave)
         });
       }
     });
@@ -4656,108 +4658,18 @@ function exportCSV(){
   ];
 
   entries.forEach(r => {
-    aoa.push([
-      r.employee,
-      r.role,
-      r.date,
-      r.day,
-      r.rowType,
-      r.status,
-      r.start,
-      r.end,
-      Number(r.hrs || 0)
-    ]);
+    aoa.push([r.employee, r.role, r.date, r.day, r.rowType, r.status, r.start, r.end, Number(r.hrs || 0)]);
   });
 
   const wsSheet = XLSX.utils.aoa_to_sheet(aoa);
-
   wsSheet['!merges'] = [{ s:{r:0,c:0}, e:{r:0,c:8} }];
-
-  wsSheet['!cols'] = [
-    { wch: 24 },
-    { wch: 22 },
-    { wch: 12 },
-    { wch: 14 },
-    { wch: 16 },
-    { wch: 48 },
-    { wch: 16 },
-    { wch: 16 },
-    { wch: 10 }
-  ];
-
-  const range = XLSX.utils.decode_range(wsSheet['!ref']);
-
-  for(let R = range.s.r; R <= range.e.r; R++){
-    for(let C = range.s.c; C <= range.e.c; C++){
-      const addr = XLSX.utils.encode_cell({r:R,c:C});
-      if(!wsSheet[addr]) continue;
-
-      wsSheet[addr].s = {
-        font: { name:'Arial', sz:10 },
-        alignment: { vertical:'center', horizontal:C === 8 ? 'right' : 'left', wrapText:true },
-        border: {
-          top: { style:'thin', color:{ rgb:'D9D9D9' } },
-          bottom: { style:'thin', color:{ rgb:'D9D9D9' } },
-          left: { style:'thin', color:{ rgb:'D9D9D9' } },
-          right: { style:'thin', color:{ rgb:'D9D9D9' } }
-        }
-      };
-    }
-  }
-
-  for(let C = 0; C <= 8; C++){
-    const addr = XLSX.utils.encode_cell({r:2,c:C});
-    if(wsSheet[addr]){
-      wsSheet[addr].s = {
-        font: { bold:true, color:{ rgb:'000000' }, name:'Arial', sz:10 },
-        fill: { fgColor:{ rgb:'F4D35E' } },
-        alignment: { vertical:'center', horizontal:'center', wrapText:true },
-        border: {
-          top: { style:'thin', color:{ rgb:'000000' } },
-          bottom: { style:'thin', color:{ rgb:'000000' } },
-          left: { style:'thin', color:{ rgb:'000000' } },
-          right: { style:'thin', color:{ rgb:'000000' } }
-        }
-      };
-    }
-  }
-
-  if(wsSheet['A1']){
-    wsSheet['A1'].s = {
-      font: { bold:true, sz:14, name:'Arial' },
-      alignment: { horizontal:'center', vertical:'center' }
-    };
-  }
-
-  for(let R = 3; R <= range.e.r; R++){
-    const rowTypeCell = wsSheet[XLSX.utils.encode_cell({r:R,c:4})];
-    if(rowTypeCell && rowTypeCell.v === 'TOTAL'){
-      for(let C = 0; C <= 8; C++){
-        const addr = XLSX.utils.encode_cell({r:R,c:C});
-        if(wsSheet[addr]){
-          wsSheet[addr].s = {
-            font: { bold:true, name:'Arial', sz:10 },
-            fill: { fgColor:{ rgb:'EFEFEF' } },
-            alignment: { vertical:'center', horizontal:C === 8 ? 'right' : 'left', wrapText:true },
-            border: {
-              top: { style:'thin', color:{ rgb:'000000' } },
-              bottom: { style:'thin', color:{ rgb:'000000' } },
-              left: { style:'thin', color:{ rgb:'D9D9D9' } },
-              right: { style:'thin', color:{ rgb:'D9D9D9' } }
-            }
-          };
-        }
-      }
-    }
-  }
-
   wsSheet['!autofilter'] = { ref: `A3:I${aoa.length}` };
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, wsSheet, 'Timesheet');
-
   XLSX.writeFile(wb, `${fileLabel}.xlsx`);
 }
+  
 function viewPhoto(inPhoto,outPhoto){
   document.getElementById('photo-view-body').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
     <div><div style="font-size:11px;color:var(--t2);margin-bottom:4px">Clock in</div>${inPhoto?`<img src="${inPhoto}" style="width:100%;border-radius:var(--rsm);border:1px solid var(--border)">`:'<div style="height:160px;background:var(--s2);border-radius:var(--rsm);display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:11px">No photo</div>'}</div>

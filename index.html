@@ -4736,9 +4736,15 @@ function exportCSV(){
     return;
   }
 
-  const wkS = new Date(sv + 'T00:00:00');
-  const wkE = new Date(wkS);
-  wkE.setDate(wkE.getDate() + 13);
+const wkS = new Date(sv);
+
+if(isNaN(wkS.getTime())){
+  alert('Invalid fortnight date selected. Please refresh the page and select the fortnight again.');
+  return;
+}
+
+const wkE = new Date(wkS);
+wkE.setDate(wkE.getDate() + 13);
 
   const ws = FD(wkS);
   const we = FD(wkE);
@@ -4756,12 +4762,12 @@ function exportCSV(){
   const staffById = {};
   staffAll.forEach(s => staffById[String(s.id)] = s);
 
-  const days = [];
-  for(let i=0; i<14; i++){
-    const d = new Date(wkS);
-    d.setDate(d.getDate() + i);
-    days.push(FD(d));
-  }
+const days = [];
+for(let i = 0; i < 14; i++){
+  const d = new Date(wkS);
+  d.setDate(d.getDate() + i);
+  days.push(FD(d));
+}
 
   const cleanType = v => {
     const t = String(v || '').toLowerCase();

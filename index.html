@@ -4152,19 +4152,19 @@ function getApprovedTSOTsForRange(startDs, endDs){
 }
 
 function buildTSRows(dayDate){
-  const staff = [...(DB.get('staff') || [])].sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
-  const rawShifts = DB.get('shifts') || [];
+  const staff = [...(DB.get('staff') || [])]
+    .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
+
   const ce = DB.get('clockEvents') || [];
   const lr = (DB.get('leaveRequests') || []).filter(l => l.status === 'approved');
   const sd = DB.get('sickDays') || [];
   const otReqs = (DB.get('otRequests') || []).filter(o => o.approved === true);
   const settings = DB.get('settings') || { dailyOT: true, dailyOTHours: 8, gracePeriod: 5 };
-  const ds = dayDate;
-  const staffIds = new Set(staff.map(s => String(s.id)));
-const shifts = normaliseTimesheetShifts(rawShifts, staffIds);
 
-const dayShifts = shifts.filter(s => String(s.date) === String(ds));
-);
+  const ds = dayDate;
+  const shifts = getCleanTSShiftsForRange(ds, ds);
+  const dayShifts = shifts.filter(s => String(s.date) === String(ds));
+
   const rows = [];
 
   // Get contracted daily hours for a staff member on a given day
@@ -4378,62 +4378,163 @@ rows.push({
 }
 
 function renderTS(){
-  const sv=document.getElementById('ts-week').value;
-  if(!sv)return;
+  const sv = document.getElementById('ts-week').value;
+  if(!sv) return;
 
-const wkS=new Date(sv);
-const wkE=new Date(wkS);
-wkE.setDate(wkE.getDate()+13);
+  const wkS = new Date(sv + 'T00:00:00');
+  const wkE = new Date(wkS);
+  wkE.setDate(wkE.getDate() + 13);
 
-// Build 14 days
-const days=[];
-for(let i=0;i<14;i++){
-  const d=new Date(wkS);
-  d.setDate(d.getDate()+i);
-  days.push(FD(d));
-}
-  // Summary totals across whole week
-  const staffForTS = DB.get('staff') || [];
-  const staffIdsForTS = new Set(staffForTS.map(s => String(s.id)));
-  const shifts = normaliseTimesheetShifts(DB.get('shifts') || [], staffIdsForTS);const ce=DB.get('clockEvents')||[];const ch=DB.get('customHours')||[];
-  const lr=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');const sd=DB.get('sickDays')||[];
-  const settings=DB.get('settings')||{dailyOT:true,dailyOTHours:8};
-  const ws=FD(wkS),we=FD(wkE);
-  const wShifts=shifts.filter(s=>s.date>=ws&&s.date<=we&&!s.isOT&&(DB.get('staff')||[]).some(e=>e.id===s.empId));
-  let totR=0,totW=0,totOT=0,totApproved=0,totCount=0;
-  wShifts.forEach(s=>{
-    totR+=SH(s);
-    const ci=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='clock-in');
-    const co=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='clock-out');
-    const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===s.date);
-    const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=s.date&&l.to>=s.date);
-    if(!isSick&&!isLeave&&ci&&co){const bMin=(()=>{const bs=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-start');const be=ce.find(e=>e.empId===s.empId&&e.date===s.date&&e.type==='break-end');return(bs&&be)?MD(bs.time,be.time):s.breakMin;})();const aHrs=Math.max(0,(MD(ci.time,co.time)-bMin)/60);totW+=aHrs;if(settings.dailyOT&&aHrs>parseFloat(settings.dailyOTHours))totOT+=aHrs-parseFloat(settings.dailyOTHours);}
-    const c=ch.find(x=>x.empId===s.empId&&x.date===s.date);if(c&&c.approved)totApproved++;
+  const ws = FD(wkS);
+  const we = FD(wkE);
+
+  // Build 14 days
+  const days = [];
+  for(let i = 0; i < 14; i++){
+    const d = new Date(wkS);
+    d.setDate(d.getDate() + i);
+    days.push(FD(d));
+  }
+
+  // Use cleaned/deduped timesheet shifts only
+  const shifts = getCleanTSShiftsForRange(ws, we);
+
+  const ce = DB.get('clockEvents') || [];
+  const ch = DB.get('customHours') || [];
+  const lr = (DB.get('leaveRequests') || []).filter(l => l.status === 'approved');
+  const sd = DB.get('sickDays') || [];
+  const settings = DB.get('settings') || { dailyOT:true, dailyOTHours:8, gracePeriod:5 };
+  const staff = DB.get('staff') || [];
+
+  const wShifts = shifts.filter(s =>
+    s.date >= ws &&
+    s.date <= we &&
+    !s.isOT &&
+    staff.some(e => String(e.id) === String(s.empId))
+  );
+
+  let totR = 0;
+  let totW = 0;
+  let totOT = 0;
+  let totApproved = 0;
+  let totCount = 0;
+
+  wShifts.forEach(s => {
+    const isPartialLeave = s.entryType === 'leave' || s.entry_type === 'leave';
+
+    if(isPartialLeave){
+      const leaveHrs = ROUND30(Math.max(0, MD(s.start, s.end) / 60));
+      totR += leaveHrs;
+      totW += leaveHrs;
+      totCount++;
+      return;
+    }
+
+    totR += SH(s);
+
+    const ci = ce.find(e =>
+      String(e.empId) === String(s.empId) &&
+      e.date === s.date &&
+      e.type === 'clock-in'
+    );
+
+    const co = ce.find(e =>
+      String(e.empId) === String(s.empId) &&
+      e.date === s.date &&
+      e.type === 'clock-out'
+    );
+
+    const isSick = sd.find(sk =>
+      String(sk.empId) === String(s.empId) &&
+      sk.date === s.date
+    );
+
+    const isLeave = lr.find(l =>
+      String(l.empId) === String(s.empId) &&
+      l.from <= s.date &&
+      l.to >= s.date
+    );
+
+    if(!isSick && !isLeave && ci && co){
+      const bs = ce.find(e =>
+        String(e.empId) === String(s.empId) &&
+        e.date === s.date &&
+        e.type === 'break-start'
+      );
+
+      const be = ce.find(e =>
+        String(e.empId) === String(s.empId) &&
+        e.date === s.date &&
+        e.type === 'break-end'
+      );
+
+      const bMin = (bs && be)
+        ? MD(bs.time, be.time)
+        : s.breakMin;
+
+      const aHrs = Math.max(0, (MD(ci.time, co.time) - bMin) / 60);
+
+      totW += aHrs;
+
+      if(settings.dailyOT && aHrs > parseFloat(settings.dailyOTHours)){
+        totOT += aHrs - parseFloat(settings.dailyOTHours);
+      }
+    }
+
+    const c = ch.find(x =>
+      String(x.empId) === String(s.empId) &&
+      x.date === s.date
+    );
+
+    if(c && c.approved) totApproved++;
     totCount++;
   });
-  document.getElementById('ts-summary').innerHTML=`
+
+  document.getElementById('ts-summary').innerHTML = `
     <div class="sc"><div class="sl">Rostered hrs</div><div class="sv">${totR.toFixed(1)}</div></div>
     <div class="sc"><div class="sl">Worked hrs</div><div class="sv">${totW.toFixed(1)}</div></div>
     <div class="sc"><div class="sl">OT hrs</div><div class="sv" style="color:var(--rd)">${totOT.toFixed(1)}</div></div>
-    <div class="sc"><div class="sl">Diff</div><div class="sv" style="font-size:16px;color:${totW-totR<0?'var(--amber)':'var(--td)'}">${totW-totR>=0?'+':''}${(totW-totR).toFixed(1)}h</div></div>
-    <div class="sc"><div class="sl">Approved</div><div class="sv">${totApproved}/${totCount}</div></div>`;
+    <div class="sc"><div class="sl">Diff</div><div class="sv" style="font-size:16px;color:${totW - totR < 0 ? 'var(--amber)' : 'var(--td)'}">${totW - totR >= 0 ? '+' : ''}${(totW - totR).toFixed(1)}h</div></div>
+    <div class="sc"><div class="sl">Approved</div><div class="sv">${totApproved}/${totCount}</div></div>
+  `;
+
   // Build day tabs
-  const tabsEl=document.getElementById('ts-day-tabs');
-  const DNAMES=['Mon','Tue','Wed','Thu','Fri','Sat','Sun','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  tabsEl.innerHTML=days.map((ds,i)=>{
-    const dayShifts=wShifts.filter(s=>s.date===ds);
-    const hasFlags=dayShifts.some(s=>{
-      const ci=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-in');
-      if(!ci)return false;
-      const grace=parseInt(settings.gracePeriod)||5;
-      return Math.abs(MD(s.start,ci.time))>grace;
+  const tabsEl = document.getElementById('ts-day-tabs');
+  const DNAMES = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  tabsEl.innerHTML = days.map((ds, i) => {
+    const dayShifts = wShifts.filter(s => s.date === ds);
+
+    const hasFlags = dayShifts.some(s => {
+      const isPartialLeave = s.entryType === 'leave' || s.entry_type === 'leave';
+      if(isPartialLeave) return false;
+
+      const ci = ce.find(e =>
+        String(e.empId) === String(s.empId) &&
+        e.date === ds &&
+        e.type === 'clock-in'
+      );
+
+      if(!ci) return false;
+
+      const grace = parseInt(settings.gracePeriod) || 5;
+      return Math.abs(MD(s.start, ci.time)) > grace;
     });
-    const d=new Date(ds+'T00:00:00');
-    const label=`${DNAMES[i]} ${d.getDate()}/${d.getMonth()+1}`;
-    const shiftCount=dayShifts.length;
-    return`<button class="ts-day-tab${i===tsDayIndex?' active':''}${hasFlags?' has-flags':''}" onclick="selectTSDay(${i})">${label}${shiftCount>0?`<span style="margin-left:5px;font-size:9px;background:var(--pl);color:var(--pd);padding:1px 5px;border-radius:10px">${shiftCount}</span>`:''}${hasFlags?'<span style="margin-left:3px" title="Has timing flags">⚠</span>':''}</button>`;
+
+    const d = new Date(ds + 'T00:00:00');
+    const label = `${DNAMES[i]} ${d.getDate()}/${d.getMonth()+1}`;
+    const shiftCount = dayShifts.length;
+
+    return `
+      <button class="ts-day-tab${i === tsDayIndex ? ' active' : ''}${hasFlags ? ' has-flags' : ''}" onclick="selectTSDay(${i})">
+        ${label}
+        ${shiftCount > 0 ? `<span style="margin-left:5px;font-size:9px;background:var(--pl);color:var(--pd);padding:1px 5px;border-radius:10px">${shiftCount}</span>` : ''}
+        ${hasFlags ? '<span style="margin-left:3px" title="Has timing flags">⚠</span>' : ''}
+      </button>
+    `;
   }).join('');
-  renderTSDayBody(days[tsDayIndex]||days[0]);
+
+  renderTSDayBody(days[tsDayIndex] || days[0]);
 }
 
 function selectTSDay(idx){

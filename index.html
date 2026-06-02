@@ -818,13 +818,17 @@ let selectedShiftIds = new Set();
 </div>
 <div class="modal-overlay" id="m-sick-quick">
   <div class="modal">
-    <div class="mh"><h2>Mark shift as sick</h2><button class="xbtn" onclick="CM('m-sick-quick')">×</button></div>
-    <div class="alert aw">This will mark the shift as sick, sync with payroll and the leave tracker, and prompt the employee to upload a medical certificate.</div>
+    <div class="mh"><h2 id="sick-quick-title">Mark sick leave</h2><button class="xbtn" onclick="CM('m-sick-quick')">×</button></div>
+    <div class="alert aw">This records sick leave across the selected date range, syncs each sick day with payroll/timesheets, and only requires one medical certificate for the whole sick-leave period.</div>
     <div id="sick-quick-body"></div>
+    <div class="fg">
+      <div class="fr"><label>From date</label><input type="date" id="sick-quick-from"></div>
+      <div class="fr"><label>To date</label><input type="date" id="sick-quick-to"></div>
+    </div>
     <div class="fr"><label>Notes</label><textarea id="sick-quick-notes" rows="2" placeholder="Optional notes..."></textarea></div>
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="btn" onclick="CM('m-sick-quick')">Cancel</button>
-      <button class="btn btn-danger" onclick="confirmSickQuick()">Confirm sick</button>
+      <button class="btn btn-danger" onclick="confirmSickQuick()">Save sick leave</button>
     </div>
   </div>
 </div>
@@ -1878,7 +1882,7 @@ function openSickPopup(event, empId, date) {
   closeShiftPopup();
   const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
   const sk=(DB.get('sickDays')||[]).find(s=>s.empId===empId&&s.date===date);
-  const mc=(DB.get('medCerts')||[]).find(m=>m.empId===empId&&m.date===date);
+  const mc=findMCForSickDay(empId,date);
   const shift=(DB.get('shifts')||[]).find(s=>s.empId===empId&&s.date===date&&s.published);
   const empName=emp?emp.first+' '+emp.last:'?';
 
@@ -1897,12 +1901,13 @@ function openSickPopup(event, empId, date) {
       <div style="font-size:11px;color:var(--t2)">${new Date(date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long'})}</div>
       <div style="margin:5px 0"><span class="chip chip-sick">🤒 Sick day recorded</span></div>
       ${shift?`<div style="font-size:11px;color:var(--t2)">Rostered: ${shift.start}–${shift.end} (${SH(shift).toFixed(1)}h)</div>`:''}
-      ${mc?`<div style="margin-top:4px"><span class="badge bg" style="font-size:9px">✓ MC uploaded</span></div>`:`<div style="margin-top:4px"><span class="badge ba" style="font-size:9px">⚠ MC pending</span></div>`}
+      ${mc?`<div style="margin-top:4px"><span class="badge bg" style="font-size:9px">✓ MC uploaded for this sick period</span></div>`:`<div style="margin-top:4px"><span class="badge ba" style="font-size:9px">⚠ MC pending</span></div>`}
       ${sk?.notes?`<div style="margin-top:5px;font-size:11px;color:var(--t2);font-style:italic">${sk.notes}</div>`:''}
     </div>
     <div class="shift-popup-row">
       ${mc?`<button class="shift-popup-btn" onclick="closeShiftPopup();viewMC('${mc.id}')">📎 View medical certificate</button>`:''}
-      <button class="shift-popup-btn danger" onclick="closeShiftPopup();deleteSickDay('${empId}','${date}')">↩ Remove sick day (revert to rostered)</button>
+      <button class="shift-popup-btn" onclick="openEditSickLeave('${empId}','${date}')">✏️ Edit sick leave dates</button>
+      <button class="shift-popup-btn danger" onclick="deleteSickEpisode('${empId}','${date}')">↩ Remove sick leave period</button>
     </div>`;
   document.body.appendChild(popup);
   positionPopup(popup, event);
@@ -2681,6 +2686,62 @@ setTimeout(async () => {
 }, 50);
 }
 
+// SICK LEAVE HELPERS
+function dateRangeInclusive(from,to){
+  const out=[];
+  if(!from||!to)return out;
+  let d=new Date(from+'T00:00:00');
+  const end=new Date(to+'T00:00:00');
+  if(isNaN(d)||isNaN(end)||d>end)return out;
+  while(d<=end){out.push(FD(d));d.setDate(d.getDate()+1);}
+  return out;
+}
+function sickRowsForEmp(empId){
+  return (DB.get('sickDays')||[]).filter(sk=>sk.empId===empId).sort((a,b)=>a.date.localeCompare(b.date));
+}
+function sickSpellFor(empId,date){
+  const rows=sickRowsForEmp(empId);
+  const dates=rows.map(r=>r.date);
+  if(!dates.includes(date))return {from:date,to:date,rows:[]};
+  const set=new Set(dates);
+  let from=date,to=date;
+  let d=new Date(date+'T00:00:00');
+  while(true){d.setDate(d.getDate()-1);const ds=FD(d);if(set.has(ds))from=ds;else break;}
+  d=new Date(date+'T00:00:00');
+  while(true){d.setDate(d.getDate()+1);const ds=FD(d);if(set.has(ds))to=ds;else break;}
+  return {from,to,rows:rows.filter(r=>r.date>=from&&r.date<=to)};
+}
+function findMCForSickDay(empId,date){
+  const mcs=DB.get('medCerts')||[];
+  let mc=mcs.find(m=>m.empId===empId&&m.date===date);
+  if(mc)return mc;
+  const spell=sickSpellFor(empId,date);
+  return mcs.find(m=>m.empId===empId&&m.date>=spell.from&&m.date<=spell.to)||null;
+}
+function findShiftForSickDate(empId,date){
+  return (DB.get('shifts')||[]).find(s=>s.empId===empId&&s.date===date&&s.published);
+}
+function openEditSickLeave(empId,date){
+  closeShiftPopup();
+  const emp=(DB.get('staff')||[]).find(e=>e.id===empId);
+  const spell=sickSpellFor(empId,date);
+  quickSickShiftId=(spell.rows[0]&&spell.rows[0].shiftId)||null;
+  document.getElementById('sick-quick-title').textContent='Edit sick leave';
+  document.getElementById('sick-quick-body').innerHTML=`<div style="background:var(--s2);padding:10px;border-radius:var(--rsm);margin-bottom:10px;font-size:12px"><strong>${emp?emp.first+' '+emp.last:'?'}</strong><br><span style="color:var(--t2)">Existing sick leave: ${FDS(spell.from)} – ${FDS(spell.to)}</span></div><input type="hidden" id="sick-quick-emp" value="${empId}"><input type="hidden" id="sick-quick-original-from" value="${spell.from}"><input type="hidden" id="sick-quick-original-to" value="${spell.to}">`;
+  document.getElementById('sick-quick-from').value=spell.from;
+  document.getElementById('sick-quick-to').value=spell.to;
+  document.getElementById('sick-quick-notes').value=(spell.rows.find(r=>r.notes)||{}).notes||'';
+  OM('m-sick-quick');
+}
+function deleteSickEpisode(empId,date){
+  const spell=sickSpellFor(empId,date);
+  if(!confirm(`Remove sick leave from ${FDS(spell.from)} to ${FDS(spell.to)}? The staff member will revert to rostered hours for those days.`))return;
+  let sickDays=DB.get('sickDays')||[];
+  sickDays=sickDays.filter(sk=>!(sk.empId===empId&&sk.date>=spell.from&&sk.date<=spell.to));
+  DB.set('sickDays',sickDays);
+  renderRoster();renderLeave(currentLeaveFilter);renderDashboard();
+}
+
 // QUICK SICK
 function openQuickSickFromDetail(){
   CM('m-shift-detail');
@@ -2689,36 +2750,62 @@ function openQuickSickFromDetail(){
 function openQuickSick(shiftId){
   quickSickShiftId=shiftId;
   const s=(DB.get('shifts')||[]).find(x=>x.id===shiftId);
-  const emp=(DB.get('staff')||[]).find(e=>e.id===s?.empId);
-  document.getElementById('sick-quick-body').innerHTML=`<div style="background:var(--s2);padding:10px;border-radius:var(--rsm);margin-bottom:10px;font-size:12px"><strong>${emp?emp.first+' '+emp.last:'?'}</strong><br><span style="color:var(--t2)">${FDL(s?.date)} · ${s?.start}–${s?.end}</span></div>`;
+  if(!s)return;
+  const emp=(DB.get('staff')||[]).find(e=>e.id===s.empId);
+  document.getElementById('sick-quick-title').textContent='Mark sick leave';
+  document.getElementById('sick-quick-body').innerHTML=`<div style="background:var(--s2);padding:10px;border-radius:var(--rsm);margin-bottom:10px;font-size:12px"><strong>${emp?emp.first+' '+emp.last:'?'}</strong><br><span style="color:var(--t2)">Rostered shift: ${FDL(s.date)} · ${s.start}–${s.end}</span></div><input type="hidden" id="sick-quick-emp" value="${s.empId}"><input type="hidden" id="sick-quick-original-from" value=""><input type="hidden" id="sick-quick-original-to" value="">`;
+  document.getElementById('sick-quick-from').value=s.date;
+  document.getElementById('sick-quick-to').value=s.date;
   document.getElementById('sick-quick-notes').value='';
   OM('m-sick-quick');
 }
 function confirmSickQuick(){
-  if(!quickSickShiftId)return;
-  const s=(DB.get('shifts')||[]).find(x=>x.id===quickSickShiftId);if(!s)return;
-  const sickDays=DB.get('sickDays')||[];
-  const alreadyMarked=!!sickDays.find(x=>x.empId===s.empId&&x.date===s.date);
-  if(!alreadyMarked){
-    sickDays.push({id:'sk'+Date.now(),empId:s.empId,date:s.date,shiftId:quickSickShiftId,notes:document.getElementById('sick-quick-notes').value,mcUploaded:false,ts:new Date().toISOString()});
-    DB.set('sickDays',sickDays);
-  }
-  CM('m-sick-quick');renderRoster();renderDashboard();
-  // Always send notification (even if already marked — manager may be re-notifying)
-  // Capture values before async calls
-const notifyEmpId = s.empId;
-const notifyDate = s.date;
-const emp = (DB.get('staff') || []).find(x => x.id === notifyEmpId);
+  const empId=document.getElementById('sick-quick-emp')?.value;
+  const from=document.getElementById('sick-quick-from')?.value;
+  const to=document.getElementById('sick-quick-to')?.value;
+  const originalFrom=document.getElementById('sick-quick-original-from')?.value;
+  const originalTo=document.getElementById('sick-quick-original-to')?.value;
+  const notes=document.getElementById('sick-quick-notes')?.value||'';
+  if(!empId||!from||!to)return alert('Please select a staff member and sick leave date range.');
+  const days=dateRangeInclusive(from,to);
+  if(!days.length)return alert('The sick leave end date must be the same as, or after, the start date.');
 
-sendNotification('sick_leave', {
-  empName: emp ? `${emp.first || ''} ${emp.last || ''}`.trim() : 'Staff member',
-  empEmail: emp?.email || '',
-  date: notifyDate,
-  notes: s.notes || '',
-  source: 'Manager Portal'
-})
-  .then(r => console.log('Sick notification sent:', r))
-  .catch(err => console.error('Sick notification failed:', err));
+  let sickDays=DB.get('sickDays')||[];
+  const now=new Date().toISOString();
+
+  // If editing an existing sick spell, remove only the old dates in that spell, then rebuild the new range.
+  if(originalFrom&&originalTo){
+    sickDays=sickDays.filter(sk=>!(sk.empId===empId&&sk.date>=originalFrom&&sk.date<=originalTo));
+  }
+
+  days.forEach((date,idx)=>{
+    if(sickDays.find(sk=>sk.empId===empId&&sk.date===date))return;
+    const shift=findShiftForSickDate(empId,date);
+    sickDays.push({
+      id:'sk'+Date.now()+idx,
+      empId,
+      date,
+      shiftId:shift?.id||quickSickShiftId||'',
+      notes,
+      mcUploaded:false,
+      ts:now
+    });
+  });
+
+  DB.set('sickDays',sickDays);
+  CM('m-sick-quick');
+  renderRoster();renderLeave(currentLeaveFilter);renderDashboard();
+
+  const emp=(DB.get('staff')||[]).find(x=>x.id===empId);
+  sendNotification('sick_leave', {
+    empName: emp ? `${emp.first || ''} ${emp.last || ''}`.trim() : 'Staff member',
+    empEmail: emp?.email || '',
+    date: from===to?from:`${from} to ${to}`,
+    notes,
+    source: 'Manager Portal'
+  })
+    .then(r => console.log('Sick notification sent:', r))
+    .catch(err => console.error('Sick notification failed:', err));
 }
 
 // TEMPLATES
@@ -3745,14 +3832,32 @@ function renderLeave(filter){
   const data=filter==='sick'?[]:(filter==='all'?[...leaveReqs].sort(sortDesc):leaveReqs.filter(l=>l.status===filter).sort(sortDesc));
   if(filter==='all'||filter==='sick'){
     if(sickDays.length){
-      html+='<div style="font-weight:600;font-size:11px;color:var(--t2);margin-bottom:7px;text-transform:uppercase;letter-spacing:.04em">Sick days</div>';
-      html+=[...sickDays].sort((a,b)=>b.date.localeCompare(a.date)).map(sk=>{
-        const emp=staff.find(s=>s.id===sk.empId);
-        const mc=medCerts.find(m=>m.empId===sk.empId&&m.date===sk.date);
-        return`<div class="lcard"><div class="lcard-h"><div><strong>${emp?emp.first+' '+emp.last:'?'}</strong> — ${FDS(sk.date)} (Sick day)</div><div style="display:flex;gap:5px;align-items:center">${mc?`<span class="badge bg">MC uploaded</span><button class="btn btn-sm" onclick="viewMC('${mc.id}')">View MC</button>`:`<span class="badge br">MC pending</span>`}</div></div>${sk.notes?`<div style="font-size:11px;color:var(--t2)">${sk.notes}</div>`:''}</div>`;
+      html+='<div style="font-weight:600;font-size:11px;color:var(--t2);margin-bottom:7px;text-transform:uppercase;letter-spacing:.04em">Sick leave</div>';
+      const grouped=[];
+      const byEmp={};
+      [...sickDays].sort((a,b)=>a.empId.localeCompare(b.empId)||a.date.localeCompare(b.date)).forEach(sk=>{
+        if(!byEmp[sk.empId])byEmp[sk.empId]=[];
+        byEmp[sk.empId].push(sk);
+      });
+      Object.keys(byEmp).forEach(empId=>{
+        let current=null;
+        byEmp[empId].forEach(sk=>{
+          if(!current){current={empId,from:sk.date,to:sk.date,rows:[sk]};return;}
+          const next=new Date(current.to+'T00:00:00');next.setDate(next.getDate()+1);
+          if(FD(next)===sk.date){current.to=sk.date;current.rows.push(sk);}
+          else{grouped.push(current);current={empId,from:sk.date,to:sk.date,rows:[sk]};}
+        });
+        if(current)grouped.push(current);
+      });
+      html+=grouped.sort((a,b)=>b.from.localeCompare(a.from)).map(g=>{
+        const emp=staff.find(s=>s.id===g.empId);
+        const mc=g.rows.map(r=>findMCForSickDay(g.empId,r.date)).find(Boolean);
+        const notes=(g.rows.find(r=>r.notes)||{}).notes||'';
+        const range=g.from===g.to?FDS(g.from):`${FDS(g.from)} – ${FDS(g.to)}`;
+        return`<div class="lcard"><div class="lcard-h"><div><strong>${emp?emp.first+' '+emp.last:'?'}</strong> — ${range} (Sick leave)</div><div style="display:flex;gap:5px;align-items:center">${mc?`<span class="badge bg">MC uploaded</span><button class="btn btn-sm" onclick="viewMC('${mc.id}')">View MC</button>`:`<span class="badge br">MC pending</span>`}<button class="btn btn-sm" onclick="openEditSickLeave('${g.empId}','${g.from}')">Edit dates</button></div></div>${notes?`<div style="font-size:11px;color:var(--t2)">${notes}</div>`:''}</div>`;
       }).join('');
     }
-    if(filter==='sick'){document.getElementById('leave-list').innerHTML=html||'<p style="color:var(--t2);font-size:12px">No sick days recorded.</p>';return;}
+    if(filter==='sick'){document.getElementById('leave-list').innerHTML=html||'<p style="color:var(--t2);font-size:12px">No sick leave recorded.</p>';return;}
   }
   if(data.length){
     if(filter==='all') html+='<div style="font-weight:600;font-size:11px;color:var(--t2);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.04em">Leave requests</div>';

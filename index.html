@@ -912,11 +912,23 @@ if (key === 'shifts') {
     }));
   }
 
-if (['clockEvents', 'leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
+if (['clockEvents', 'leaveRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
   return rows.map(r => ({
     ...r,
     empId: r.emp_id,
     ts: r.timestamp || r.ts
+  }));
+}
+
+if (key === 'otRequests') {
+  return rows.map(r => ({
+    ...r,
+    empId: r.emp_id,
+    ts: r.timestamp || r.ts,
+    requestedBy: r.requested_by || r.requestedBy,
+    staffRead: r.staff_read ?? r.staffRead,
+    availConfirmed: r.avail_confirmed ?? r.availConfirmed ?? false,
+    staffConfirmed: r.staff_confirmed ?? r.staffConfirmed ?? null
   }));
 }
 
@@ -2879,7 +2891,42 @@ function deleteTemplate(id){
 
 // OT TRACKER
 let otFilter='pending';
+let reconcilingOT = false;
+
+async function reconcileManagerOTDecisions(){
+  if (reconcilingOT) return;
+  reconcilingOT = true;
+
+  try {
+    const reqs = DB.get('otRequests') || [];
+    let changed = false;
+
+    for (const o of reqs) {
+      const isPending = o.approved === null || o.approved === undefined;
+      if (o.requestedBy !== 'manager' || !isPending) continue;
+
+      if (o.staffConfirmed === true) {
+        await approveOT(o.id, { bypassAvailabilityGuard: true, fromReconcile: true });
+        changed = true;
+      } else if (o.staffConfirmed === false) {
+        o.approved = false;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await DB.set('otRequests', reqs);
+      renderOT(otFilter);
+      renderRoster();
+      renderDashboard();
+    }
+  } finally {
+    reconcilingOT = false;
+  }
+}
+
 function renderOT(filter){
+  reconcileManagerOTDecisions();
   otFilter=filter||otFilter;
   const otReqs=DB.get('otRequests')||[];const staff=DB.get('staff')||[];
   const filtered=(otFilter==='all'?otReqs:otReqs.filter(o=>o.approved===null&&otFilter==='pending'?true:o.approved===true&&otFilter==='approved'?true:false))
@@ -2890,17 +2937,30 @@ function renderOT(filter){
   document.getElementById('ot-body').innerHTML=filtered.length?filtered.map(o=>{
     const emp=staff.find(s=>s.id===o.empId);
     const dur=o.start&&o.end?FMINS(MD(o.start,o.end)):'—';
+    const waitingForManagerStaff = o.requestedBy === 'manager' && !o.availConfirmed && o.staffConfirmed !== true;
     const status=o.approved===true?'<span class="badge bg">Approved</span>':o.approved===false?'<span class="badge br">Denied</span>':'<span class="badge ba">Pending</span>';
     const rowCls=o.approved===true?'ot-row-approved':o.approved===false?'ot-row-denied':'ot-row-pending';
+    const availability = o.staffConfirmed===true
+      ? '<span class="badge bg">Staff confirmed</span>'
+      : o.staffConfirmed===false
+        ? '<span class="badge br">Staff declined</span>'
+        : o.availConfirmed
+          ? '<span class="badge bg">Confirmed</span>'
+          : '<span class="badge ba">Awaiting staff</span>';
+    const pendingActions = (o.approved===null||o.approved===undefined)
+      ? (waitingForManagerStaff
+          ? '<span class="badge ba">Waiting for staff</span>'
+          : `<button class="btn btn-sm btn-success" onclick="approveOT('${o.id}')">Approve</button> <button class="btn btn-sm btn-danger" onclick="denyOT('${o.id}')">Deny</button>`)
+      : '';
     return `<tr class="${rowCls}">
       <td><strong>${emp?emp.first+' '+emp.last:'?'}</strong></td>
       <td>${FDS(o.date)}</td><td>${o.start}</td><td>${o.end}</td><td>${dur}</td>
       <td style="max-width:140px;white-space:normal">${o.reason||'—'}</td>
       <td style="max-width:120px;white-space:normal">${o.task||'—'}</td>
-      <td>${o.staffConfirmed===true?'<span class="badge bg">Staff confirmed</span>':o.staffConfirmed===false?'<span class="badge br">Staff declined</span>':o.availConfirmed?'<span class="badge bg">Confirmed</span>':'<span class="badge ba">Awaiting staff</span>'}</td>
+      <td>${availability}</td>
       <td>${o.requestedBy==='staff'?'Staff':'Manager'}</td>
       <td>${status}</td>
-      <td style="white-space:nowrap">${o.approved===null||o.approved===undefined?`<button class="btn btn-sm btn-success" onclick="approveOT('${o.id}')">Approve</button> <button class="btn btn-sm btn-danger" onclick="denyOT('${o.id}')">Deny</button>`:''} <button class="btn btn-sm" onclick="openAddOTModal('${o.id}')">Edit</button> <button class="btn btn-sm" onclick="deleteOT('${o.id}')" style="color:var(--red);border-color:var(--red)">Delete</button></td>
+      <td style="white-space:nowrap">${pendingActions} <button class="btn btn-sm" onclick="openAddOTModal('${o.id}')">Edit</button> <button class="btn btn-sm" onclick="deleteOT('${o.id}')" style="color:var(--red);border-color:var(--red)">Delete</button></td>
     </tr>`;
   }).join(''):`<tr><td colspan="11" style="text-align:center;color:var(--t2);padding:20px;font-size:12px">No OT requests ${otFilter!=='all'?'('+otFilter+')':''}.</td></tr>`;
   document.getElementById('d-ot-list')&&renderDashboard();
@@ -2931,6 +2991,7 @@ function openAddOTModal(id, prefillEmpId, prefillDate){
 }
 async function saveOT(){
   const reqs = DB.get('otRequests') || [];
+  const existing = editingOTId ? (reqs.find(x => x.id === editingOTId) || {}) : {};
   const availConfirmed = document.getElementById('tog-ot-avail').classList.contains('on');
 
   const no = {
@@ -2942,10 +3003,10 @@ async function saveOT(){
     reason: document.getElementById('ot-reason').value,
     task: document.getElementById('ot-task').value,
     availConfirmed,
-    approved: editingOTId ? (reqs.find(x => x.id === editingOTId) || {}).approved : null,
-    requestedBy: 'manager',
-    staffConfirmed: editingOTId ? (reqs.find(x => x.id === editingOTId) || {}).staffConfirmed : null,
-    submitted: editingOTId ? (reqs.find(x => x.id === editingOTId) || {}).submitted : new Date().toISOString()
+    approved: editingOTId ? existing.approved : null,
+    requestedBy: existing.requestedBy || 'manager',
+    staffConfirmed: availConfirmed ? true : (editingOTId ? (existing.staffConfirmed ?? null) : null),
+    submitted: editingOTId ? existing.submitted : new Date().toISOString()
   };
 
   const staffInfo = staffPayload(no.empId);
@@ -2964,11 +3025,19 @@ async function saveOT(){
 
   await DB.set('otRequests', reqs);
 
+  // If manager has already confirmed availability, this is already approved operationally.
+  // Approve immediately and push the OT to the roster.
+  if (no.requestedBy === 'manager' && no.availConfirmed && no.approved !== true) {
+    CM('m-ot');
+    await approveOT(no.id, { bypassAvailabilityGuard: true });
+    return;
+  }
+
   CM('m-ot');
   renderOT();
   renderDashboard();
 
-  if (!no.availConfirmed) {
+  if (no.requestedBy === 'manager' && !no.availConfirmed) {
     notify('manager_ot_request', {
       otId: no.id,
       empId: no.empId,
@@ -2990,15 +3059,21 @@ async function saveOT(){
   }
 }
   
-async function approveOT(id){
+async function approveOT(id, opts = {}){
   const reqs = DB.get('otRequests') || [];
   const idx = reqs.findIndex(x => x.id === id);
   if (idx < 0) return;
 
-  reqs[idx].approved = true;
-  await DB.set('otRequests', reqs);
-
   const o = reqs[idx];
+
+  if (o.requestedBy === 'manager' && !o.availConfirmed && o.staffConfirmed !== true && !opts.bypassAvailabilityGuard) {
+    alert('This manager-initiated OT request is still awaiting staff availability confirmation. It will auto-approve and sync to the roster once the staff member confirms in the Staff Portal.');
+    return;
+  }
+
+  reqs[idx].approved = true;
+  if (o.requestedBy === 'manager') reqs[idx].staffConfirmed = true;
+  await DB.set('otRequests', reqs);
   let shifts = DB.get('shifts') || [];
 
   const shiftIdx = shifts.findIndex(s =>
@@ -3069,6 +3144,7 @@ if (shiftIdx >= 0) {
   await DB.set('shifts', shifts);
 }
   renderOT();renderRoster();renderDashboard();
+if (opts.fromReconcile) return;
 notify('ot_decision', {
   sendToStaff: true,
   ...staffPayload(o.empId),
@@ -3088,6 +3164,7 @@ function denyOT(id){
   // If it was previously approved, reverse the shift extension
   if(wasApproved) reverseOTFromShift(id,o.empId,o.date);
   renderOT();renderRoster();renderDashboard();
+if (opts.fromReconcile) return;
 notify('ot_decision', {
   sendToStaff: true,
   ...staffPayload(o.empId),

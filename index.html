@@ -94,7 +94,8 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
 }
 .chip-sick{background:var(--rl);color:var(--rd);border:1px solid #F7C1C1}
 .chip-ot{background:var(--gl);color:var(--gd);border:1px solid #C0DD97}
-.chip-unavail{background:var(--s2);color:var(--t3);border:1px solid var(--border);cursor:default}
+.chip-unavail{background:var(--rl);color:var(--rd);border:1px solid #F7C1C1;cursor:default;font-weight:700}
+.chip-unavail.chip-small{background:var(--red);color:#fff;border-color:var(--red)}
 .add-btn{width:22px;height:22px;border-radius:4px;border:1px dashed var(--border2);color:var(--t3);font-size:13px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
 .add-btn:hover{border-color:var(--purple);color:var(--purple);background:var(--pl)}
 .av{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0}
@@ -3639,7 +3640,113 @@ function sendWelcomeEmail(empId) {
     })
     .catch(err=>alert('Email failed: '+err.message));
 }
-function removeStaff(id){if(!confirm('Remove this staff member?'))return;DB.set('staff',(DB.get('staff')||[]).filter(s=>s.id!==id));renderStaff();}
+async function deleteSupabaseRowsByIds(key, ids) {
+  ids = [...new Set((ids || []).filter(Boolean))];
+  if (!ids.length) return { ok: true, count: 0 };
+
+  const table = TABLE_MAP[key];
+  if (!table) return { ok: false, count: 0, error: 'Unknown table: ' + key };
+
+  try {
+    const { error } = await supabaseClient
+      .from(table)
+      .delete()
+      .in('id', ids);
+
+    if (error) throw error;
+    return { ok: true, count: ids.length };
+  } catch (error) {
+    console.error('Supabase cascade delete failed:', key, ids, error);
+    return { ok: false, count: 0, error: error.message };
+  }
+}
+
+async function removeStaff(id) {
+  const staff = DB.get('staff') || [];
+  const emp = staff.find(s => s.id === id);
+  if (!emp) {
+    alert('Staff member not found.');
+    return;
+  }
+
+  const today = FD(new Date());
+  const shifts = DB.get('shifts') || [];
+  const leaveRequests = DB.get('leaveRequests') || [];
+  const sickDays = DB.get('sickDays') || [];
+  const medCerts = DB.get('medCerts') || [];
+  const otRequests = DB.get('otRequests') || [];
+  const customHours = DB.get('customHours') || [];
+
+  const futureShifts = shifts.filter(s => s.empId === id && s.date >= today);
+  const upcomingLeave = leaveRequests.filter(l =>
+    l.empId === id && (
+      (l.to && l.to >= today) ||
+      (l.from && l.from >= today) ||
+      l.status === 'pending'
+    )
+  );
+  const upcomingSick = sickDays.filter(s => s.empId === id && s.date >= today);
+  const upcomingMedCerts = medCerts.filter(m =>
+    m.empId === id && (
+      (m.to && m.to >= today) ||
+      (m.from && m.from >= today) ||
+      (m.date && m.date >= today)
+    )
+  );
+  const futureOT = otRequests.filter(o => o.empId === id && (!o.date || o.date >= today));
+  const futureCustomHours = customHours.filter(c => c.empId === id && c.date >= today);
+
+  const msg = [
+    `Remove ${emp.first} ${emp.last} from staff?`,
+    '',
+    'This will also delete:',
+    `• ${futureShifts.length} future roster shift(s)`,
+    `• ${upcomingLeave.length} upcoming/pending leave request(s)`,
+    `• ${upcomingSick.length} upcoming sick day record(s)`,
+    `• ${futureOT.length} future OT request(s)`,
+    `• ${futureCustomHours.length} future timesheet adjustment(s)`,
+    '',
+    'Past shifts, past leave records, clock events and historic timesheet data will be kept.'
+  ].join('\n');
+
+  if (!confirm(msg)) return;
+
+  _setSyncIndicator('saving');
+
+  const deleteJobs = [
+    deleteSupabaseRowsByIds('shifts', futureShifts.map(s => s.id)),
+    deleteSupabaseRowsByIds('leaveRequests', upcomingLeave.map(l => l.id)),
+    deleteSupabaseRowsByIds('sickDays', upcomingSick.map(s => s.id)),
+    deleteSupabaseRowsByIds('medCerts', upcomingMedCerts.map(m => m.id)),
+    deleteSupabaseRowsByIds('otRequests', futureOT.map(o => o.id)),
+    deleteSupabaseRowsByIds('customHours', futureCustomHours.map(c => c.id)),
+    deleteSupabaseRowsByIds('staff', [id])
+  ];
+
+  const results = await Promise.all(deleteJobs);
+  const failed = results.filter(r => !r.ok);
+  if (failed.length) {
+    _setSyncIndicator('error');
+    alert('Some records could not be deleted. Please refresh and try again.\n\n' + failed.map(f => f.error).join('\n'));
+    return;
+  }
+
+  CACHE.rx3_staff = staff.filter(s => s.id !== id);
+  CACHE.rx3_shifts = shifts.filter(s => !(s.empId === id && s.date >= today));
+  CACHE.rx3_leaveRequests = leaveRequests.filter(l => !upcomingLeave.some(x => x.id === l.id));
+  CACHE.rx3_sickDays = sickDays.filter(s => !upcomingSick.some(x => x.id === s.id));
+  CACHE.rx3_medCerts = medCerts.filter(m => !upcomingMedCerts.some(x => x.id === m.id));
+  CACHE.rx3_otRequests = otRequests.filter(o => !futureOT.some(x => x.id === o.id));
+  CACHE.rx3_customHours = customHours.filter(c => !futureCustomHours.some(x => x.id === c.id));
+
+  _setSyncIndicator('saved');
+  renderStaff();
+  if (document.getElementById('pg-roster')?.classList.contains('active')) renderRoster();
+  if (document.getElementById('pg-leave')?.classList.contains('active')) renderLeave();
+  if (document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
+
+  alert(`${emp.first} ${emp.last} has been removed. Future rostered shifts and upcoming leave/requests have also been deleted.`);
+}
 function staffTab(t,el){if(!el)return;el.closest('.tabs').querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));el.classList.add('active');['info','availability','leave','payroll'].forEach(x=>{const d=document.getElementById('staff-tab-'+x);if(d)d.style.display=x===t?'block':'none';});if(t==='leave'&&editingStaffId){const lb=document.getElementById('staff-leave-body');if(lb)lb.innerHTML=staffLeaveHTML(editingStaffId);}}
 
 

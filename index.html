@@ -243,10 +243,10 @@ let selectedShiftIds = new Set();
   <div class="login-card">
     <div class="login-logo">💊 RosterRx</div>
     <div class="login-sub">Manager Portal — Dispensary Workforce</div>
-    <div class="fr"><label>Username</label><input type="text" id="lu" value="manager" placeholder="manager"></div>
-    <div class="fr"><label>Password</label><input type="password" id="lp" value="admin123" placeholder="••••••••"></div>
+    <div class="fr"><label>Username</label><input type="text" id="lu" placeholder="Username" autocomplete="username"></div>
+    <div class="fr"><label>Password</label><input type="password" id="lp" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')window.doLogin()"></div>
     <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:4px" onclick="window.doLogin()">Sign in</button>
-    <p style="font-size:10px;color:var(--t3);margin-top:10px">manager / admin123</p>
+    <p style="font-size:10px;color:var(--t3);margin-top:10px">Use your assigned manager login.</p>
     <div id="lerr" class="alert ad" style="display:none;margin-top:10px"></div>
   </div>
 </div>
@@ -266,7 +266,7 @@ let selectedShiftIds = new Set();
       <button class="ni" onclick="SP('settings')" id="nav-settings"><span class="nic">⚙️</span>Settings</button>
     </nav>
     <div style="padding:12px 16px;border-top:1px solid var(--border)">
-      <div style="font-size:10px;color:var(--t2)">Signed in as Manager</div>
+      <div id="sidebar-signed-in" style="font-size:10px;color:var(--t2)">Signed in as Manager</div>
       <button class="btn btn-sm" style="margin-top:6px;width:100%;justify-content:center" onclick="logout()">Sign out</button>
     </div>
   </div>
@@ -275,7 +275,7 @@ let selectedShiftIds = new Set();
     <div class="topbar">
       <div id="page-title" style="font-weight:600;font-size:15px">Dashboard</div>
       <div style="display:flex;align-items:center;gap:8px">
-        <span id="sync-indicator" style="font-size:11px;margin-right:4px;transition:color .3s"></span><span id="topbar-date" style="font-size:11px;color:var(--t2)"></span>
+        <span id="mgr-user-badge" class="badge bp" style="font-size:10px;display:none"></span><span id="sync-indicator" style="font-size:11px;margin-right:4px;transition:color .3s"></span><span id="topbar-date" style="font-size:11px;color:var(--t2)"></span>
         <a href="https://dukasa-staff-portal.vercel.app" target="_blank" class="btn btn-sm">👤 Staff Portal ↗</a>
         <a href="https://script.google.com/a/macros/dukasa.com.au/s/AKfycbw5PFfwBTMpR7cVJUtoqMzn7DHc5E9CUgqZ-6N2x4-J4_6InOJGVbRQMbPoDlf89uXp5w/exec?page=dukasa-clock" target="_blank" class="btn btn-sm">🕐 Dukasa Clock ↗</a>
         <button class="btn btn-sm" id="sync-now-btn" onclick="manualSync()" title="Sync now">↻</button>
@@ -859,6 +859,110 @@ const ROLES=['Dispensary Technician','Pharmacist','Logistics Technician','Lab Te
 const ROLE_BADGE={'Dispensary Technician':'bp','Pharmacist':'bt','Logistics Technician':'ba','Lab Technician':'bb','Admin Assistant':'bpk','Stock Technician':'bg'};
 const EMP_COLORS=['#534AB7','#0F6E56','#BA7517','#A32D2D','#185FA5','#3B6D11','#993556','#D85A30','#534AB7','#0F6E56'];
 const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+// Manager portal logins. Edit these credentials here if you need to rename either account.
+// Each account is saved against approvals so leave and OT decisions show who processed them.
+const AUTH_SESSION_KEY = 'rx3_mgr_session_v2';
+const LEGACY_AUTH_SESSION_KEY = 'rx3_mgr_session';
+const MANAGER_ACCOUNTS = [
+  { username: 'zoe', password: 'zoe123', name: 'Zoe', role: 'Operations Supervisor' },
+  { username: 'aspa', password: 'aspa123', name: 'Aspa', role: 'CEO / Head Pharmacist' }
+];
+let currentManager = null;
+
+function publicManagerAccount(account){
+  if(!account) return null;
+  return { username: account.username, name: account.name, role: account.role };
+}
+
+function findManagerAccount(username, password){
+  const u = String(username || '').trim().toLowerCase();
+  return MANAGER_ACCOUNTS.find(a =>
+    String(a.username || '').toLowerCase() === u && String(a.password || '') === String(password || '')
+  ) || null;
+}
+
+function getCurrentManager(){
+  return currentManager || publicManagerAccount(MANAGER_ACCOUNTS[0]) || { username:'manager', name:'Manager', role:'Manager' };
+}
+
+function updateManagerIdentityUI(){
+  const mgr = getCurrentManager();
+  const label = `${mgr.name || mgr.username || 'Manager'}${mgr.role ? ' · ' + mgr.role : ''}`;
+  const side = document.getElementById('sidebar-signed-in');
+  if(side) side.textContent = 'Signed in as ' + label;
+  const badge = document.getElementById('mgr-user-badge');
+  if(badge){
+    badge.textContent = mgr.name || mgr.username || 'Manager';
+    badge.style.display = 'inline-flex';
+  }
+}
+
+function stampManagerDecision(record, decision, managerOverride){
+  const mgr = managerOverride || getCurrentManager();
+  const now = new Date().toISOString();
+  record.processedAt = now;
+  record.processedBy = mgr.username || 'manager';
+  record.processedByName = mgr.name || mgr.username || 'Manager';
+  record.processedByRole = mgr.role || '';
+  record.decisionBy = record.processedBy;
+  record.decisionByName = record.processedByName;
+  record.decisionByRole = record.processedByRole;
+  record.decisionAt = now;
+  if(decision === 'approved'){
+    record.approvedAt = now;
+    record.approvedBy = record.processedBy;
+    record.approvedByName = record.processedByName;
+    record.approvedByRole = record.processedByRole;
+  }
+  if(decision === 'declined' || decision === 'denied'){
+    record.deniedAt = now;
+    record.deniedBy = record.processedBy;
+    record.deniedByName = record.processedByName;
+    record.deniedByRole = record.processedByRole;
+  }
+  return record;
+}
+
+function decisionAuditName(record){
+  return record?.processedByName || record?.approvedByName || record?.deniedByName || record?.decisionByName || record?.processed_by_name || record?.approved_by_name || record?.denied_by_name || record?.decision_by_name || '';
+}
+
+function decisionAuditAt(record){
+  return record?.processedAt || record?.approvedAt || record?.deniedAt || record?.decisionAt || record?.processed_at || record?.approved_at || record?.denied_at || record?.decision_at || '';
+}
+
+function decisionAuditHTML(record){
+  const name = decisionAuditName(record);
+  if(!name) return '';
+  const at = decisionAuditAt(record);
+  let time = '';
+  if(at){
+    const d = new Date(at);
+    if(!isNaN(d)) time = ' · ' + d.toLocaleDateString('en-AU',{day:'numeric',month:'short'});
+  }
+  return `<div style="font-size:10px;color:var(--t2);margin-top:3px">By ${name}${time}</div>`;
+}
+
+function retryRowsWithoutDecisionAudit(rows){
+  return rows.map(row => {
+    const x = { ...row };
+    [
+      'processedAt','processedBy','processedByName','processedByRole','decisionAt','decisionBy','decisionByName','decisionByRole',
+      'approvedAt','approvedBy','approvedByName','approvedByRole','deniedAt','deniedBy','deniedByName','deniedByRole',
+      'createdBy','createdByName','createdByRole','updatedBy','updatedByName','updatedByRole'
+    ].forEach(k => delete x[k]);
+    return x;
+  });
+}
+
+function looksLikeMissingAuditColumn(error){
+  const msg = String(error?.message || '').toLowerCase();
+  return msg.includes('column') && (
+    msg.includes('processed') || msg.includes('approvedby') || msg.includes('approved_by') ||
+    msg.includes('deniedby') || msg.includes('denied_by') || msg.includes('decision') || msg.includes('createdby')
+  );
+}
 // ═══════════════════════════════════════════════════════
 
 const CACHE = {};
@@ -921,7 +1025,16 @@ if (['clockEvents', 'leaveRequests', 'sickDays', 'medCerts', 'customHours'].incl
   return rows.map(r => ({
     ...r,
     empId: r.emp_id,
-    ts: r.timestamp || r.ts
+    ts: r.timestamp || r.ts,
+    processedBy: r.processedBy || r.processed_by,
+    processedByName: r.processedByName || r.processed_by_name,
+    processedByRole: r.processedByRole || r.processed_by_role,
+    approvedBy: r.approvedBy || r.approved_by,
+    approvedByName: r.approvedByName || r.approved_by_name,
+    approvedByRole: r.approvedByRole || r.approved_by_role,
+    deniedBy: r.deniedBy || r.denied_by,
+    deniedByName: r.deniedByName || r.denied_by_name,
+    deniedByRole: r.deniedByRole || r.denied_by_role
   }));
 }
 
@@ -933,7 +1046,19 @@ if (key === 'otRequests') {
     requestedBy: r.requested_by || r.requestedBy,
     staffRead: r.staff_read ?? r.staffRead,
     availConfirmed: r.avail_confirmed ?? r.availConfirmed ?? false,
-    staffConfirmed: r.staff_confirmed ?? r.staffConfirmed ?? null
+    staffConfirmed: r.staff_confirmed ?? r.staffConfirmed ?? null,
+    processedBy: r.processedBy || r.processed_by,
+    processedByName: r.processedByName || r.processed_by_name,
+    processedByRole: r.processedByRole || r.processed_by_role,
+    approvedBy: r.approvedBy || r.approved_by,
+    approvedByName: r.approvedByName || r.approved_by_name,
+    approvedByRole: r.approvedByRole || r.approved_by_role,
+    deniedBy: r.deniedBy || r.denied_by,
+    deniedByName: r.deniedByName || r.denied_by_name,
+    deniedByRole: r.deniedByRole || r.denied_by_role,
+    createdBy: r.createdBy || r.created_by,
+    createdByName: r.createdByName || r.created_by_name,
+    createdByRole: r.createdByRole || r.created_by_role
   }));
 }
 
@@ -1058,9 +1183,20 @@ const DB = {
         return;
       }
 
-      const { error } = await supabaseClient
+      let { error } = await supabaseClient
         .from(table)
         .upsert(rows, { onConflict: 'id' });
+
+      // Backwards-compatible safety: if the Supabase audit columns have not been
+      // added yet, save the operational decision anyway rather than blocking approvals.
+      // Add the audit columns to persist the “approved by” labels permanently.
+      if (error && looksLikeMissingAuditColumn(error)) {
+        const fallbackRows = retryRowsWithoutDecisionAudit(rows);
+        const retry = await supabaseClient
+          .from(table)
+          .upsert(fallbackRows, { onConflict: 'id' });
+        error = retry.error;
+      }
 
       if (error) throw error;
 
@@ -1249,14 +1385,14 @@ function renderDashboard(){
   if(dLeaveList) dLeaveList.innerHTML=allLeave.length?allLeave.slice(0,8).map(l=>{
     const emp=staff.find(s=>s.id===l.empId);
     const bc={pending:'ba',approved:'bg',declined:'br'}[l.status]||'ba';
-    return`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><span>${emp?emp.first+' '+emp.last:'?'} — ${l.type}</span><div style="display:flex;gap:4px;align-items:center"><span style="color:var(--t2)">${FDS(l.from)}</span><span class="badge ${bc}">${l.status}</span>${l.status==='pending'?`<button class="btn btn-sm" onclick="SP('leave')">Review</button>`:''}</div></div>`;
+    return`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><span>${emp?emp.first+' '+emp.last:'?'} — ${l.type}</span><div style="display:flex;gap:4px;align-items:center"><span style="color:var(--t2)">${FDS(l.from)}</span><span class="badge ${bc}">${l.status}</span>${decisionAuditHTML(l)}${l.status==='pending'?`<button class="btn btn-sm" onclick="SP('leave')">Review</button>`:''}</div></div>`;
   }).join(''):'<p style="color:var(--t2);font-size:11px">No leave requests.</p>';
 
   // OT requests list
   const dOTList=document.getElementById('d-ot-list');
   if(dOTList) dOTList.innerHTML=otReqs.length?otReqs.slice(-8).reverse().map(o=>{
     const emp=staff.find(s=>s.id===o.empId);
-    const status=o.approved===true?'<span class="badge bg">Approved</span>':o.approved===false?'<span class="badge br">Denied</span>':'<span class="badge ba">Pending</span>';
+    const status=o.approved===true?'<span class="badge bg">Approved</span>'+decisionAuditHTML(o):o.approved===false?'<span class="badge br">Denied</span>'+decisionAuditHTML(o):'<span class="badge ba">Pending</span>';
     return`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><span>${emp?emp.first+' '+emp.last:'?'} · ${FDS(o.date)} ${o.start}–${o.end}</span><div style="display:flex;gap:4px;align-items:center">${status}${o.approved===null||o.approved===undefined?`<button class="btn btn-sm" onclick="SP('ot')">Review</button>`:''}</div></div>`;
   }).join(''):'<p style="color:var(--t2);font-size:11px">No OT requests.</p>';
 
@@ -1301,6 +1437,7 @@ function launchManagerApp(){
   document.getElementById('app').style.display='flex';
   if(!currentWeekStart) initWeek(new Date());
   updateTopbar();
+  updateManagerIdentityUI();
   loadSettings();
   setInterval(updateTopbar,60000);
   document.getElementById('d-today').textContent='…';
@@ -1315,21 +1452,36 @@ function launchManagerApp(){
   });
 }
 function doLogin(){
-  if(document.getElementById('lu').value==='manager'&&document.getElementById('lp').value==='admin123'){
-    try{localStorage.setItem('rx3_mgr_session','1');}catch(e){}
+  const account = findManagerAccount(
+    document.getElementById('lu').value,
+    document.getElementById('lp').value
+  );
+  if(account){
+    currentManager = publicManagerAccount(account);
+    try{
+      localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(currentManager));
+      localStorage.removeItem(LEGACY_AUTH_SESSION_KEY);
+    }catch(e){}
     launchManagerApp();
   } else {
     const e=document.getElementById('lerr');e.textContent='Invalid credentials';e.style.display='block';setTimeout(()=>e.style.display='none',3000);
   }
 }
 function logout(){
-  try{localStorage.removeItem('rx3_mgr_session');}catch(e){}
+  try{
+    localStorage.removeItem(AUTH_SESSION_KEY);
+    localStorage.removeItem(LEGACY_AUTH_SESSION_KEY);
+  }catch(e){}
+  currentManager = null;
   document.getElementById('login-screen').style.display='flex';
   document.getElementById('app').style.display='none';
 }
 function updateTopbar(){
   document.getElementById('topbar-date').textContent=new Date().toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+  updateManagerIdentityUI();
 }
+window.doLogin = doLogin;
+window.logout = logout;
 
 // PAGE NAV
 function SP(p){
@@ -2462,44 +2614,37 @@ async function deleteSupabaseRow(k, id) {
 }
   
 async function deleteShift() {
-  console.log('[DELETE SHIFT] viewingShiftId:', viewingShiftId);
-
   if (!viewingShiftId) {
     alert('No shift selected to delete.');
     return;
   }
 
-  const shiftIdToDelete = viewingShiftId;
+  const shiftIdToDelete = String(viewingShiftId);
   const table = TABLE_MAP['shifts'];
-
-  console.log('[DELETE SHIFT] table:', table);
-  console.log('[DELETE SHIFT] deleting id:', shiftIdToDelete);
+  const existing = (DB.get('shifts') || []).find(s => String(s.id) === shiftIdToDelete);
 
   try {
     _setSyncIndicator('saving');
 
-    const { data, error } = await supabaseClient
-      .from(table)
-      .delete()
-      .eq('id', shiftIdToDelete)
-      .select();
+    // Delete directly by ID. This works for both published and draft shifts, including
+    // template-applied drafts that have not yet been published.
+    if (table && existing) {
+      const { error } = await supabaseClient
+        .from(table)
+        .delete()
+        .eq('id', shiftIdToDelete);
 
-    if (error) {
-      console.error('[DELETE SHIFT] Supabase error:', error);
-      alert('Could not delete shift: ' + error.message);
-      _setSyncIndicator('error');
-      return;
+      if (error) throw error;
     }
 
-    console.log('[DELETE SHIFT] deleted rows:', data);
-
     const shifts = (DB.get('shifts') || []).filter(
-      s => String(s.id) !== String(shiftIdToDelete)
+      s => String(s.id) !== shiftIdToDelete
     );
 
     CACHE['rx3_shifts'] = shifts;
 
     viewingShiftId = null;
+    closeShiftPopup();
     CM('m-shift-detail');
     renderRoster();
     renderDashboard();
@@ -2508,10 +2653,11 @@ async function deleteShift() {
 
   } catch (err) {
     console.error('[DELETE SHIFT] Unexpected error:', err);
-    alert('Unexpected delete error: ' + err.message);
+    alert('Could not delete shift: ' + err.message);
     _setSyncIndicator('error');
   }
 }
+
 
   function toggleBulkShiftMode(){
   bulkShiftMode = !bulkShiftMode;
@@ -2875,32 +3021,66 @@ function previewTemplate(){
     `<p style="font-size:11px;color:var(--t2);margin-bottom:6px">This template contains ${t.shifts.length} shift(s):</p>`+
     t.shifts.map(s=>{const e=staff.find(x=>x.id===s.empId);return`<div style="font-size:11px;padding:4px 0;border-bottom:1px solid var(--border)">${DAYS[s.dayOfWeek]} · ${e?e.first+' '+e.last:'?'} · ${s.start}–${s.end}${s.breakMin?` · ${s.breakMin}m break`:''}</div>`;}).join('');
 }
-function applyTemplate(){
-  const id=document.getElementById('tmpl-select').value;const weekDate=document.getElementById('tmpl-week').value;
-  const tmpls=DB.get('rosterTemplates')||[];const t=tmpls.find(x=>x.id===id);if(!t||!weekDate){alert('Select template and week.');return;}
+async function applyTemplate(){
+  const id=document.getElementById('tmpl-select').value;
+  const weekDate=document.getElementById('tmpl-week').value;
+  const tmpls=DB.get('rosterTemplates')||[];
+  const t=tmpls.find(x=>x.id===id);
+  if(!t||!weekDate){alert('Select template and week.');return;}
+
   const wkStart=new Date(weekDate+'T00:00:00');
   const wkStartStr=FD(wkStart);
   const wkEnd=new Date(wkStart);wkEnd.setDate(wkEnd.getDate()+6);
   const wkEndStr=FD(wkEnd);
-  // Remove all existing DRAFT shifts for this week (keep published ones)
+
+  const allStaff=DB.get('staff')||[];
   let shifts=DB.get('shifts')||[];
-  const removedDrafts=shifts.filter(s=>s.date>=wkStartStr&&s.date<=wkEndStr&&!s.published).length;
-  shifts = shifts.filter(s =>
-  !(s.date >= wkStartStr &&
+
+  // Replace only regular DRAFT shifts in the target week. Published shifts, OT rows,
+  // and partial-leave rows are deliberately preserved.
+  const isRegularDraftInWeek = s =>
+    s.date >= wkStartStr &&
     s.date <= wkEndStr &&
+    !s.published &&
     !s.isOT &&
     s.entryType !== 'leave' &&
-    s.entry_type !== 'leave')
-);
-  // Add new shifts from template
-  t.shifts.forEach(s=>{
-    const d=new Date(wkStart);d.setDate(wkStart.getDate()+s.dayOfWeek);
-    const emp=(DB.get('staff')||[]).find(e=>e.id===s.empId);
-    shifts.push({id:'sh'+Date.now()+Math.random().toString(36).slice(2),empId:s.empId,date:FD(d),start:s.start,end:s.end,breakMin:s.breakMin||30,role:emp?emp.role:'',notes:'',published:false,status:'draft',templateId:id});
-  });
-  DB.set('shifts',shifts);CM('m-template');renderRoster();
-  alert(`Template "${t.name}" applied as draft shifts.${removedDrafts>0?' Replaced '+removedDrafts+' existing draft shift(s).':''}`);
+    s.entry_type !== 'leave';
+
+  const removedDrafts=shifts.filter(isRegularDraftInWeek).length;
+  shifts = shifts.filter(s => !isRegularDraftInWeek(s));
+
+  const createdAt = Date.now();
+  const newShifts = (t.shifts||[]).map((row, idx)=>{
+    const d=new Date(wkStart);d.setDate(wkStart.getDate()+Number(row.dayOfWeek||0));
+    const emp=allStaff.find(e=>String(e.id)===String(row.empId));
+    return {
+      id:'sh-tmpl-'+createdAt+'-'+idx+'-'+Math.random().toString(36).slice(2,8),
+      empId:row.empId,
+      date:FD(d),
+      start:row.start,
+      end:row.end,
+      breakMin:parseInt(row.breakMin)||30,
+      paidBreakMin:30,
+      role:emp?emp.role:'',
+      notes:'',
+      published:false,
+      status:'draft',
+      entryType:'shift',
+      templateId:id
+    };
+  }).filter(s=>s.empId&&s.date&&s.start&&s.end);
+
+  if(!newShifts.length){alert('This template has no valid shift rows to apply.');return;}
+
+  shifts.push(...newShifts);
+  await DB.set('shifts',shifts);
+  CACHE['rx3_shifts']=shifts;
+  CM('m-template');
+  renderRoster();
+  renderDashboard();
+  alert(`Template "${t.name}" applied as ${newShifts.length} draft shift(s).${removedDrafts>0?' Replaced '+removedDrafts+' existing draft shift(s).':''}`);
 }
+
 function addTemplateShiftRow(dayVal, empVal, startVal, endVal, breakVal){
   const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
   const div=document.createElement('div');
@@ -2928,6 +3108,7 @@ function saveTemplate(){
     }
   });
   const tmpls=DB.get('rosterTemplates')||[];
+  const wasEditing=!!editingTemplateId;
   if(editingTemplateId){
     const idx=tmpls.findIndex(t=>t.id===editingTemplateId);
     if(idx>=0) tmpls[idx]={...tmpls[idx],name,shifts};
@@ -2937,7 +3118,7 @@ function saveTemplate(){
   DB.set('rosterTemplates',tmpls);
   CM('m-template');
   editingTemplateId=null;
-  alert(`Template "${name}" ${editingTemplateId?'updated':'saved'}!`);
+  alert(`Template "${name}" ${wasEditing?'updated':'saved'}!`);
 }
 function editTemplate(id){
   const tmpls=DB.get('rosterTemplates')||[];
@@ -2998,6 +3179,7 @@ async function reconcileManagerOTDecisions(){
         changed = true;
       } else if (o.staffConfirmed === false) {
         o.approved = false;
+        stampManagerDecision(o, 'denied', { username:'staff-response', name:'Staff response', role:'' });
         changed = true;
       }
     }
@@ -3026,7 +3208,7 @@ function renderOT(filter){
     const emp=staff.find(s=>s.id===o.empId);
     const dur=o.start&&o.end?FMINS(MD(o.start,o.end)):'—';
     const waitingForManagerStaff = o.requestedBy === 'manager' && !o.availConfirmed && o.staffConfirmed !== true;
-    const status=o.approved===true?'<span class="badge bg">Approved</span>':o.approved===false?'<span class="badge br">Denied</span>':'<span class="badge ba">Pending</span>';
+    const status=o.approved===true?'<span class="badge bg">Approved</span>'+decisionAuditHTML(o):o.approved===false?'<span class="badge br">Denied</span>'+decisionAuditHTML(o):'<span class="badge ba">Pending</span>';
     const rowCls=o.approved===true?'ot-row-approved':o.approved===false?'ot-row-denied':'ot-row-pending';
     const availability = o.staffConfirmed===true
       ? '<span class="badge bg">Staff confirmed</span>'
@@ -3046,7 +3228,7 @@ function renderOT(filter){
       <td style="max-width:140px;white-space:normal">${o.reason||'—'}</td>
       <td style="max-width:120px;white-space:normal">${o.task||'—'}</td>
       <td>${availability}</td>
-      <td>${o.requestedBy==='staff'?'Staff':'Manager'}</td>
+      <td>${o.requestedBy==='staff'?'Staff':(o.createdByName || 'Manager')}</td>
       <td>${status}</td>
       <td style="white-space:nowrap">${pendingActions} <button class="btn btn-sm" onclick="openAddOTModal('${o.id}')">Edit</button> <button class="btn btn-sm" onclick="deleteOT('${o.id}')" style="color:var(--red);border-color:var(--red)">Delete</button></td>
     </tr>`;
@@ -3094,7 +3276,13 @@ async function saveOT(){
     approved: editingOTId ? existing.approved : null,
     requestedBy: existing.requestedBy || 'manager',
     staffConfirmed: availConfirmed ? true : (editingOTId ? (existing.staffConfirmed ?? null) : null),
-    submitted: editingOTId ? existing.submitted : new Date().toISOString()
+    submitted: editingOTId ? existing.submitted : new Date().toISOString(),
+    createdBy: existing.createdBy || getCurrentManager().username,
+    createdByName: existing.createdByName || getCurrentManager().name,
+    createdByRole: existing.createdByRole || getCurrentManager().role,
+    updatedBy: getCurrentManager().username,
+    updatedByName: getCurrentManager().name,
+    updatedByRole: getCurrentManager().role
   };
 
   const staffInfo = staffPayload(no.empId);
@@ -3161,6 +3349,10 @@ async function approveOT(id, opts = {}){
 
   reqs[idx].approved = true;
   if (o.requestedBy === 'manager') reqs[idx].staffConfirmed = true;
+  const fallbackManager = o.createdByName
+    ? { username:o.createdBy || 'manager', name:o.createdByName, role:o.createdByRole || '' }
+    : null;
+  stampManagerDecision(reqs[idx], 'approved', currentManager || fallbackManager);
   await DB.set('otRequests', reqs);
   let shifts = DB.get('shifts') || [];
 
@@ -3244,26 +3436,31 @@ notify('ot_decision', {
   notes: o.reason || ''
 });
 }
-function denyOT(id){
-  const reqs=DB.get('otRequests')||[];const idx=reqs.findIndex(x=>x.id===id);if(idx<0)return;
+async function denyOT(id, opts = {}){
+  const reqs=DB.get('otRequests')||[];
+  const idx=reqs.findIndex(x=>x.id===id);
+  if(idx<0)return;
   const wasApproved=reqs[idx].approved===true;
-  reqs[idx].approved=false;DB.set('otRequests',reqs);
+  reqs[idx].approved=false;
+  stampManagerDecision(reqs[idx], 'denied');
+  await DB.set('otRequests',reqs);
   const o=reqs[idx];
   // If it was previously approved, reverse the shift extension
-  if(wasApproved) reverseOTFromShift(id,o.empId,o.date);
+  if(wasApproved) await reverseOTFromShift(id,o.empId,o.date);
   renderOT();renderRoster();renderDashboard();
-if (opts.fromReconcile) return;
-notify('ot_decision', {
-  sendToStaff: true,
-  ...staffPayload(o.empId),
-  decision: 'denied',
-  approved: false,
-  date: o.date,
-  start: o.start,
-  end: o.end,
-  notes: o.reason || ''
-});
+  if (opts.fromReconcile) return;
+  notify('ot_decision', {
+    sendToStaff: true,
+    ...staffPayload(o.empId),
+    decision: 'denied',
+    approved: false,
+    date: o.date,
+    start: o.start,
+    end: o.end,
+    notes: o.reason || ''
+  });
 }
+
 
 // OT detail modal — opened by clicking OT chip on roster
 let viewingOTId=null;
@@ -3280,7 +3477,7 @@ function openOTDetailModal(otId,shiftId){
       <div style="color:var(--t2);margin-bottom:3px">${FDL(o.date)}</div>
       <div style="font-weight:600;font-size:14px;margin-bottom:3px">${o.start} – ${o.end}</div>
       ${o.reason?`<div style="color:var(--t2);margin-top:4px">Reason: ${o.reason}</div>`:''}
-      <div style="margin-top:8px"><span class="badge ${o.approved===true?'bg':o.approved===false?'br':'ba'}">${o.approved===true?'Approved':o.approved===false?'Denied':'Pending'}</span></div>
+      <div style="margin-top:8px"><span class="badge ${o.approved===true?'bg':o.approved===false?'br':'ba'}">${o.approved===true?'Approved':o.approved===false?'Denied':'Pending'}</span>${decisionAuditHTML(o)}</div>
     </div>`;
   OM('m-ot-detail');
 }
@@ -3991,7 +4188,7 @@ function renderLeave(filter){
         ${lr.notes?`<div style="font-size:11px;color:var(--t2);margin-bottom:5px">${lr.notes}</div>`:''}
         <div style="display:flex;gap:5px;flex-wrap:wrap">
           ${lr.status==='pending'?`<button class="btn btn-sm btn-primary" onclick="openLeaveReview('${lr.id}')">Review &amp; process</button>`:''}
-          ${lr.status==='approved'?'<span style="font-size:10px;color:var(--td)">✓ Synced to roster &amp; leave tracker</span>':''}
+          ${lr.status==='approved'?'<span style="font-size:10px;color:var(--td)">✓ Synced to roster &amp; leave tracker</span>':''}${decisionAuditHTML(lr)}
         </div>
       </div>`;
     }).join('');
@@ -4031,6 +4228,7 @@ function openLeaveReview(id){
       <div style="color:var(--t2)">${FDS(lr.from)} – ${FDS(lr.to)}</div>
       ${lr.notes?`<div style="margin-top:5px;color:var(--t2)">${lr.notes}</div>`:''}
       <div style="margin-top:6px;font-size:10px;color:var(--t3)">Submitted: ${lr.submitted?new Date(lr.submitted).toLocaleString('en-AU'):'Unknown'}</div>
+      ${decisionAuditHTML(lr)}
     </div>
     ${leaveConflicts.length?`<div class="alert ad" style="font-size:11px">
       ⚠ <strong>Department conflict</strong> — ${conflictNames.join(', ')} (same role: ${emp?.role||'?'}) also ${leaveConflicts.some(c=>c.status==='approved')?'has approved':'has pending'} leave overlapping these dates.
@@ -4080,7 +4278,7 @@ function processLeave(decision, denialReason){
   const idx=reqs.findIndex(l=>l.id===reviewingLeaveId);
   if(idx<0)return;
   reqs[idx].status=decision;
-  reqs[idx].processedAt=new Date().toISOString();
+  stampManagerDecision(reqs[idx], decision);
   if(decision==='approved'){
     reqs[idx].syncedToRoster=true;
     reqs[idx].syncedToLeaveTracker=true;
@@ -5682,7 +5880,14 @@ DB.preload(ALL_KEYS, function(){
 })();
   // Restore session if previously logged in (survives page reload)
   try{
-    if(localStorage.getItem('rx3_mgr_session')==='1'){
+    const saved = localStorage.getItem(AUTH_SESSION_KEY);
+    if(saved){
+      currentManager = JSON.parse(saved);
+      launchManagerApp();
+    } else if(localStorage.getItem(LEGACY_AUTH_SESSION_KEY)==='1'){
+      currentManager = publicManagerAccount(MANAGER_ACCOUNTS[0]);
+      localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(currentManager));
+      localStorage.removeItem(LEGACY_AUTH_SESSION_KEY);
       launchManagerApp();
     }
   }catch(e){}

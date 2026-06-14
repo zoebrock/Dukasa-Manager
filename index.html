@@ -983,6 +983,130 @@ const TABLE_MAP = {
   rosterTemplates: 'roster_templates'
 };
 
+const CLOCK_TYPE_ALIASES = {
+  'clockin': 'clock-in',
+  'clock-in': 'clock-in',
+  'in': 'clock-in',
+  'clockout': 'clock-out',
+  'clock-out': 'clock-out',
+  'out': 'clock-out',
+  'breakstart': 'break-start',
+  'break-start': 'break-start',
+  'breakin': 'break-start',
+  'break-in': 'break-start',
+  'breakout': 'break-end',
+  'break-out': 'break-end',
+  'breakend': 'break-end',
+  'break-end': 'break-end'
+};
+
+function normaliseClockType(value){
+  const raw = String(value || '').trim();
+  if(!raw) return '';
+  const dashed = raw.toLowerCase().replace(/[\s_]+/g, '-');
+  const compact = raw.toLowerCase().replace(/[\s_-]+/g, '');
+  return CLOCK_TYPE_ALIASES[dashed] || CLOCK_TYPE_ALIASES[compact] || dashed;
+}
+
+function clockTimeFromStamp(stamp){
+  if(!stamp) return '';
+  const d = new Date(stamp);
+  if(isNaN(d.getTime())) return '';
+  return d.toTimeString().slice(0,5);
+}
+
+function clockDateFromStamp(stamp){
+  if(!stamp) return '';
+  const d = new Date(stamp);
+  if(isNaN(d.getTime())) return '';
+  return FD(d);
+}
+
+function normaliseClockEvent(row){
+  const r = row || {};
+  const stamp = r.timestamp || r.ts || r.created_at || r.createdAt || '';
+  const empId = String(r.empId || r.emp_id || r.staffId || r.staff_id || '');
+  const date = String(r.date || r.clockDate || r.clock_date || clockDateFromStamp(stamp) || '').slice(0,10);
+  const time = String(r.time || r.clockTime || r.clock_time || clockTimeFromStamp(stamp) || '').slice(0,5);
+  const type = normaliseClockType(r.type || r.eventType || r.event_type || r.action || r.clockType || r.clock_type);
+
+  return {
+    ...r,
+    id: r.id || ['ce', empId, date, type, time].filter(Boolean).join('-'),
+    empId,
+    date,
+    time,
+    type,
+    photo: r.photo || r.photoUrl || r.photo_url || r.image || r.image_url || '',
+    reason: r.reason || r.note || r.notes || '',
+    manual: r.manual ?? r.isManual ?? r.is_manual ?? false,
+    ts: stamp || (date && time ? new Date(date + 'T' + time + ':00').toISOString() : '')
+  };
+}
+
+function getClockEvents(){
+  return (DB.get('clockEvents') || [])
+    .map(normaliseClockEvent)
+    .filter(e => e.empId && e.date && e.time && e.type);
+}
+
+function stripUndefined(obj){
+  return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
+}
+
+function clockEventPayloads(event){
+  const e = normaliseClockEvent(event);
+  const id = e.id || ('ce-' + Date.now() + Math.random().toString(36).slice(2,6));
+  const common = {
+    id,
+    emp_id: e.empId,
+    date: e.date,
+    time: e.time
+  };
+
+  const full = {
+    ...common,
+    reason: e.reason || null,
+    manual: !!e.manual
+  };
+
+  if(e.photo) full.photo = e.photo;
+
+  const timestamp = e.ts || (e.date && e.time ? new Date(e.date + 'T' + e.time + ':00').toISOString() : null);
+
+  return [
+    stripUndefined({...full, type: e.type, timestamp}),
+    stripUndefined({...full, type: e.type, ts: timestamp}),
+    stripUndefined({...full, event_type: e.type, timestamp}),
+    stripUndefined({...full, event_type: e.type, ts: timestamp}),
+    stripUndefined({...common, type: e.type}),
+    stripUndefined({...common, event_type: e.type})
+  ];
+}
+
+async function upsertClockEvent(event){
+  const attempts = clockEventPayloads(event);
+  let lastError = null;
+
+  for(const payload of attempts){
+    const { error } = await supabaseClient
+      .from('clock_events')
+      .upsert(payload, { onConflict: 'id' });
+
+    if(!error) return payload;
+
+    lastError = error;
+    const msg = String(error.message || '').toLowerCase();
+
+    // Try the next compatible payload only for schema/column mismatch errors.
+    if(!(msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find'))){
+      throw error;
+    }
+  }
+
+  throw lastError || new Error('Could not save clock event.');
+}
+
 function mapFromSupabase(key, rows) {
   if (key === 'staff') {
     return rows.map(r => ({
@@ -1022,7 +1146,11 @@ if (key === 'shifts') {
     }));
   }
 
-if (['clockEvents', 'leaveRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
+if (key === 'clockEvents') {
+  return rows.map(normaliseClockEvent).filter(e => e.empId && e.date && e.time && e.type);
+}
+
+if (['leaveRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
   return rows.map(r => ({
     ...r,
     empId: r.emp_id,
@@ -1080,6 +1208,10 @@ function mapToSupabase(key, arrOrObj) {
   return arr.map(item => {
     const x = { ...item };
 
+    if (key === 'clockEvents') {
+      return clockEventPayloads(x)[0];
+    }
+
     if (key === 'staff') {
       x.avail_notes = x.availNotes;
       x.contract_start = x.contractStart;
@@ -1135,7 +1267,7 @@ if (key === 'shifts') {
       delete x.desc;
     }
 
-if (['clockEvents', 'leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
+if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
   x.emp_id = x.empId;
 
   if (x.ts && !x.timestamp) {
@@ -1316,7 +1448,7 @@ function initDefaults() {
 function renderDashboard(){
   const staff=DB.get('staff')||[];
   const shifts=DB.get('shifts')||[];
-  const ce=DB.get('clockEvents')||[];
+  const ce=getClockEvents();
   const lr=DB.get('leaveRequests')||[];
   const sd=DB.get('sickDays')||[];
   const mcs=DB.get('medCerts')||[];
@@ -3672,7 +3804,7 @@ function staffLeaveHTML(empId){
 }
 function staffPayrollHTML(emp){
   const shifts=(DB.get('shifts')||[]).filter(s=>s.empId===emp.id).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,10);
-  const clockEvents=DB.get('clockEvents')||[];
+  const clockEvents=getClockEvents();
   let html=`<div style="font-size:11px;color:var(--t2);margin-bottom:8px">Standard hours: Add start/end to auto-populate draft shifts weekly.</div>
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
     <span style="font-size:12px">Add auto-shift to weekly roster</span>
@@ -4360,21 +4492,36 @@ function renderCalendar(){
 
 // TIMESHEETS
 // ── TIMESHEET DATA ─────────────────────────────────────────────
-let tsDayIndex = 0; // currently selected day tab (0=Mon...6=Sun)
+let tsDayIndex = 0; // currently selected day tab (0=Mon...Sun across the selected 14-day cycle)
+const PAY_CYCLE_ANCHOR = new Date(2026, 5, 1); // 01.06.2026 – 14.06.2026
+
+function getRollingPayCycleStart(date){
+  const d = new Date(date || new Date());
+  d.setHours(0,0,0,0);
+
+  const anchor = new Date(PAY_CYCLE_ANCHOR);
+  anchor.setHours(0,0,0,0);
+
+  const msDay = 1000 * 60 * 60 * 24;
+  const diffDays = Math.floor((d.getTime() - anchor.getTime()) / msDay);
+  const cycleOffset = Math.floor(diffDays / 14) * 14;
+
+  const start = new Date(anchor);
+  start.setDate(anchor.getDate() + cycleOffset);
+  start.setHours(0,0,0,0);
+  return start;
+}
 
 function popTSWeeks(){
   const sel=document.getElementById('ts-week');
+  if(!sel) return;
+
   const opts=[];
-
   const today=new Date();
-  const currentMon=new Date(today);
-
-  // Pay cycle anchor: current fortnight started Monday 18 May 2026
-  currentMon.setDate(today.getDate()-today.getDay()-6);
-  currentMon.setHours(0,0,0,0);
+  const currentStart=getRollingPayCycleStart(today);
 
   for(let f=0;f<8;f++){
-    const start=new Date(currentMon);
+    const start=new Date(currentStart);
     start.setDate(start.getDate()-f*14);
 
     const end=new Date(start);
@@ -4388,7 +4535,9 @@ function popTSWeeks(){
 
   sel.innerHTML=opts.map(o=>`<option value="${o.val}">${o.label}</option>`).join('');
 
-  const diff=Math.floor((new Date().setHours(0,0,0,0)-currentMon.getTime())/(1000*60*60*24));
+  const todayStart=new Date(today);
+  todayStart.setHours(0,0,0,0);
+  const diff=Math.floor((todayStart.getTime()-currentStart.getTime())/(1000*60*60*24));
   tsDayIndex=Math.max(0,Math.min(13,diff));
 }
 function popTSEmps(){} // no longer needed — removed emp filter
@@ -4643,7 +4792,7 @@ function buildTSRows(dayDate){
   const staff = [...(DB.get('staff') || [])]
     .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
 
-  const ce = DB.get('clockEvents') || [];
+  const ce = getClockEvents();
   const lr = (DB.get('leaveRequests') || []).filter(l => l.status === 'approved');
   const sd = DB.get('sickDays') || [];
   const otReqs = (DB.get('otRequests') || []).filter(o => o.approved === true);
@@ -4887,7 +5036,7 @@ function renderTS(){
   // Use cleaned/deduped timesheet shifts only
   const shifts = getCleanTSShiftsForRange(ws, we);
 
-  const ce = DB.get('clockEvents') || [];
+  const ce = getClockEvents();
   const ch = DB.get('customHours') || [];
   const lr = (DB.get('leaveRequests') || []).filter(l => l.status === 'approved');
   const sd = DB.get('sickDays') || [];
@@ -5122,7 +5271,7 @@ function openManualClock(empId, date, type, defaultTime) {
   OM('m-manual-clock');
 }
 
-function saveManualClock() {
+async function saveManualClock() {
   const time   = document.getElementById('mc-time').value;
   const reason = document.getElementById('mc-reason').value.trim();
   if(!time){alert('Please enter a time.');return;}
@@ -5131,77 +5280,68 @@ function saveManualClock() {
   const empId = _mcEmpId, date = _mcDate, type = _mcType;
   if(!empId||!date||!type){alert('Missing data — please close and try again.');return;}
 
-  // Work on a fresh copy of clockEvents
-  let ce = JSON.parse(JSON.stringify(DB.get('clockEvents')||[]));
+  // Work on a fresh, normalised copy of clockEvents
+  const originalCe = JSON.parse(JSON.stringify(getClockEvents()));
+  let ce = JSON.parse(JSON.stringify(originalCe));
 
-  // Check for duplicate (correct JS: check if manual property exists)
-  const existIdx = ce.findIndex(e=>e.empId===empId&&e.date===date&&e.type===type);
+  const existIdx = ce.findIndex(e =>
+    String(e.empId) === String(empId) &&
+    String(e.date) === String(date) &&
+    normaliseClockType(e.type) === normaliseClockType(type)
+  );
+
   if(existIdx>=0){
     if(!confirm('A '+type+' event already exists ('+ce[existIdx].time+'). Replace with '+time+'?')) return;
     ce.splice(existIdx,1);
   }
 
-  const newEvent={
+  const newEvent=normaliseClockEvent({
     id:'ce-manual-'+Date.now()+Math.random().toString(36).slice(2,6),
     empId, date, type, time,
     reason: reason||'Manual entry by manager',
     manual: true,
     ts: new Date(date+'T'+time+':00').toISOString()
-  };
+  });
+
   ce.push(newEvent);
 
-  // ── Step 1: Write to local cache synchronously ──────────────
-  // Do this BEFORE closing modal and re-rendering so the new table
-  // row reads the correct data immediately
+  // Update local cache immediately so the timesheet reflects the event before the network round-trip finishes.
   CACHE['rx3_clockEvents'] = ce;
-  try { localStorage.setItem('rx3_clockEvents', JSON.stringify(ce)); } catch(e){}
 
-  // ── Step 2: Close modal and re-render ───────────────────────
   CM('m-manual-clock');
   renderTSDayBody(date);
+  renderTS();
 
-  // ── Step 3: Write to server using 'set' (proven reliable) ────
-  // appendClockEvent is atomic but requires Code.gs redeploy.
-  // 'set' writes the full array and is guaranteed to work.
-  const allCe = CACHE['rx3_clockEvents'] || [];
   const el = document.getElementById('pub-status');
+  try{
+    await upsertClockEvent(newEvent);
+    await DB.refresh(['clockEvents']);
 
-supabaseClient
-  .from('clock_events')
-  .upsert({
-    id: newEvent.id,
-    emp_id: newEvent.empId,
-    date: newEvent.date,
-    time: newEvent.time,
-    type: newEvent.type,
-    reason: newEvent.reason,
-    manual: true,
-    ts: newEvent.ts,
-    created_at: new Date().toISOString()
-  }, { onConflict: 'id' })
-  .then(({ error }) => {
-    if (error) throw error;
+    renderTSDayBody(date);
+    renderTS();
+    renderDashboard();
 
-    const el = document.getElementById('pub-status');
     if (el) {
-      const emp2 = (DB.get('staff') || []).find(s => s.id === empId);
+      const emp2 = (DB.get('staff') || []).find(s => String(s.id) === String(empId));
       el.style.display = 'block';
       el.style.background = '';
       el.style.color = '';
       el.textContent = '✓ ' + (type === 'clock-in' ? 'Clock-in' : 'Clock-out') + ' ' + time + ' saved for ' + (emp2 ? emp2.first : 'staff member') + ' on ' + FDL(date) + '.';
       setTimeout(() => el.style.display = 'none', 5000);
     }
-  })
-  .catch(err => {
+  }catch(err){
     console.error('Network error saving clock event:', err);
-    const el = document.getElementById('pub-status');
+    CACHE['rx3_clockEvents'] = originalCe;
+    renderTSDayBody(date);
+    renderTS();
+
     if (el) {
       el.style.display = 'block';
       el.style.background = 'var(--rl)';
       el.style.color = 'var(--rd)';
-      el.textContent = 'Network error: ' + err.message;
+      el.textContent = 'Network error saving clock event: ' + err.message;
     }
-  });
+  }
 }
 
 function viewPhoto(inPhoto,outPhoto){

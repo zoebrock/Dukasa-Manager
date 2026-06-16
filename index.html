@@ -2065,7 +2065,7 @@ function openLeaveFromShift(empId, date) {
   document.body.appendChild(overlay);
 }
 
-function saveLeaveFromShift(empId) {
+async function saveLeaveFromShift(empId) {
   const type = document.getElementById('lfs-type')?.value;
   const from = document.getElementById('lfs-from')?.value;
   const to = document.getElementById('lfs-to')?.value;
@@ -2091,12 +2091,20 @@ function saveLeaveFromShift(empId) {
     processedAt: new Date().toISOString()
   };
 
-  reqs.push(newLeave);
-  DB.set('leaveRequests', reqs);
+  try {
+    const savedLeave = await upsertOneLeaveRequest(newLeave);
+    reqs.push(savedLeave);
+    CACHE['rx3_leaveRequests'] = reqs;
+  } catch (err) {
+    console.error('Save leave from shift failed:', err);
+    alert('Could not save leave: ' + (err.message || err));
+    return;
+  }
 
   document.getElementById('m-leave-from-shift')?.remove();
   renderRoster();
   renderDashboard();
+  if(typeof renderLeave === 'function') renderLeave(currentLeaveFilter);
 
   notify('leave_decision', {
     sendToStaff: true,
@@ -2118,47 +2126,60 @@ function saveLeaveFromShift(empId) {
   }
 }
 
-function removeLeaveFromShift(leaveId) {
+async function removeLeaveFromShift(leaveId) {
   if (!confirm('Remove this leave record? The shift will revert to rostered. The staff member will be notified.')) return;
 
   let reqs = DB.get('leaveRequests') || [];
-  const lr = reqs.find(l => l.id === leaveId);
-  if (!lr) return;
-
-  reqs = reqs.filter(l => l.id !== leaveId);
-  DB.set('leaveRequests', reqs);
-
-  renderRoster();
-  renderDashboard();
-
-  const emp = (DB.get('staff') || []).find(s => s.id === lr.empId);
-  const shift = (DB.get('shifts') || []).find(s =>
-    s.empId === lr.empId &&
-    s.date >= lr.from &&
-    s.date <= lr.to &&
-    s.published
-  );
-
-  if (emp && shift) {
-    notify('shift_updated', {
-      sendToStaff: true,
-      ...staffPayload(lr.empId),
-      date: lr.from,
-      start: shift.start,
-      end: shift.end,
-      breakMin: shift.breakMin,
-      isNew: false,
-      oldShift: 'Leave recorded',
-      newShift: `${shift.start}–${shift.end}`,
-      notes: 'Your leave record has been removed. You are rostered on as originally scheduled.'
-    });
+  const lr = reqs.find(l => String(l.id) === String(leaveId));
+  if (!lr) {
+    alert('Could not find this leave record. Please refresh and try again.');
+    return;
   }
 
-  const el = document.getElementById('pub-status');
-  if (el) {
-    el.style.display = 'block';
-    el.textContent = 'Leave removed — staff member notified.';
-    setTimeout(() => el.style.display = 'none', 4000);
+  try {
+    await deleteSupabaseRow('leaveRequests', leaveId);
+
+    reqs = reqs.filter(l => String(l.id) !== String(leaveId));
+    CACHE['rx3_leaveRequests'] = reqs;
+
+    if (typeof renderLeave === 'function') renderLeave(currentLeaveFilter);
+    if (typeof renderRoster === 'function') renderRoster();
+    if (typeof renderDashboard === 'function') renderDashboard();
+    if (typeof renderCalendar === 'function') renderCalendar();
+    if (typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
+
+    const emp = (DB.get('staff') || []).find(s => s.id === lr.empId);
+    const shift = (DB.get('shifts') || []).find(s =>
+      s.empId === lr.empId &&
+      s.date >= lr.from &&
+      s.date <= lr.to &&
+      s.published
+    );
+
+    if (emp && shift) {
+      notify('shift_updated', {
+        sendToStaff: true,
+        ...staffPayload(lr.empId),
+        date: shift.date || lr.from,
+        start: shift.start,
+        end: shift.end,
+        breakMin: shift.breakMin,
+        isNew: false,
+        oldShift: 'Leave recorded',
+        newShift: `${shift.start}–${shift.end}`,
+        notes: 'Your leave record has been removed. You are rostered on as originally scheduled.'
+      });
+    }
+
+    const el = document.getElementById('pub-status');
+    if (el) {
+      el.style.display = 'block';
+      el.textContent = 'Leave removed — staff member notified.';
+      setTimeout(() => el.style.display = 'none', 4000);
+    }
+  } catch (err) {
+    console.error('Remove leave failed:', err);
+    alert('Could not remove leave: ' + (err.message || err));
   }
 }
 
@@ -4139,6 +4160,60 @@ function openEditLeaveModal(id){
   OM('m-add-leave');
 }
 
+
+function normaliseLeaveRequestRow(row){
+  return {
+    ...row,
+    id: String(row.id),
+    empId: row.empId || row.emp_id,
+    type: row.type || 'Annual Leave',
+    from: row.from,
+    to: row.to,
+    status: row.status || 'pending',
+    notes: row.notes || '',
+    submitted: row.submitted || row.created_at || new Date().toISOString(),
+    syncedToRoster: row.status === 'approved' ? true : (row.syncedToRoster ?? row.synced_to_roster ?? false),
+    syncedToLeaveTracker: row.status === 'approved' ? true : (row.syncedToLeaveTracker ?? row.synced_to_leave_tracker ?? false)
+  };
+}
+
+async function upsertOneLeaveRequest(row){
+  const clean = normaliseLeaveRequestRow(row);
+  const payloadAttempts = [
+    mapToSupabase('leaveRequests', [clean])[0],
+    (() => {
+      const p = mapToSupabase('leaveRequests', [clean])[0];
+      ['syncedToRoster','syncedToLeaveTracker','synced_to_roster','synced_to_leave_tracker','updatedAt','updated_at'].forEach(k => delete p[k]);
+      return p;
+    })(),
+    retryRowsWithoutDecisionAudit([(() => {
+      const p = mapToSupabase('leaveRequests', [clean])[0];
+      ['syncedToRoster','syncedToLeaveTracker','synced_to_roster','synced_to_leave_tracker','updatedAt','updated_at'].forEach(k => delete p[k]);
+      return p;
+    })()])[0]
+  ];
+
+  _setSyncIndicator('saving');
+  let lastError = null;
+  for (const payload of payloadAttempts) {
+    const { error } = await supabaseClient
+      .from('leave_requests')
+      .upsert(payload, { onConflict: 'id' });
+
+    if (!error) {
+      _setSyncIndicator('saved');
+      return clean;
+    }
+
+    lastError = error;
+    const msg = String(error.message || '').toLowerCase();
+    if (!(msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find'))) break;
+  }
+
+  _setSyncIndicator('error');
+  throw lastError || new Error('Could not save leave request.');
+}
+
 async function saveLeaveRequest(){
   const empId = document.getElementById('al-emp').value;
   const type = document.getElementById('al-type').value;
@@ -4153,8 +4228,11 @@ async function saveLeaveRequest(){
   }
 
   let reqs = DB.get('leaveRequests') || [];
+  const existing = editingLeaveId ? reqs.find(l => String(l.id) === String(editingLeaveId)) : null;
+  const now = new Date().toISOString();
 
-  const row = {
+  const row = normaliseLeaveRequestRow({
+    ...(existing || {}),
     id: editingLeaveId || 'lr' + Date.now(),
     empId,
     type,
@@ -4162,25 +4240,38 @@ async function saveLeaveRequest(){
     to,
     status,
     notes,
-    submitted: editingLeaveId
-      ? (reqs.find(l => l.id === editingLeaveId)?.submitted || new Date().toISOString())
-      : new Date().toISOString()
-  };
+    submitted: existing?.submitted || now,
+    ...(status === 'approved' ? {
+      processedAt: existing?.processedAt || now,
+      syncedToRoster: true,
+      syncedToLeaveTracker: true
+    } : {})
+  });
 
-  if(editingLeaveId){
-    reqs = reqs.map(l => l.id === editingLeaveId ? {...l, ...row} : l);
-  } else {
-    reqs.push(row);
+  try {
+    const saved = await upsertOneLeaveRequest(row);
+
+    if(editingLeaveId){
+      reqs = reqs.map(l => String(l.id) === String(editingLeaveId) ? {...l, ...saved} : l);
+    } else {
+      reqs.push(saved);
+    }
+
+    CACHE['rx3_leaveRequests'] = reqs;
+
+    CM('m-add-leave');
+    editingLeaveId = null;
+
+    renderLeave(currentLeaveFilter);
+    renderRoster();
+    renderDashboard();
+    if(typeof renderCalendar === 'function') renderCalendar();
+    if(typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
+
+  } catch(err) {
+    console.error('Save leave failed:', err);
+    alert('Could not save leave: ' + (err.message || err));
   }
-
-  await DB.set('leaveRequests', reqs);
-
-  CM('m-add-leave');
-  editingLeaveId = null;
-
-  renderLeave(currentLeaveFilter);
-  renderRoster();
-  renderDashboard();
 }
 
 async function deleteLeaveRequest(){
@@ -4204,12 +4295,12 @@ async function deleteLeaveRequest(){
     renderLeave(currentLeaveFilter);
     renderDashboard();
     renderRoster();
-
     if(typeof renderCalendar === 'function') renderCalendar();
+    if(typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
 
   } catch(err){
     console.error('Delete leave failed:', err);
-    alert('Could not delete leave: ' + err.message);
+    alert('Could not delete leave: ' + (err.message || err));
   }
 }
 

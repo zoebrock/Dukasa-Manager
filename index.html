@@ -1040,6 +1040,8 @@ function normaliseLateReport(row){
     ...r,
     id: r.id || ['late', empId, date, eta, shiftId].filter(Boolean).join('-'),
     empId,
+    staffName: r.staffName || r.staff_name || r.empName || r.emp_name || r.name || '',
+    staffEmail: r.staffEmail || r.staff_email || r.empEmail || r.emp_email || '',
     shiftId,
     date,
     shiftStart: r.shiftStart || r.shift_start || r.start || '',
@@ -1058,6 +1060,8 @@ function lateReportPayloads(report){
   return {
     id: r.id || ('late-' + Date.now()),
     emp_id: r.empId,
+    staff_name: r.staffName || r.empName || r.name || null,
+    staff_email: r.staffEmail || r.empEmail || null,
     shift_id: r.shiftId || null,
     date: r.date || null,
     shift_start: r.shiftStart || null,
@@ -1566,7 +1570,7 @@ function renderLateNotifications(staff, shifts, clockEvents){
   return reports.map(r => {
     const emp = staff.find(s => String(s.id) === String(r.empId));
     const sh = shifts.find(s => String(s.id) === String(r.shiftId)) || shifts.find(s => String(s.empId) === String(r.empId) && s.date === r.date && s.published);
-    const name = emp ? `${emp.first || ''} ${emp.last || ''}`.trim() : (r.empName || r.staffName || 'Staff member');
+    const name = emp ? `${emp.first || ''} ${emp.last || ''}`.trim() : (r.staffName || r.empName || 'Staff member');
     const shiftLabel = (r.shiftStart && r.shiftEnd) ? `${r.shiftStart}–${r.shiftEnd}` : (sh ? `${sh.start}–${sh.end}` : '—');
     const eta = r.eta || '—';
     const reason = r.reason || 'No reason provided';
@@ -6199,13 +6203,11 @@ async function saveRunningLateReport(payload = {}){
     acknowledged: false,
     createdAt: payload.createdAt || payload.created_at || new Date().toISOString()
   });
-  const settings = DB.get('settings') || {};
-  const reports = (settings.lateReports || settings.runningLateReports || DB.get('lateReports') || []).map(normaliseLateReport);
+  const reports = (DB.get('lateReports') || []).map(normaliseLateReport);
   const existing = reports.findIndex(r => String(r.id) === String(report.id));
   if(existing >= 0) reports[existing] = {...reports[existing], ...report};
   else reports.push(report);
-  settings.lateReports = reports;
-  try{ await DB.set('settings', settings); } catch(e){ console.error('Could not save late report', e); }
+  try{ await DB.set('lateReports', reports); } catch(e){ console.error('Could not save late report', e); }
   return report;
 }
 

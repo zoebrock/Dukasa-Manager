@@ -139,6 +139,8 @@ h2{font-size:17px;font-weight:600}h3{font-size:15px;font-weight:600}
 .wk-lbl{font-weight:600;font-size:14px;min-width:170px;text-align:center}
 .settings-s{margin-bottom:22px}.settings-s h3{margin-bottom:9px;padding-bottom:6px;border-bottom:1px solid var(--border)}
 .notif-area{margin-bottom:14px}
+.late-notif{background:var(--al);color:var(--ad);border:1px solid #FAC775;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.late-notif strong{color:var(--ad)}
 .avail-badge{font-size:9px;padding:1px 4px;border-radius:3px;display:inline-block}
 .avail-y{background:var(--gl);color:var(--gd)}.avail-n{background:var(--rl);color:var(--rd)}
 .chip-small{font-size:9px;padding:1px 5px}
@@ -980,7 +982,8 @@ const TABLE_MAP = {
   customHours: 'custom_hours',
   announcements: 'announcements',
   settings: 'settings',
-  rosterTemplates: 'roster_templates'
+  rosterTemplates: 'roster_templates',
+  lateReports: 'late_reports'
 };
 
 const CLOCK_TYPE_ALIASES = {
@@ -1020,6 +1023,52 @@ function clockDateFromStamp(stamp){
   const d = new Date(stamp);
   if(isNaN(d.getTime())) return '';
   return FD(d);
+}
+
+function escHTML(value){
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+function normaliseLateReport(row){
+  const r = row || {};
+  const empId = String(r.empId || r.emp_id || r.staffId || r.staff_id || '');
+  const shiftId = String(r.shiftId || r.shift_id || '');
+  const createdAt = r.createdAt || r.created_at || r.timestamp || r.ts || new Date().toISOString();
+  const date = String(r.date || r.shiftDate || r.shift_date || clockDateFromStamp(createdAt) || '').slice(0,10);
+  const eta = String(r.eta || r.expectedAt || r.expected_at || r.arrivalTime || r.arrival_time || '').slice(0,5);
+  return {
+    ...r,
+    id: r.id || ['late', empId, date, eta, shiftId].filter(Boolean).join('-'),
+    empId,
+    shiftId,
+    date,
+    shiftStart: r.shiftStart || r.shift_start || r.start || '',
+    shiftEnd: r.shiftEnd || r.shift_end || r.end || '',
+    eta,
+    reason: r.reason || r.note || r.notes || '',
+    managerContacted: r.managerContacted ?? r.manager_contacted ?? false,
+    acknowledged: r.acknowledged ?? r.managerAcknowledged ?? r.manager_acknowledged ?? false,
+    acknowledgedAt: r.acknowledgedAt || r.acknowledged_at || '',
+    createdAt
+  };
+}
+
+function lateReportPayloads(report){
+  const r = normaliseLateReport(report);
+  return {
+    id: r.id || ('late-' + Date.now()),
+    emp_id: r.empId,
+    shift_id: r.shiftId || null,
+    date: r.date || null,
+    shift_start: r.shiftStart || null,
+    shift_end: r.shiftEnd || null,
+    eta: r.eta || null,
+    reason: r.reason || null,
+    manager_contacted: !!r.managerContacted,
+    acknowledged: !!r.acknowledged,
+    acknowledged_at: r.acknowledgedAt || null,
+    created_at: r.createdAt || new Date().toISOString()
+  };
 }
 
 function normaliseClockEvent(row){
@@ -1150,6 +1199,10 @@ if (key === 'clockEvents') {
   return rows.map(normaliseClockEvent).filter(e => e.empId && e.date && e.time && e.type);
 }
 
+if (key === 'lateReports') {
+  return rows.map(normaliseLateReport).filter(r => r.empId || r.date || r.reason);
+}
+
 if (['leaveRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
   return rows.map(r => ({
     ...r,
@@ -1210,6 +1263,10 @@ function mapToSupabase(key, arrOrObj) {
 
     if (key === 'clockEvents') {
       return clockEventPayloads(x)[0];
+    }
+
+    if (key === 'lateReports') {
+      return lateReportPayloads(x);
     }
 
     if (key === 'staff') {
@@ -1407,7 +1464,7 @@ function _setSyncIndicator(state) {
 
 const ALL_KEYS = [
   'staff','shifts','leaveRequests','sickDays',
-  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements'
+  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements','lateReports'
 ];
 // clockEvents is fetched separately only when needed (timesheets/dashboard)
 // so manual entries aren't wiped by the 10-second smart sync
@@ -1445,6 +1502,86 @@ function initDefaults() {
 
 // AUTH
 // DASHBOARD
+function lateReportsFromSettings(){
+  const settings = DB.get('settings') || {};
+  return (settings.lateReports || settings.runningLateReports || []).map(normaliseLateReport);
+}
+
+function lateReportsFromClockEvents(clockEvents){
+  return (clockEvents || [])
+    .filter(e => /late/i.test(String(e.type || e.reason || '')))
+    .map(e => normaliseLateReport({
+      id: e.id ? 'late-' + e.id : undefined,
+      empId: e.empId,
+      date: e.date,
+      eta: e.eta || e.expectedAt || '',
+      reason: e.reason || e.note || 'Running late',
+      createdAt: e.ts || e.timestamp || (e.date && e.time ? new Date(e.date + 'T' + e.time + ':00').toISOString() : new Date().toISOString())
+    }));
+}
+
+function allLateReports(clockEvents){
+  const fromTable = (DB.get('lateReports') || []).map(normaliseLateReport);
+  const fromSettings = lateReportsFromSettings();
+  const fromClock = lateReportsFromClockEvents(clockEvents || getClockEvents());
+  const byId = new Map();
+  [...fromTable, ...fromSettings, ...fromClock].forEach(r => {
+    const key = r.id || ['late', r.empId, r.date, r.eta, r.reason].join('|');
+    if(!byId.has(key)) byId.set(key, r);
+  });
+  return [...byId.values()].sort((a,b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+async function acknowledgeLateReport(id){
+  const reports = (DB.get('lateReports') || []).map(normaliseLateReport);
+  const idx = reports.findIndex(r => String(r.id) === String(id));
+  if(idx >= 0){
+    reports[idx].acknowledged = true;
+    reports[idx].acknowledgedAt = new Date().toISOString();
+    await DB.set('lateReports', reports);
+  } else {
+    const settings = DB.get('settings') || {};
+    const rows = (settings.lateReports || settings.runningLateReports || []).map(normaliseLateReport);
+    const sidx = rows.findIndex(r => String(r.id) === String(id));
+    if(sidx >= 0){
+      rows[sidx].acknowledged = true;
+      rows[sidx].acknowledgedAt = new Date().toISOString();
+      settings.lateReports = rows;
+      await DB.set('settings', settings);
+    }
+  }
+  renderDashboard();
+  updateBadges();
+}
+
+function renderLateNotifications(staff, shifts, clockEvents){
+  const today = FD(new Date());
+  const reports = allLateReports(clockEvents)
+    .filter(r => !r.acknowledged)
+    .filter(r => !r.date || r.date >= today)
+    .slice(0, 10);
+
+  if(!reports.length) return '';
+
+  return reports.map(r => {
+    const emp = staff.find(s => String(s.id) === String(r.empId));
+    const sh = shifts.find(s => String(s.id) === String(r.shiftId)) || shifts.find(s => String(s.empId) === String(r.empId) && s.date === r.date && s.published);
+    const name = emp ? `${emp.first || ''} ${emp.last || ''}`.trim() : (r.empName || r.staffName || 'Staff member');
+    const shiftLabel = (r.shiftStart && r.shiftEnd) ? `${r.shiftStart}–${r.shiftEnd}` : (sh ? `${sh.start}–${sh.end}` : '—');
+    const eta = r.eta || '—';
+    const reason = r.reason || 'No reason provided';
+    const contacted = (r.managerContacted === true || String(r.managerContacted).toLowerCase() === 'yes') ? 'Yes' : 'No';
+    return `<div class="alert late-notif" style="margin-bottom:8px">
+      <div style="flex:1;font-size:12px">
+        <div style="font-weight:700;margin-bottom:2px">⏰ Running late: ${escHTML(name)}</div>
+        <div>${r.date ? FDL(r.date) : 'Today'} · Shift ${escHTML(shiftLabel)} · ETA <strong>${escHTML(eta)}</strong></div>
+        <div style="color:var(--ad);opacity:.9;margin-top:2px">Reason: ${escHTML(reason)} · Manager contacted: ${escHTML(contacted)}</div>
+      </div>
+      <button class="btn btn-sm" onclick="acknowledgeLateReport('${escHTML(r.id)}')">Acknowledge</button>
+    </div>`;
+  }).join('');
+}
+
 function renderDashboard(){
   const staff=DB.get('staff')||[];
   const shifts=DB.get('shifts')||[];
@@ -1473,11 +1610,12 @@ function renderDashboard(){
   });
   const pendingLR=lr.filter(l=>l.status==='pending');
   const pendingOT=otReqs.filter(o=>o.approved===null||o.approved===undefined);
+  const pendingLate=allLateReports(ce).filter(r=>!r.acknowledged && (!r.date || r.date>=today));
 
   const dToday=document.getElementById('d-today');if(dToday) dToday.textContent=todayShifts.length;
   const dClocked=document.getElementById('d-clocked');if(dClocked) dClocked.textContent=clocked.length;
   const dLeave=document.getElementById('d-leave');if(dLeave) dLeave.textContent=onLeaveToday.length+sickToday.length;
-  const dPending=document.getElementById('d-pending');if(dPending) dPending.textContent=pendingLR.length+pendingOT.length;
+  const dPending=document.getElementById('d-pending');if(dPending) dPending.textContent=pendingLR.length+pendingOT.length+pendingLate.length;
 
   // Nav badges
   const lb=document.getElementById('leave-badge');
@@ -1489,7 +1627,7 @@ function renderDashboard(){
   const pendMC=sd.filter(sk=>{const mc=mcs.find(m=>m.empId===sk.empId&&m.date===sk.date);return mc&&!mc.manager_notified;});
   const mcNotifs=document.getElementById('mc-notifs');
   if(mcNotifs){
-    mcNotifs.innerHTML=pendMC.map(sk=>{
+    mcNotifs.innerHTML=renderLateNotifications(staff, shifts, ce)+pendMC.map(sk=>{
       const emp=staff.find(s=>s.id===sk.empId);
       const mc=mcs.find(m=>m.empId===sk.empId&&m.date===sk.date);
       return`<div class="alert ai" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"><span><strong>${emp?emp.first+' '+emp.last:'?'}</strong> uploaded a medical certificate for ${FDS(sk.date)}</span><button class="btn btn-sm btn-primary" onclick="viewMC('${mc.id}')">View &amp; acknowledge</button></div>`;
@@ -1554,6 +1692,7 @@ function updateBadges(){
   const otReqs=DB.get('otRequests')||[];
   const pendingLR=leaveReqs.filter(l=>l.status==='pending');
   const pendingOT=otReqs.filter(o=>o.approved===null||o.approved===undefined);
+  const pendingLate=allLateReports(getClockEvents()).filter(r=>!r.acknowledged && (!r.date || r.date>=FD(new Date())));
   const lb=document.getElementById('leave-badge');
   if(lb){if(pendingLR.length){lb.textContent=pendingLR.length;lb.style.display='inline-flex';}else lb.style.display='none';}
   const ob=document.getElementById('ot-badge');
@@ -1561,7 +1700,7 @@ function updateBadges(){
   const pcb=document.getElementById('pc-badge');
   if(pcb){if(pendingLR.length){pcb.textContent=pendingLR.length;pcb.style.display='inline-flex';}else pcb.style.display='none';}
   const dp=document.getElementById('d-pending');
-  if(dp) dp.textContent=pendingLR.length+pendingOT.length;
+  if(dp) dp.textContent=pendingLR.length+pendingOT.length+pendingLate.length;
   updateAnnBadge();
 }
 
@@ -6016,11 +6155,74 @@ function staffPayload(empId){
   };
 }
 
-function notify(type, payload = {}){
+function isRunningLateType(type){
+  return ['running_late','running-late','late','staff_running_late','manager_running_late'].includes(String(type || '').toLowerCase());
+}
+
+function enrichRunningLatePayload(payload = {}){
+  const empId = payload.empId || payload.emp_id || payload.staffId || payload.staff_id || payload.employeeId || payload.employee_id;
+  const emp = empId ? staffById(empId) : {};
+  const shiftId = payload.shiftId || payload.shift_id;
+  const shift = shiftId ? (DB.get('shifts') || []).find(s => String(s.id) === String(shiftId)) : null;
+  const name = payload.empName || payload.staffName || payload.staffMember || `${emp.first || ''} ${emp.last || ''}`.trim();
+  return {
+    ...payload,
+    empId: empId || payload.empId || '',
+    empEmail: payload.empEmail || emp.email || '',
+    empFirst: payload.empFirst || emp.first || '',
+    empLast: payload.empLast || emp.last || '',
+    empName: name || 'Staff member',
+    staffName: name || 'Staff member',
+    staffMember: name || 'Staff member',
+    shiftId: shiftId || payload.shiftId || '',
+    date: payload.date || payload.shiftDate || shift?.date || FD(new Date()),
+    shiftStart: payload.shiftStart || payload.start || shift?.start || '',
+    shiftEnd: payload.shiftEnd || payload.end || shift?.end || '',
+    eta: payload.eta || payload.expectedAt || payload.expected_at || '',
+    reason: payload.reason || payload.note || '',
+    managerContacted: payload.managerContacted ?? payload.manager_contacted ?? false
+  };
+}
+
+async function saveRunningLateReport(payload = {}){
+  const p = enrichRunningLatePayload(payload);
+  const report = normaliseLateReport({
+    id: payload.id || payload.reportId || ['late', p.empId, p.date, p.eta, Date.now()].filter(Boolean).join('-'),
+    empId: p.empId,
+    shiftId: p.shiftId,
+    date: p.date,
+    shiftStart: p.shiftStart,
+    shiftEnd: p.shiftEnd,
+    eta: p.eta,
+    reason: p.reason,
+    managerContacted: p.managerContacted,
+    acknowledged: false,
+    createdAt: payload.createdAt || payload.created_at || new Date().toISOString()
+  });
+  const settings = DB.get('settings') || {};
+  const reports = (settings.lateReports || settings.runningLateReports || DB.get('lateReports') || []).map(normaliseLateReport);
+  const existing = reports.findIndex(r => String(r.id) === String(report.id));
+  if(existing >= 0) reports[existing] = {...reports[existing], ...report};
+  else reports.push(report);
+  settings.lateReports = reports;
+  try{ await DB.set('settings', settings); } catch(e){ console.error('Could not save late report', e); }
+  return report;
+}
+
+async function notify(type, payload = {}){
+  const finalPayload = isRunningLateType(type) ? enrichRunningLatePayload(payload) : payload;
+
+  if(isRunningLateType(type)){
+    saveRunningLateReport(finalPayload).then(() => {
+      if(typeof renderDashboard === 'function') renderDashboard();
+      if(typeof updateBadges === 'function') updateBadges();
+    });
+  }
+
   return _gasPost({
     action: 'sendNotification',
     type,
-    payload
+    payload: finalPayload
   }).then(r => {
     console.log('Notification sent:', type, r);
     return r;

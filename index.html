@@ -1382,6 +1382,30 @@ return x;
   });
 }
   
+async function fetchAllSupabaseRows(table, pageSize = 1000) {
+  const allRows = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + pageSize - 1;
+    const { data, error } = await supabaseClient
+      .from(table)
+      .select('*')
+      .order('id', { ascending: true })
+      .range(from, to);
+
+    if (error) return { data: null, error };
+
+    const page = data || [];
+    allRows.push(...page);
+
+    if (page.length < pageSize) break;
+    from += pageSize;
+  }
+
+  return { data: allRows, error: null };
+}
+
 const DB = {
   get(k) {
     return CACHE['rx3_' + k] ?? null;
@@ -1448,7 +1472,10 @@ const DB = {
       }
 
       try {
-        const { data, error } = await supabaseClient.from(table).select('*');
+        // Supabase/PostgREST caps a single select response. Always page through
+        // the complete table in a stable order so unrelated roster rows cannot
+        // vanish from the local cache once the shifts table grows past the cap.
+        const { data, error } = await fetchAllSupabaseRows(table);
 
         if (error) {
           console.error('Could not load', k, error.message);
@@ -3164,7 +3191,7 @@ function openPublishModal(){
   OM('m-publish');
 }
 
-function publishRoster(){
+async function publishRoster(){
   const we=new Date(currentWeekStart);we.setDate(we.getDate()+6);
   const ws=FD(currentWeekStart),wed=FD(we);
   // Mark all week shifts as published and capture the updated array
@@ -3172,7 +3199,8 @@ function publishRoster(){
     if(s.date>=ws&&s.date<=wed) return Object.assign({},s,{published:true,status:'published'});
     return s;
   });
-  DB.set('shifts',allShifts);
+  const publishResult = await DB.set('shifts',allShifts);
+  if (!publishResult?.ok) return;
   CM('m-publish');renderRoster();
   const el=document.getElementById('pub-status');
   el.style.display='block';

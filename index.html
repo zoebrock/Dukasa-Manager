@@ -1385,20 +1385,30 @@ return x;
 async function fetchAllSupabaseRows(table, pageSize = 1000) {
   const allRows = [];
   let from = 0;
+  let canOrderById = true;
 
   while (true) {
     const to = from + pageSize - 1;
-    const { data, error } = await supabaseClient
-      .from(table)
-      .select('*')
-      .order('id', { ascending: true })
-      .range(from, to);
+    let query = supabaseClient.from(table).select('*');
+    if (canOrderById) query = query.order('id', { ascending: true });
+    let result = await query.range(from, to);
 
+    // Not every shared table uses an `id` column (for example, settings may use
+    // a key/name column). Retry that table without ordering instead of failing
+    // the entire manager/staff/clock synchronisation cycle.
+    if (result.error && canOrderById) {
+      const msg = String(result.error.message || '').toLowerCase();
+      if (msg.includes('column') && msg.includes('id')) {
+        canOrderById = false;
+        result = await supabaseClient.from(table).select('*').range(from, to);
+      }
+    }
+
+    const { data, error } = result;
     if (error) return { data: null, error };
 
     const page = data || [];
     allRows.push(...page);
-
     if (page.length < pageSize) break;
     from += pageSize;
   }
@@ -6216,8 +6226,73 @@ async function runManagerRefresh({ manual = false } = {}) {
   }
 }
 
+let managerRealtimeChannel = null;
+let managerRealtimeDebounce = null;
+
+const REALTIME_TABLE_TO_KEY = {
+  staff: 'staff',
+  shifts: 'shifts',
+  clock_events: 'clockEvents',
+  leave_requests: 'leaveRequests',
+  ot_requests: 'otRequests',
+  sick_days: 'sickDays',
+  med_certs: 'medCerts',
+  custom_hours: 'customHours',
+  announcements: 'announcements',
+  settings: 'settings',
+  roster_templates: 'rosterTemplates',
+  late_reports: 'lateReports'
+};
+
+function queueRealtimeRefresh(key) {
+  if (!key) return;
+  clearTimeout(managerRealtimeDebounce);
+  managerRealtimeDebounce = setTimeout(async () => {
+    // Do not overwrite an in-progress roster edit. The queued realtime refresh
+    // will be picked up by the fallback poll immediately after the modal closes.
+    if (key === 'shifts' && isRosterInteractionActive()) return;
+    if (managerRefreshInProgress || isKeySaving(key)) return;
+    managerRefreshInProgress = true;
+    try {
+      const results = await DB.refresh([key]);
+      if (results && results[key]) renderActiveManagerPage();
+    } catch (e) {
+      console.error('Realtime refresh failed for', key, e);
+      // Polling remains active, so a transient realtime failure is not treated as
+      // a total sync failure in the UI.
+    } finally {
+      managerRefreshInProgress = false;
+    }
+  }, 150);
+}
+
+function startManagerRealtime() {
+  try {
+    if (managerRealtimeChannel) supabaseClient.removeChannel(managerRealtimeChannel);
+    let channel = supabaseClient.channel('rosterrx-manager-live-' + Date.now());
+    Object.entries(REALTIME_TABLE_TO_KEY).forEach(([table, key]) => {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table },
+        () => queueRealtimeRefresh(key)
+      );
+    });
+    managerRealtimeChannel = channel.subscribe(status => {
+      if (status === 'SUBSCRIBED') console.info('RosterRx realtime connected');
+      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('RosterRx realtime unavailable; polling fallback remains active:', status);
+      }
+    });
+  } catch (e) {
+    console.warn('Could not initialise realtime; polling fallback remains active', e);
+  }
+}
+
 function startManagerSync() {
+  startManagerRealtime();
   if (managerSyncTimer) clearInterval(managerSyncTimer);
+  // Reconciliation fallback. Realtime normally updates immediately; this catches
+  // missed websocket events or tables not enabled in the Supabase publication.
   managerSyncTimer = setInterval(() => {
     runManagerRefresh();
   }, 10000);

@@ -570,6 +570,10 @@ function isRosterInteractionActive(){
     Save as draft
   </button>
 
+  <button class="btn btn-amber" id="sh-unpublish-btn" onclick="saveShift('unpublish')" style="display:none">
+    Unpublish shift
+  </button>
+
   <button class="btn btn-primary" id="sh-publish-btn" onclick="saveShift('publish')">
     Publish shift
   </button>
@@ -2483,6 +2487,12 @@ function openAddShiftForED(empId,date){
   notifyRow.style.display='block';
   const emailCb2=document.getElementById('sh-send-email');if(emailCb2)emailCb2.checked=false; // default OFF
   const brHint2=document.getElementById('sh-break-hint');if(brHint2)brHint2.textContent='Auto-calculated';
+  const draftBtn=document.getElementById('sh-draft-btn');
+  const publishBtn=document.getElementById('sh-publish-btn');
+  const unpublishBtn=document.getElementById('sh-unpublish-btn');
+  if(draftBtn){ draftBtn.textContent='Save as draft'; draftBtn.style.display='inline-flex'; }
+  if(publishBtn){ publishBtn.textContent='Publish shift'; publishBtn.style.display='inline-flex'; }
+  if(unpublishBtn) unpublishBtn.style.display='none';
   autoCalcBreak(true);
   OM('m-shift');
 }
@@ -2501,7 +2511,12 @@ async function saveShift(publishMode){
     : null;
 
   const isNewShift = !editingShiftId;
-  const shouldPublish = publishMode === 'publish';
+  const wasPublished = previousShift ? isPublishedShift(previousShift) : false;
+  // Editing a published shift must never silently demote it to draft.
+  // Only the explicit Unpublish action may change published -> draft.
+  const shouldPublish = publishMode === 'unpublish'
+    ? false
+    : (publishMode === 'publish' || wasPublished);
 
   const ns = {
     id: editingShiftId || 'sh' + Date.now(),
@@ -2553,8 +2568,20 @@ try {
 
   if (saveError) throw saveError;
 
-  // Commit locally only after Supabase confirms the save.
-  CACHE['rx3_shifts'] = shifts;
+  // Verify the exact row that Supabase persisted before changing local state.
+  const verify = await supabaseClient
+    .from('shifts')
+    .select('*')
+    .eq('id', ns.id)
+    .single();
+  if (verify.error) throw verify.error;
+  const savedShift = mapFromSupabase('shifts', [verify.data])[0];
+  if (isPublishedShift(savedShift) !== shouldPublish) {
+    throw new Error('Supabase saved an unexpected publication status. No local roster data was changed.');
+  }
+
+  const committed = shifts.map(s => String(s.id) === String(ns.id) ? savedShift : s);
+  CACHE['rx3_shifts'] = committed;
   bumpDataVersion('shifts');
   _setSyncIndicator('saved');
 } catch (error) {
@@ -2577,7 +2604,7 @@ renderDashboard();
   const el = document.getElementById('pub-status');
   if (el) {
     el.style.display = 'block';
-    el.textContent = shouldPublish ? 'Shift published.' : 'Shift saved as draft.';
+    el.textContent = shouldPublish ? 'Shift saved and remains published.' : (publishMode === 'unpublish' ? 'Shift unpublished.' : 'Shift saved as draft.');
   }
 
   if (emp && shouldEmail) {
@@ -2876,6 +2903,18 @@ function editShiftFromDetail(){
   const emailCb3=document.getElementById('sh-send-email');if(emailCb3)emailCb3.checked=false; // default OFF
   // Mark break as manual since we're loading an existing value
   const brHint3=document.getElementById('sh-break-hint');if(brHint3)brHint3.textContent='(manual)';
+  const draftBtn=document.getElementById('sh-draft-btn');
+  const publishBtn=document.getElementById('sh-publish-btn');
+  const unpublishBtn=document.getElementById('sh-unpublish-btn');
+  if(isPublished){
+    if(draftBtn){ draftBtn.textContent='Save changes'; draftBtn.style.display='inline-flex'; }
+    if(publishBtn) publishBtn.style.display='none';
+    if(unpublishBtn) unpublishBtn.style.display='inline-flex';
+  } else {
+    if(draftBtn){ draftBtn.textContent='Save as draft'; draftBtn.style.display='inline-flex'; }
+    if(publishBtn){ publishBtn.textContent='Publish shift'; publishBtn.style.display='inline-flex'; }
+    if(unpublishBtn) unpublishBtn.style.display='none';
+  }
   autoCalcBreak(false); // update detail line only
   OM('m-shift');
 }

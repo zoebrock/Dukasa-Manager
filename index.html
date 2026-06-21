@@ -207,6 +207,29 @@ let calMonth = new Date();
 
 let bulkShiftMode = false;
 let selectedShiftIds = new Set();
+
+// Protect locally edited/saved data from stale background refreshes.
+const DATA_VERSIONS = Object.create(null);
+const SAVING_KEYS = new Map();
+let managerRefreshInProgress = false;
+let managerSyncTimer = null;
+
+function dataVersion(key){ return DATA_VERSIONS[key] || 0; }
+function bumpDataVersion(key){ DATA_VERSIONS[key] = dataVersion(key) + 1; }
+function beginKeySave(key){
+  SAVING_KEYS.set(key, (SAVING_KEYS.get(key) || 0) + 1);
+}
+function endKeySave(key){
+  const remaining = Math.max(0, (SAVING_KEYS.get(key) || 1) - 1);
+  if (remaining) SAVING_KEYS.set(key, remaining);
+  else SAVING_KEYS.delete(key);
+}
+function isKeySaving(key){ return (SAVING_KEYS.get(key) || 0) > 0; }
+function isModalOpen(id){ return !!document.getElementById(id)?.classList.contains('open'); }
+function isRosterInteractionActive(){
+  return isKeySaving('shifts') || isModalOpen('m-shift') || isModalOpen('m-publish') ||
+    isModalOpen('m-template') || isModalOpen('m-shift-detail');
+}
   
 // Inject apple-touch-icon dynamically (required for Google Apps Script hosted pages)
 (function(){
@@ -1363,27 +1386,25 @@ const DB = {
   async set(k, v) {
     const key = 'rx3_' + k;
     CACHE[key] = v;
+    bumpDataVersion(k);
 
     const table = TABLE_MAP[k];
-    if (!table) return;
+    if (!table) return { ok: true };
 
     const rows = mapToSupabase(k, v);
-
     _setSyncIndicator('saving');
+    beginKeySave(k);
 
     try {
       if (!rows.length) {
         _setSyncIndicator('saved');
-        return;
+        return { ok: true };
       }
 
       let { error } = await supabaseClient
         .from(table)
         .upsert(rows, { onConflict: 'id' });
 
-      // Backwards-compatible safety: if the Supabase audit columns have not been
-      // added yet, save the operational decision anyway rather than blocking approvals.
-      // Add the audit columns to persist the “approved by” labels permanently.
       if (error && looksLikeMissingAuditColumn(error)) {
         const fallbackRows = retryRowsWithoutDecisionAudit(rows);
         const retry = await supabaseClient
@@ -1393,55 +1414,72 @@ const DB = {
       }
 
       if (error) throw error;
-
       _setSyncIndicator('saved');
+      return { ok: true };
 
     } catch (error) {
       console.error('Supabase save failed:', k, error);
       _setSyncIndicator('error');
       alert('Could not save ' + k + ': ' + error.message);
+      return { ok: false, error };
+    } finally {
+      endKeySave(k);
     }
   },
 
-  async preload(keys, callback) {
+  async preload(keys, callback, options = {}) {
+    const preserveOnError = options.preserveOnError !== false;
     _setSyncIndicator('loading');
+    const results = {};
 
     for (const k of keys) {
       const table = TABLE_MAP[k];
+      const cacheKey = 'rx3_' + k;
+      const requestVersion = dataVersion(k);
 
       if (!table) {
-        CACHE['rx3_' + k] = k === 'settings' ? {} : [];
+        if (!(cacheKey in CACHE)) CACHE[cacheKey] = k === 'settings' ? {} : [];
+        results[k] = true;
         continue;
       }
 
       try {
-        const { data, error } = await supabaseClient
-          .from(table)
-          .select('*');
+        const { data, error } = await supabaseClient.from(table).select('*');
 
         if (error) {
           console.error('Could not load', k, error.message);
-          CACHE['rx3_' + k] = k === 'settings' ? {} : [];
+          if (!preserveOnError && !(cacheKey in CACHE)) CACHE[cacheKey] = k === 'settings' ? {} : [];
+          results[k] = false;
           continue;
         }
 
-        CACHE['rx3_' + k] = mapFromSupabase(k, data || []);
+        // A save/edit occurred after this request began. Discard the stale response.
+        if (dataVersion(k) !== requestVersion || isKeySaving(k)) {
+          console.info('Ignored stale refresh for', k);
+          results[k] = false;
+          continue;
+        }
 
-        console.log('Loaded', k, CACHE['rx3_' + k]);
+        CACHE[cacheKey] = mapFromSupabase(k, data || []);
+        console.log('Loaded', k, CACHE[cacheKey]);
+        results[k] = true;
 
       } catch (err) {
         console.error('Preload failed for', k, err);
-        CACHE['rx3_' + k] = k === 'settings' ? {} : [];
+        if (!preserveOnError && !(cacheKey in CACHE)) CACHE[cacheKey] = k === 'settings' ? {} : [];
+        results[k] = false;
       }
     }
 
-    _setSyncIndicator('saved');
+    if (Object.values(results).every(Boolean)) _setSyncIndicator('saved');
+    else _setSyncIndicator('error');
 
-    if (callback) callback();
+    if (callback) callback(results);
+    return results;
   },
 
-  async refresh(keys, callback) {
-    await this.preload(keys, callback);
+  async refresh(keys, callback, options = {}) {
+    return this.preload(keys, callback, { preserveOnError: true, ...options });
   }
 };
 
@@ -1873,10 +1911,39 @@ function dayName(d){return['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()
 function toggleAvail(){showAvail=!showAvail;document.getElementById('toggle-avail').classList.toggle('on',showAvail);renderRoster();}
 
   function dedupeShifts(shifts){
-  // Dedupe by unique id only. Keying on emp/date/start/end caused draft and
-  // published copies of the same shift to collide and one to be hidden.
   const seen = new Map();
-  shifts.forEach(s => seen.set(String(s.id), s));
+
+  shifts.forEach(s => {
+    const type =
+      s.entryType === 'leave' || s.entry_type === 'leave'
+        ? 'leave'
+        : s.isOT
+          ? 'ot'
+          : 'shift';
+
+    const key = [
+      String(s.empId || s.emp_id || ''),
+      String(s.date || ''),
+      String(type),
+      String(s.start || ''),
+      String(s.end || '')
+    ].join('|');
+
+    const existing = seen.get(key);
+
+    if(!existing){
+      seen.set(key, s);
+      return;
+    }
+
+    const existingTime = Number(String(existing.id || '').replace(/\D/g,'')) || 0;
+    const thisTime = Number(String(s.id || '').replace(/\D/g,'')) || 0;
+
+    if(thisTime > existingTime){
+      seen.set(key, s);
+    }
+  });
+
   return [...seen.values()];
 }
   
@@ -2421,7 +2488,8 @@ function openAddShiftForED(empId,date){
 }
 
 async function saveShift(publishMode){
-  const shifts = DB.get('shifts') || [];
+  const currentShifts = DB.get('shifts') || [];
+  const shifts = currentShifts.map(s => ({...s}));
   const empId = document.getElementById('sh-emp').value;
   const emp = (DB.get('staff') || []).find(s =>
   String(s.id) === String(empId)
@@ -2457,6 +2525,7 @@ async function saveShift(publishMode){
   }
 
 _setSyncIndicator('saving');
+beginKeySave('shifts');
 
 const dbRow = {
   id: ns.id,
@@ -2475,18 +2544,27 @@ const dbRow = {
   leave_reason: ns.leaveReason || null
 };
 
-const { error } = await supabaseClient
-  .from('shifts')
-  .upsert(dbRow, { onConflict: 'id' });
+let saveError = null;
+try {
+  const { error } = await supabaseClient
+    .from('shifts')
+    .upsert(dbRow, { onConflict: 'id' });
+  saveError = error;
 
-if (error) {
+  if (saveError) throw saveError;
+
+  // Commit locally only after Supabase confirms the save.
+  CACHE['rx3_shifts'] = shifts;
+  bumpDataVersion('shifts');
+  _setSyncIndicator('saved');
+} catch (error) {
+  console.error('Shift save failed', error);
   _setSyncIndicator('error');
   alert('Shift was not saved: ' + error.message);
   return;
+} finally {
+  endKeySave('shifts');
 }
-
-CACHE['rx3_shifts'] = shifts;
-_setSyncIndicator('saved');
 
 CM('m-shift');
 renderRoster();
@@ -2843,8 +2921,7 @@ async function deleteSupabaseRow(k, id) {
       String(s.date || ''),
       String(type),
       String(s.start || ''),
-      String(s.end || ''),
-      String(s.status || (s.published ? 'published' : 'draft'))
+      String(s.end || '')
     ].join('|');
 
     if(!seen.has(key)){
@@ -6038,32 +6115,44 @@ function saveSettings(){
 // ── SMART SYNC ─────────────────────────────────────────────────
 let _mgrLastModified = '0';
 
+function renderActiveManagerPage(){
+  const activePg = document.querySelector('.pg.active');
+  if (!activePg) return;
+  const pid = activePg.id.replace('pg-', '');
+  if (pid === 'dashboard') { renderDashboard(); updateBadges(); }
+  else if (pid === 'roster') { renderRoster(); setTimeout(renderRosterAlerts, 100); }
+  else if (pid === 'leave') { renderLeave(currentLeaveFilter); updateBadges(); }
+  else if (pid === 'ot') { renderOT(); updateBadges(); }
+  else if (pid === 'timesheets') renderTS();
+  else if (pid === 'staff') renderStaff();
+}
+
+async function runManagerRefresh({ manual = false } = {}) {
+  if (managerRefreshInProgress) return false;
+
+  // Never replace roster data while a roster action is open or being saved.
+  const keys = isRosterInteractionActive()
+    ? ALL_KEYS_WITH_CLOCK.filter(k => k !== 'shifts')
+    : ALL_KEYS_WITH_CLOCK;
+
+  managerRefreshInProgress = true;
+  try {
+    const results = await DB.refresh(keys);
+    renderActiveManagerPage();
+    return Object.values(results || {}).every(Boolean);
+  } catch (e) {
+    console.error('Sync failed', e);
+    _setSyncIndicator('error');
+    return false;
+  } finally {
+    managerRefreshInProgress = false;
+  }
+}
+
 function startManagerSync() {
-  setInterval(async () => {
-    try {
-      // Skip the auto-refresh while any modal is open, so the in-memory cache
-      // isn't swapped out from under an edit in progress.
-      if (document.querySelector('.modal-overlay.open')) return;
-
-      await DB.refresh(ALL_KEYS_WITH_CLOCK);
-
-      const activePg = document.querySelector('.pg.active');
-      if (activePg) {
-        const pid = activePg.id.replace('pg-', '');
-
-        if (pid === 'dashboard') { renderDashboard(); updateBadges(); }
-        else if (pid === 'roster') { renderRoster(); setTimeout(renderRosterAlerts, 100); }
-        else if (pid === 'leave') { renderLeave(currentLeaveFilter); updateBadges(); }
-        else if (pid === 'ot') { renderOT(); updateBadges(); }
-        else if (pid === 'timesheets') renderTS();
-        else if (pid === 'staff') renderStaff();
-      }
-
-      _setSyncIndicator('saved');
-    } catch(e) {
-      console.error('Sync failed', e);
-      _setSyncIndicator('error');
-    }
+  if (managerSyncTimer) clearInterval(managerSyncTimer);
+  managerSyncTimer = setInterval(() => {
+    runManagerRefresh();
   }, 10000);
 }
 
@@ -6071,19 +6160,11 @@ async function manualSync() {
   const btn = document.getElementById('sync-now-btn');
   if (btn) { btn.textContent = '⟳'; btn.disabled = true; }
   _setSyncIndicator('loading');
-  await new Promise(resolve => DB.refresh(ALL_KEYS_WITH_CLOCK, resolve));
-  const activePg = document.querySelector('.pg.active');
-  if (activePg) {
-    const pid = activePg.id.replace('pg-', '');
-    if (pid === 'dashboard') { renderDashboard(); updateBadges(); }
-    else if (pid === 'roster') { renderRoster(); setTimeout(renderRosterAlerts, 100); }
-    else if (pid === 'leave') { renderLeave(currentLeaveFilter); updateBadges(); }
-    else if (pid === 'ot') { renderOT(); updateBadges(); }
-    else if (pid === 'timesheets') renderTS();
-    else if (pid === 'staff') renderStaff();
+  try {
+    await runManagerRefresh({ manual: true });
+  } finally {
+    if (btn) { btn.textContent = '↻'; btn.disabled = false; }
   }
-  _setSyncIndicator('saved');
-  if (btn) { btn.textContent = '↻'; btn.disabled = false; }
 }
 
 function OM(id){document.getElementById(id).classList.add('open');}
@@ -6229,7 +6310,6 @@ DB.preload(ALL_KEYS, function(){
 // IMPORTANT: do not touch clockEvents here.
 // IMPORTANT: do not auto-write sickDays/customHours here.
 (function(){
-  const staffIds = new Set((DB.get('staff') || []).map(s => s.id));
   let shifts = DB.get('shifts') || [];
   let changed = false;
 
@@ -6279,15 +6359,12 @@ DB.preload(ALL_KEYS, function(){
     changed = true;
   }
 
-  const clean = shifts.filter(s => staffIds.has(s.empId));
-
-  if (clean.length !== shifts.length) {
-    changed = true;
-  }
-
+  // Never purge shifts merely because the staff list was temporarily incomplete
+  // or because an ID arrived as a number instead of a string. Orphaned records remain
+  // visible in the database until a manager explicitly removes them.
   if (changed) {
-    DB.set('shifts', clean);
-    console.log('Shifts migrated/purged. Remaining:', clean.length);
+    DB.set('shifts', shifts);
+    console.log('Legacy OT shifts migrated. Remaining:', shifts.length);
   }
 })();
   // Restore session if previously logged in (survives page reload)

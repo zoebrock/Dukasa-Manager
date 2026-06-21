@@ -1873,39 +1873,10 @@ function dayName(d){return['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()
 function toggleAvail(){showAvail=!showAvail;document.getElementById('toggle-avail').classList.toggle('on',showAvail);renderRoster();}
 
   function dedupeShifts(shifts){
+  // Dedupe by unique id only. Keying on emp/date/start/end caused draft and
+  // published copies of the same shift to collide and one to be hidden.
   const seen = new Map();
-
-  shifts.forEach(s => {
-    const type =
-      s.entryType === 'leave' || s.entry_type === 'leave'
-        ? 'leave'
-        : s.isOT
-          ? 'ot'
-          : 'shift';
-
-    const key = [
-      String(s.empId || s.emp_id || ''),
-      String(s.date || ''),
-      String(type),
-      String(s.start || ''),
-      String(s.end || '')
-    ].join('|');
-
-    const existing = seen.get(key);
-
-    if(!existing){
-      seen.set(key, s);
-      return;
-    }
-
-    const existingTime = Number(String(existing.id || '').replace(/\D/g,'')) || 0;
-    const thisTime = Number(String(s.id || '').replace(/\D/g,'')) || 0;
-
-    if(thisTime > existingTime){
-      seen.set(key, s);
-    }
-  });
-
+  shifts.forEach(s => seen.set(String(s.id), s));
   return [...seen.values()];
 }
   
@@ -2872,7 +2843,8 @@ async function deleteSupabaseRow(k, id) {
       String(s.date || ''),
       String(type),
       String(s.start || ''),
-      String(s.end || '')
+      String(s.end || ''),
+      String(s.status || (s.published ? 'published' : 'draft'))
     ].join('|');
 
     if(!seen.has(key)){
@@ -6069,6 +6041,10 @@ let _mgrLastModified = '0';
 function startManagerSync() {
   setInterval(async () => {
     try {
+      // Skip the auto-refresh while any modal is open, so the in-memory cache
+      // isn't swapped out from under an edit in progress.
+      if (document.querySelector('.modal-overlay.open')) return;
+
       await DB.refresh(ALL_KEYS_WITH_CLOCK);
 
       const activePg = document.querySelector('.pg.active');

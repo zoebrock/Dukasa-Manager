@@ -353,6 +353,10 @@ function isRosterInteractionActive(){
   Clean duplicates
 </button>
 
+<button class="btn btn-danger btn-sm" onclick="deleteAllDraftShifts()">
+  Delete all drafts
+</button>
+
 <button
   class="btn btn-danger btn-sm"
   id="bulk-delete-btn"
@@ -2534,6 +2538,13 @@ function openAddShiftForED(empId,date){
   OM('m-shift');
 }
 
+function isPublishedShift(shift){
+  if(!shift) return false;
+  if(typeof shift.published === 'boolean') return shift.published;
+  if(typeof shift.published === 'string') return shift.published.toLowerCase() === 'true';
+  return String(shift.status || '').toLowerCase() === 'published';
+}
+
 async function saveShift(publishMode){
   const currentShifts = DB.get('shifts') || [];
   const shifts = currentShifts.map(s => ({...s}));
@@ -3080,6 +3091,45 @@ async function deleteShift() {
   }
 }
 
+
+async function deleteAllDraftShifts(){
+  const allShifts = DB.get('shifts') || [];
+  const drafts = allShifts.filter(s => !isPublishedShift(s) && (s.entryType || s.entry_type || 'shift') === 'shift');
+
+  if(!drafts.length){
+    alert('There are no draft shifts to delete.');
+    return;
+  }
+
+  if(!confirm(`Delete all ${drafts.length} draft shift(s)? Published shifts will not be affected.`)) return;
+
+  const ids = drafts.map(s => String(s.id));
+  try{
+    _setSyncIndicator('saving');
+    beginKeySave('shifts');
+
+    const { error } = await supabaseClient
+      .from(TABLE_MAP['shifts'])
+      .delete()
+      .in('id', ids);
+    if(error) throw error;
+
+    CACHE['rx3_shifts'] = allShifts.filter(s => !ids.includes(String(s.id)));
+    bumpDataVersion('shifts');
+    selectedShiftIds.clear();
+    bulkShiftMode = false;
+    renderRoster();
+    renderDashboard();
+    _setSyncIndicator('saved');
+    alert(`Deleted ${ids.length} draft shift(s).`);
+  }catch(err){
+    console.error('Delete all drafts failed:', err);
+    _setSyncIndicator('error');
+    alert('Could not delete all draft shifts: ' + (err.message || err));
+  }finally{
+    endKeySave('shifts');
+  }
+}
 
   function toggleBulkShiftMode(){
   bulkShiftMode = !bulkShiftMode;
@@ -4395,6 +4445,7 @@ function openAddLeaveModal(){
 
   document.getElementById('al-from').onchange = checkLeaveConflictsModal;
   document.getElementById('al-to').onchange = checkLeaveConflictsModal;
+  document.getElementById('al-emp').onchange = checkLeaveConflictsModal;
 
   OM('m-add-leave');
 }
@@ -4425,6 +4476,7 @@ function openEditLeaveModal(id){
 
   document.getElementById('al-from').onchange = checkLeaveConflictsModal;
   document.getElementById('al-to').onchange = checkLeaveConflictsModal;
+  document.getElementById('al-emp').onchange = checkLeaveConflictsModal;
 
   OM('m-add-leave');
 }
@@ -4448,35 +4500,44 @@ function normaliseLeaveRequestRow(row){
 
 async function upsertOneLeaveRequest(row){
   const clean = normaliseLeaveRequestRow(row);
-  const payloadAttempts = [
-    mapToSupabase('leaveRequests', [clean])[0],
-    (() => {
-      const p = mapToSupabase('leaveRequests', [clean])[0];
-      ['syncedToRoster','syncedToLeaveTracker','synced_to_roster','synced_to_leave_tracker','updatedAt','updated_at'].forEach(k => delete p[k]);
-      return p;
-    })(),
-    retryRowsWithoutDecisionAudit([(() => {
-      const p = mapToSupabase('leaveRequests', [clean])[0];
-      ['syncedToRoster','syncedToLeaveTracker','synced_to_roster','synced_to_leave_tracker','updatedAt','updated_at'].forEach(k => delete p[k]);
-      return p;
-    })()])[0]
-  ];
 
+  const basePayload = {
+    id: clean.id,
+    emp_id: clean.empId,
+    type: clean.type,
+    from: clean.from,
+    to: clean.to,
+    status: clean.status,
+    notes: clean.notes,
+    submitted: clean.submitted
+  };
+
+  const extendedPayload = {
+    ...basePayload,
+    processed_at: clean.processedAt || clean.processed_at || null,
+    synced_to_roster: !!clean.syncedToRoster,
+    synced_to_leave_tracker: !!clean.syncedToLeaveTracker
+  };
+
+  const payloadAttempts = [extendedPayload, basePayload];
   _setSyncIndicator('saving');
   let lastError = null;
-  for (const payload of payloadAttempts) {
-    const { error } = await supabaseClient
-      .from('leave_requests')
-      .upsert(payload, { onConflict: 'id' });
 
-    if (!error) {
+  for(const payload of payloadAttempts){
+    const { data, error } = await supabaseClient
+      .from('leave_requests')
+      .upsert(payload, { onConflict: 'id' })
+      .select('*')
+      .single();
+
+    if(!error){
       _setSyncIndicator('saved');
-      return clean;
+      return data ? normaliseLeaveRequestRow(mapFromSupabase('leaveRequests', [data])[0]) : clean;
     }
 
     lastError = error;
     const msg = String(error.message || '').toLowerCase();
-    if (!(msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find'))) break;
+    if(!(msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find'))) break;
   }
 
   _setSyncIndicator('error');

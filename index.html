@@ -2435,41 +2435,45 @@ async function saveLeaveFromShift(empId) {
 async function removeLeaveFromShift(leaveId) {
   if (!confirm('Remove this leave record? The shift will revert to rostered. The staff member will be notified.')) return;
 
+  const id = String(leaveId);
   let reqs = DB.get('leaveRequests') || [];
-  const lr = reqs.find(l => String(l.id) === String(leaveId));
+  const lr = reqs.find(l => String(l.id) === id);
   if (!lr) {
     alert('Could not find this leave record. Please refresh and try again.');
     return;
   }
 
+  _setSyncIndicator('saving');
   try {
-    await deleteSupabaseRow('leaveRequests', leaveId);
+    await deleteLeaveRecordById(id);
 
-    reqs = reqs.filter(l => String(l.id) !== String(leaveId));
+    reqs = reqs.filter(l => String(l.id) !== id);
     CACHE['rx3_leaveRequests'] = reqs;
+    try { localStorage.setItem('rx3_leaveRequests', JSON.stringify(reqs)); } catch(e) {}
 
+    _setSyncIndicator('saved');
     if (typeof renderLeave === 'function') renderLeave(currentLeaveFilter);
     if (typeof renderRoster === 'function') renderRoster();
     if (typeof renderDashboard === 'function') renderDashboard();
     if (typeof renderCalendar === 'function') renderCalendar();
     if (typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
 
-    const emp = (DB.get('staff') || []).find(s => s.id === lr.empId);
+    const emp = (DB.get('staff') || []).find(s => String(s.id) === String(lr.empId || lr.emp_id));
     const shift = (DB.get('shifts') || []).find(s =>
-      s.empId === lr.empId &&
+      String(s.empId || s.emp_id) === String(lr.empId || lr.emp_id) &&
       s.date >= lr.from &&
       s.date <= lr.to &&
-      s.published
+      isPublishedShift(s)
     );
 
     if (emp && shift) {
       notify('shift_updated', {
         sendToStaff: true,
-        ...staffPayload(lr.empId),
+        ...staffPayload(lr.empId || lr.emp_id),
         date: shift.date || lr.from,
         start: shift.start,
         end: shift.end,
-        breakMin: shift.breakMin,
+        breakMin: shift.breakMin || shift.break_min,
         isNew: false,
         oldShift: 'Leave recorded',
         newShift: `${shift.start}–${shift.end}`,
@@ -2484,6 +2488,7 @@ async function removeLeaveFromShift(leaveId) {
       setTimeout(() => el.style.display = 'none', 4000);
     }
   } catch (err) {
+    _setSyncIndicator('error');
     console.error('Remove leave failed:', err);
     alert('Could not remove leave: ' + (err.message || err));
   }
@@ -4575,19 +4580,22 @@ function openAddLeaveModal(){
 
 function openEditLeaveModal(id){
   const reqs = DB.get('leaveRequests') || [];
-  const lr = reqs.find(l => l.id === id);
-  if(!lr) return;
+  const lr = reqs.find(l => String(l.id) === String(id));
+  if(!lr){
+    alert('Could not find this leave record. Please refresh and try again.');
+    return;
+  }
 
-  editingLeaveId = id;
+  editingLeaveId = String(id);
 
   document.getElementById('add-leave-title').textContent = 'Edit leave request';
   document.getElementById('al-delete-btn').style.display = 'inline-flex';
 
   const staff = [...(DB.get('staff') || [])]
-    .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
+    .sort((a,b) => (a.first || '').localeCompare(b.first || '') || (a.last || '').localeCompare(b.last || ''));
 
   document.getElementById('al-emp').innerHTML =
-    staff.map(s => `<option value="${s.id}" ${s.id === lr.empId ? 'selected' : ''}>${s.first} ${s.last}</option>`).join('');
+    staff.map(s => `<option value="${s.id}" ${String(s.id) === String(lr.empId || lr.emp_id) ? 'selected' : ''}>${s.first} ${s.last}</option>`).join('');
 
   document.getElementById('al-type').value = lr.type || 'Annual Leave';
   document.getElementById('al-from').value = lr.from || '';
@@ -4596,7 +4604,6 @@ function openEditLeaveModal(id){
   document.getElementById('al-notes').value = lr.notes || '';
 
   document.getElementById('al-conflict-warn').style.display = 'none';
-
   document.getElementById('al-from').onchange = checkLeaveConflictsModal;
   document.getElementById('al-to').onchange = checkLeaveConflictsModal;
   document.getElementById('al-emp').onchange = checkLeaveConflictsModal;
@@ -4604,63 +4611,105 @@ function openEditLeaveModal(id){
   OM('m-add-leave');
 }
 
-
 function normaliseLeaveRequestRow(row){
+  const status = String(row.status || 'pending').toLowerCase();
   return {
     ...row,
     id: String(row.id),
-    empId: row.empId || row.emp_id,
+    empId: String(row.empId || row.emp_id || '').trim(),
     type: row.type || 'Annual Leave',
-    from: row.from,
-    to: row.to,
-    status: row.status || 'pending',
+    from: row.from || '',
+    to: row.to || '',
+    status,
     notes: row.notes || '',
     submitted: row.submitted || row.created_at || new Date().toISOString(),
-    syncedToRoster: row.status === 'approved' ? true : (row.syncedToRoster ?? row.synced_to_roster ?? false),
-    syncedToLeaveTracker: row.status === 'approved' ? true : (row.syncedToLeaveTracker ?? row.synced_to_leave_tracker ?? false)
+    syncedToRoster: status === 'approved',
+    syncedToLeaveTracker: status === 'approved'
   };
 }
 
-async function upsertOneLeaveRequest(row){
+function leavePayloadAttempts(row){
   const clean = normaliseLeaveRequestRow(row);
-
-  const basePayload = {
+  const core = {
     id: clean.id,
     emp_id: clean.empId,
     type: clean.type,
     from: clean.from,
     to: clean.to,
     status: clean.status,
-    notes: clean.notes,
-    submitted: clean.submitted
+    notes: clean.notes
   };
 
-  const extendedPayload = {
-    ...basePayload,
-    processed_at: clean.processedAt || clean.processed_at || null,
-    synced_to_roster: !!clean.syncedToRoster,
-    synced_to_leave_tracker: !!clean.syncedToLeaveTracker
-  };
+  const attempts = [
+    {
+      ...core,
+      submitted: clean.submitted,
+      processed_at: clean.processedAt || clean.processed_at || null,
+      synced_to_roster: !!clean.syncedToRoster,
+      synced_to_leave_tracker: !!clean.syncedToLeaveTracker
+    },
+    { ...core, submitted: clean.submitted },
+    { ...core },
+    {
+      id: core.id,
+      emp_id: core.emp_id,
+      type: core.type,
+      from: core.from,
+      to: core.to,
+      status: core.status
+    }
+  ];
 
-  const payloadAttempts = [extendedPayload, basePayload];
+  const seen = new Set();
+  return attempts.filter(payload => {
+    const key = JSON.stringify(payload);
+    if(seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function isSchemaCompatibilityError(error){
+  const msg = String(error?.message || '').toLowerCase();
+  return msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find');
+}
+
+async function upsertOneLeaveRequest(row){
+  const clean = normaliseLeaveRequestRow(row);
+  if(!clean.empId || !clean.from || !clean.to) throw new Error('Staff member and dates are required.');
+
   _setSyncIndicator('saving');
   let lastError = null;
 
-  for(const payload of payloadAttempts){
-    const { data, error } = await supabaseClient
+  for(const payload of leavePayloadAttempts(clean)){
+    const { error } = await supabaseClient
       .from('leave_requests')
-      .upsert(payload, { onConflict: 'id' })
-      .select('*')
-      .single();
+      .upsert(payload, { onConflict: 'id' });
 
     if(!error){
+      const { data: verified, error: verifyError } = await supabaseClient
+        .from('leave_requests')
+        .select('*')
+        .eq('id', clean.id)
+        .maybeSingle();
+
+      if(verifyError){
+        console.warn('Leave saved but could not be read back:', verifyError.message);
+        _setSyncIndicator('saved');
+        return clean;
+      }
+
+      if(!verified){
+        lastError = new Error('Supabase accepted the request but the leave record could not be verified. Check the leave_requests SELECT policy.');
+        continue;
+      }
+
       _setSyncIndicator('saved');
-      return data ? normaliseLeaveRequestRow(mapFromSupabase('leaveRequests', [data])[0]) : clean;
+      return normaliseLeaveRequestRow(mapFromSupabase('leaveRequests', [verified])[0]);
     }
 
     lastError = error;
-    const msg = String(error.message || '').toLowerCase();
-    if(!(msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find'))) break;
+    if(!isSchemaCompatibilityError(error)) break;
   }
 
   _setSyncIndicator('error');
@@ -4668,6 +4717,7 @@ async function upsertOneLeaveRequest(row){
 }
 
 async function saveLeaveRequest(){
+  const saveBtn = document.querySelector('#m-add-leave .btn-primary');
   const empId = document.getElementById('al-emp').value;
   const type = document.getElementById('al-type').value;
   const from = document.getElementById('al-from').value;
@@ -4679,6 +4729,8 @@ async function saveLeaveRequest(){
     alert('Please enter valid leave details.');
     return;
   }
+
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
 
   let reqs = DB.get('leaveRequests') || [];
   const existing = editingLeaveId ? reqs.find(l => String(l.id) === String(editingLeaveId)) : null;
@@ -4694,11 +4746,9 @@ async function saveLeaveRequest(){
     status,
     notes,
     submitted: existing?.submitted || now,
-    ...(status === 'approved' ? {
-      processedAt: existing?.processedAt || now,
-      syncedToRoster: true,
-      syncedToLeaveTracker: true
-    } : {})
+    processedAt: status === 'approved' ? (existing?.processedAt || now) : null,
+    syncedToRoster: status === 'approved',
+    syncedToLeaveTracker: status === 'approved'
   });
 
   try {
@@ -4707,10 +4757,11 @@ async function saveLeaveRequest(){
     if(editingLeaveId){
       reqs = reqs.map(l => String(l.id) === String(editingLeaveId) ? {...l, ...saved} : l);
     } else {
-      reqs.push(saved);
+      reqs = [...reqs, saved];
     }
 
     CACHE['rx3_leaveRequests'] = reqs;
+    try { localStorage.setItem('rx3_leaveRequests', JSON.stringify(reqs)); } catch(e) {}
 
     CM('m-add-leave');
     editingLeaveId = null;
@@ -4721,27 +4772,55 @@ async function saveLeaveRequest(){
     if(typeof renderCalendar === 'function') renderCalendar();
     if(typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
 
+    alert('Leave saved successfully.');
   } catch(err) {
     console.error('Save leave failed:', err);
     alert('Could not save leave: ' + (err.message || err));
+  } finally {
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+  }
+}
+
+async function deleteLeaveRecordById(leaveId){
+  const { data, error } = await supabaseClient
+    .from('leave_requests')
+    .delete()
+    .eq('id', String(leaveId))
+    .select('id');
+
+  if(error) throw error;
+
+  if(!data || !data.length){
+    const { data: stillThere, error: verifyError } = await supabaseClient
+      .from('leave_requests')
+      .select('id')
+      .eq('id', String(leaveId))
+      .maybeSingle();
+    if(verifyError) throw verifyError;
+    if(stillThere) throw new Error('The leave record was not deleted. Check the leave_requests DELETE policy.');
   }
 }
 
 async function deleteLeaveRequest(){
   if(!editingLeaveId) return;
-
-  const leaveId = editingLeaveId;
+  const leaveId = String(editingLeaveId);
 
   if(!confirm('Delete this leave request? This will remove it from the Leave & Sick page, roster, timesheets and staff portal.')) return;
 
+  const deleteBtn = document.getElementById('al-delete-btn');
+  if(deleteBtn){ deleteBtn.disabled = true; deleteBtn.textContent = 'Deleting…'; }
+  _setSyncIndicator('saving');
+
   try{
-    await deleteSupabaseRow('leaveRequests', leaveId);
+    await deleteLeaveRecordById(leaveId);
 
     const reqs = (DB.get('leaveRequests') || [])
-      .filter(l => String(l.id) !== String(leaveId));
+      .filter(l => String(l.id) !== leaveId);
 
     CACHE['rx3_leaveRequests'] = reqs;
+    try { localStorage.setItem('rx3_leaveRequests', JSON.stringify(reqs)); } catch(e) {}
 
+    _setSyncIndicator('saved');
     CM('m-add-leave');
     editingLeaveId = null;
 
@@ -4751,9 +4830,13 @@ async function deleteLeaveRequest(){
     if(typeof renderCalendar === 'function') renderCalendar();
     if(typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
 
+    alert('Leave removed successfully.');
   } catch(err){
+    _setSyncIndicator('error');
     console.error('Delete leave failed:', err);
     alert('Could not delete leave: ' + (err.message || err));
+  } finally {
+    if(deleteBtn){ deleteBtn.disabled = false; deleteBtn.textContent = 'Delete'; }
   }
 }
 

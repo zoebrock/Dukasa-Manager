@@ -353,10 +353,6 @@ function isRosterInteractionActive(){
   Clean duplicates
 </button>
 
-<button class="btn btn-danger btn-sm" onclick="deleteAllDraftShifts()">
-  Delete all drafts
-</button>
-
 <button
   class="btn btn-danger btn-sm"
   id="bulk-delete-btn"
@@ -1420,64 +1416,6 @@ async function fetchAllSupabaseRows(table, pageSize = 1000) {
   return { data: allRows, error: null };
 }
 
-
-const OPTIONAL_SYNC_KEYS = new Set(['lateReports','rosterTemplates']);
-
-function isMissingRelationError(error){
-  const msg = String(error?.message || '').toLowerCase();
-  const code = String(error?.code || '').toUpperCase();
-  return code === '42P01' || code === 'PGRST205' ||
-    msg.includes('does not exist') || msg.includes('could not find the table') ||
-    (msg.includes('relation') && msg.includes('not found'));
-}
-
-function shiftPayloadVariants(item){
-  const s = item || {};
-  const baseline = stripUndefined({
-    id: s.id,
-    emp_id: s.empId ?? s.emp_id,
-    date: s.date,
-    start: s.start,
-    end: s.end,
-    break_min: s.breakMin ?? s.break_min ?? 0,
-    notes: s.notes ?? '',
-    published: isPublishedShift(s)
-  });
-
-  const extended = stripUndefined({
-    ...baseline,
-    paid_break_min: s.paidBreakMin ?? s.paid_break_min,
-    is_ot: s.isOT ?? s.is_ot,
-    ot_id: s.otId ?? s.ot_id,
-    ot_original_start: s.otOriginalStart ?? s.ot_original_start,
-    ot_original_end: s.otOriginalEnd ?? s.ot_original_end,
-    ot_annotations: s.otAnnotations ?? s.ot_annotations,
-    template_id: s.templateId ?? s.template_id,
-    entry_type: s.entryType ?? s.entry_type,
-    leave_type: s.leaveType ?? s.leave_type,
-    leave_reason: s.leaveReason ?? s.leave_reason
-  });
-
-  return [extended, baseline];
-}
-
-async function upsertShiftRows(items){
-  const rows = Array.isArray(items) ? items : [];
-  if(!rows.length) return { ok:true };
-
-  let lastError = null;
-  for(const variantIndex of [0,1]){
-    const payloads = rows.map(r => shiftPayloadVariants(r)[variantIndex]);
-    const { error } = await supabaseClient.from(TABLE_MAP.shifts).upsert(payloads, { onConflict:'id' });
-    if(!error) return { ok:true, payloads };
-    lastError = error;
-    const msg = String(error.message || '').toLowerCase();
-    const schemaMismatch = msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find');
-    if(!schemaMismatch) break;
-  }
-  return { ok:false, error:lastError || new Error('Could not save shifts.') };
-}
-
 const DB = {
   get(k) {
     return CACHE['rx3_' + k] ?? null;
@@ -1497,13 +1435,6 @@ const DB = {
 
     try {
       if (!rows.length) {
-        _setSyncIndicator('saved');
-        return { ok: true };
-      }
-
-      if (k === 'shifts') {
-        const result = await upsertShiftRows(v);
-        if (!result.ok) throw result.error;
         _setSyncIndicator('saved');
         return { ok: true };
       }
@@ -1537,7 +1468,6 @@ const DB = {
   async preload(keys, callback, options = {}) {
     const preserveOnError = options.preserveOnError !== false;
     _setSyncIndicator('loading');
-    LAST_MANAGER_SYNC_FAILURES = [];
     const results = {};
 
     for (const k of keys) {
@@ -1558,14 +1488,7 @@ const DB = {
         const { data, error } = await fetchAllSupabaseRows(table);
 
         if (error) {
-          if (OPTIONAL_SYNC_KEYS.has(k) && isMissingRelationError(error)) {
-            console.warn('Optional Supabase table unavailable:', table, error.message);
-            if (!(cacheKey in CACHE)) CACHE[cacheKey] = k === 'settings' ? {} : [];
-            results[k] = true;
-            continue;
-          }
           console.error('Could not load', k, error.message);
-          LAST_MANAGER_SYNC_FAILURES.push({ key:k, table, message:error.message || String(error) });
           if (!preserveOnError && !(cacheKey in CACHE)) CACHE[cacheKey] = k === 'settings' ? {} : [];
           results[k] = false;
           continue;
@@ -1614,14 +1537,7 @@ function _setSyncIndicator(state) {
   };
 
   const s = states[state] || states.idle;
-  if (state === 'error' && LAST_MANAGER_SYNC_FAILURES.length) {
-    const first = LAST_MANAGER_SYNC_FAILURES[0];
-    el.textContent = `⚠ Sync error: ${first.table || first.key}`;
-    el.title = LAST_MANAGER_SYNC_FAILURES.map(x => `${x.table || x.key}: ${x.message}`).join('\n');
-  } else {
-    el.textContent = s.text;
-    el.title = '';
-  }
+  el.textContent = s.text;
   el.style.color = s.color;
 
   if (state === 'saved') {
@@ -2435,45 +2351,41 @@ async function saveLeaveFromShift(empId) {
 async function removeLeaveFromShift(leaveId) {
   if (!confirm('Remove this leave record? The shift will revert to rostered. The staff member will be notified.')) return;
 
-  const id = String(leaveId);
   let reqs = DB.get('leaveRequests') || [];
-  const lr = reqs.find(l => String(l.id) === id);
+  const lr = reqs.find(l => String(l.id) === String(leaveId));
   if (!lr) {
     alert('Could not find this leave record. Please refresh and try again.');
     return;
   }
 
-  _setSyncIndicator('saving');
   try {
-    await deleteLeaveRecordById(id);
+    await deleteLeaveRequestById(leaveId);
 
-    reqs = reqs.filter(l => String(l.id) !== id);
+    reqs = reqs.filter(l => String(l.id) !== String(leaveId));
     CACHE['rx3_leaveRequests'] = reqs;
-    try { localStorage.setItem('rx3_leaveRequests', JSON.stringify(reqs)); } catch(e) {}
 
-    _setSyncIndicator('saved');
     if (typeof renderLeave === 'function') renderLeave(currentLeaveFilter);
     if (typeof renderRoster === 'function') renderRoster();
     if (typeof renderDashboard === 'function') renderDashboard();
     if (typeof renderCalendar === 'function') renderCalendar();
     if (typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
 
-    const emp = (DB.get('staff') || []).find(s => String(s.id) === String(lr.empId || lr.emp_id));
+    const emp = (DB.get('staff') || []).find(s => s.id === lr.empId);
     const shift = (DB.get('shifts') || []).find(s =>
-      String(s.empId || s.emp_id) === String(lr.empId || lr.emp_id) &&
+      s.empId === lr.empId &&
       s.date >= lr.from &&
       s.date <= lr.to &&
-      isPublishedShift(s)
+      s.published
     );
 
     if (emp && shift) {
       notify('shift_updated', {
         sendToStaff: true,
-        ...staffPayload(lr.empId || lr.emp_id),
+        ...staffPayload(lr.empId),
         date: shift.date || lr.from,
         start: shift.start,
         end: shift.end,
-        breakMin: shift.breakMin || shift.break_min,
+        breakMin: shift.breakMin,
         isNew: false,
         oldShift: 'Leave recorded',
         newShift: `${shift.start}–${shift.end}`,
@@ -2488,7 +2400,6 @@ async function removeLeaveFromShift(leaveId) {
       setTimeout(() => el.style.display = 'none', 4000);
     }
   } catch (err) {
-    _setSyncIndicator('error');
     console.error('Remove leave failed:', err);
     alert('Could not remove leave: ' + (err.message || err));
   }
@@ -2621,13 +2532,6 @@ function openAddShiftForED(empId,date){
   if(unpublishBtn) unpublishBtn.style.display='none';
   autoCalcBreak(true);
   OM('m-shift');
-}
-
-function isPublishedShift(shift){
-  if(!shift) return false;
-  if(typeof shift.published === 'boolean') return shift.published;
-  if(typeof shift.published === 'string') return shift.published.toLowerCase() === 'true';
-  return String(shift.status || '').toLowerCase() === 'published';
 }
 
 async function saveShift(publishMode){
@@ -3177,45 +3081,6 @@ async function deleteShift() {
 }
 
 
-async function deleteAllDraftShifts(){
-  const allShifts = DB.get('shifts') || [];
-  const drafts = allShifts.filter(s => !isPublishedShift(s) && (s.entryType || s.entry_type || 'shift') === 'shift');
-
-  if(!drafts.length){
-    alert('There are no draft shifts to delete.');
-    return;
-  }
-
-  if(!confirm(`Delete all ${drafts.length} draft shift(s)? Published shifts will not be affected.`)) return;
-
-  const ids = drafts.map(s => String(s.id));
-  try{
-    _setSyncIndicator('saving');
-    beginKeySave('shifts');
-
-    const { error } = await supabaseClient
-      .from(TABLE_MAP['shifts'])
-      .delete()
-      .in('id', ids);
-    if(error) throw error;
-
-    CACHE['rx3_shifts'] = allShifts.filter(s => !ids.includes(String(s.id)));
-    bumpDataVersion('shifts');
-    selectedShiftIds.clear();
-    bulkShiftMode = false;
-    renderRoster();
-    renderDashboard();
-    _setSyncIndicator('saved');
-    alert(`Deleted ${ids.length} draft shift(s).`);
-  }catch(err){
-    console.error('Delete all drafts failed:', err);
-    _setSyncIndicator('error');
-    alert('Could not delete all draft shifts: ' + (err.message || err));
-  }finally{
-    endKeySave('shifts');
-  }
-}
-
   function toggleBulkShiftMode(){
   bulkShiftMode = !bulkShiftMode;
   selectedShiftIds.clear();
@@ -3337,101 +3202,58 @@ function openPublishModal(){
 }
 
 async function publishRoster(){
-  const we = new Date(currentWeekStart);
-  we.setDate(we.getDate() + 6);
-  const ws = FD(currentWeekStart);
-  const wed = FD(we);
+  const we=new Date(currentWeekStart);we.setDate(we.getDate()+6);
+  const ws=FD(currentWeekStart),wed=FD(we);
+  // Mark all week shifts as published and capture the updated array
+  const allShifts=(DB.get('shifts')||[]).map(s=>{
+    if(s.date>=ws&&s.date<=wed) return Object.assign({},s,{published:true,status:'published'});
+    return s;
+  });
+  const publishResult = await DB.set('shifts',allShifts);
+  if (!publishResult?.ok) return;
+  CM('m-publish');renderRoster();
+  const el=document.getElementById('pub-status');
+  el.style.display='block';
+  el.textContent='Sending roster emails to all staff...';
+  // Pass shiftsOverride so server uses the just-published shifts without waiting
+  // for PropertiesService to reflect the DB.set write (which can lag by seconds)
+  const payload=JSON.stringify({weekStart:ws,weekEnd:wed,shiftsOverride:allShifts});
+const shifts = DB.get('shifts') || [];
+const staff = DB.get('staff') || [];
 
-  const current = (DB.get('shifts') || []).map(s => ({ ...s }));
-  const weekShifts = current.filter(s => s.date >= ws && s.date <= wed);
-  const weekIds = weekShifts.map(s => String(s.id)).filter(Boolean);
+const empIds = [...new Set(
+  shifts
+    .filter(s => s.published && s.date >= currentWeekStart && s.date <= addDays(currentWeekStart, 6))
+    .map(s => s.empId)
+)];
 
-  if (!weekIds.length) {
-    alert('There are no shifts in this week to publish.');
-    return;
+// Send roster emails in background — NEVER block publishing
+setTimeout(async () => {
+
+  for (const empId of empIds) {
+
+    try {
+
+      await notify('roster_published', {
+        sendToStaff: true,
+        ...staffPayload(empId),
+        weekStart: currentWeekStart,
+        weekEnd: addDays(currentWeekStart, 6),
+        weekLabel: `${currentWeekStart} to ${addDays(currentWeekStart, 6)}`
+      });
+
+      // tiny stagger prevents GAS/Gmail throttling
+      await new Promise(r => setTimeout(r, 120));
+
+    } catch(err) {
+
+      console.error('Roster email failed for', empId, err);
+
+    }
+
   }
 
-  _setSyncIndicator('saving');
-  beginKeySave('shifts');
-
-  try {
-    // Publish only the rows in this week. Do not upsert the entire cached shifts
-    // table, because cached/UI-only fields can cause Supabase to reject the whole
-    // request and leave the staff portal and clock with no published roster.
-    let { error: updateError } = await supabaseClient
-      .from(TABLE_MAP['shifts'])
-      .update({ published: true })
-      .in('id', weekIds);
-
-    if (updateError) {
-      const fallback = await upsertShiftRows(weekShifts.map(s => ({ ...s, published:true })));
-      if (!fallback.ok) throw fallback.error;
-    }
-
-    const { data: verifiedRows, error: verifyError } = await supabaseClient
-      .from(TABLE_MAP['shifts'])
-      .select('*')
-      .in('id', weekIds);
-
-    if (verifyError) throw verifyError;
-
-    const mappedVerified = mapFromSupabase('shifts', verifiedRows || []);
-    const verifiedById = new Map(mappedVerified.map(s => [String(s.id), s]));
-    const missing = weekIds.filter(id => {
-      const row = verifiedById.get(id);
-      return !row || !isPublishedShift(row);
-    });
-
-    if (missing.length) {
-      throw new Error('Supabase did not confirm publication for ' + missing.length + ' shift(s).');
-    }
-
-    CACHE['rx3_shifts'] = current.map(s =>
-      verifiedById.has(String(s.id)) ? verifiedById.get(String(s.id)) : s
-    );
-    bumpDataVersion('shifts');
-    _setSyncIndicator('saved');
-
-    CM('m-publish');
-    renderRoster();
-    renderDashboard();
-
-    const el = document.getElementById('pub-status');
-    if (el) {
-      el.style.display = 'block';
-      el.textContent = 'Roster published successfully. Sending roster emails...';
-    }
-
-    const staff = DB.get('staff') || [];
-    const empIds = [...new Set(
-      CACHE['rx3_shifts']
-        .filter(s => isPublishedShift(s) && s.date >= ws && s.date <= wed)
-        .map(s => String(s.empId))
-    )];
-
-    setTimeout(async () => {
-      for (const empId of empIds) {
-        try {
-          await notify('roster_published', {
-            sendToStaff: true,
-            ...staffPayload(empId),
-            weekStart: ws,
-            weekEnd: wed,
-            weekLabel: `${ws} to ${wed}`
-          });
-          await new Promise(r => setTimeout(r, 120));
-        } catch (err) {
-          console.error('Roster email failed for', empId, err);
-        }
-      }
-    }, 50);
-  } catch (error) {
-    console.error('Roster publish failed:', error);
-    _setSyncIndicator('error');
-    alert('Roster was not published: ' + error.message);
-  } finally {
-    endKeySave('shifts');
-  }
+}, 50);
 }
 
 // SICK LEAVE HELPERS
@@ -4573,29 +4395,25 @@ function openAddLeaveModal(){
 
   document.getElementById('al-from').onchange = checkLeaveConflictsModal;
   document.getElementById('al-to').onchange = checkLeaveConflictsModal;
-  document.getElementById('al-emp').onchange = checkLeaveConflictsModal;
 
   OM('m-add-leave');
 }
 
 function openEditLeaveModal(id){
   const reqs = DB.get('leaveRequests') || [];
-  const lr = reqs.find(l => String(l.id) === String(id));
-  if(!lr){
-    alert('Could not find this leave record. Please refresh and try again.');
-    return;
-  }
+  const lr = reqs.find(l => l.id === id);
+  if(!lr) return;
 
-  editingLeaveId = String(id);
+  editingLeaveId = id;
 
   document.getElementById('add-leave-title').textContent = 'Edit leave request';
   document.getElementById('al-delete-btn').style.display = 'inline-flex';
 
   const staff = [...(DB.get('staff') || [])]
-    .sort((a,b) => (a.first || '').localeCompare(b.first || '') || (a.last || '').localeCompare(b.last || ''));
+    .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
 
   document.getElementById('al-emp').innerHTML =
-    staff.map(s => `<option value="${s.id}" ${String(s.id) === String(lr.empId || lr.emp_id) ? 'selected' : ''}>${s.first} ${s.last}</option>`).join('');
+    staff.map(s => `<option value="${s.id}" ${s.id === lr.empId ? 'selected' : ''}>${s.first} ${s.last}</option>`).join('');
 
   document.getElementById('al-type').value = lr.type || 'Annual Leave';
   document.getElementById('al-from').value = lr.from || '';
@@ -4604,27 +4422,28 @@ function openEditLeaveModal(id){
   document.getElementById('al-notes').value = lr.notes || '';
 
   document.getElementById('al-conflict-warn').style.display = 'none';
+
   document.getElementById('al-from').onchange = checkLeaveConflictsModal;
   document.getElementById('al-to').onchange = checkLeaveConflictsModal;
-  document.getElementById('al-emp').onchange = checkLeaveConflictsModal;
 
   OM('m-add-leave');
 }
 
+
 function normaliseLeaveRequestRow(row){
-  const status = String(row.status || 'pending').toLowerCase();
   return {
     ...row,
-    id: String(row.id),
+    id: String(row.id || ('lr' + Date.now())),
     empId: String(row.empId || row.emp_id || '').trim(),
     type: row.type || 'Annual Leave',
     from: row.from || '',
     to: row.to || '',
-    status,
+    status: row.status || 'pending',
     notes: row.notes || '',
     submitted: row.submitted || row.created_at || new Date().toISOString(),
-    syncedToRoster: status === 'approved',
-    syncedToLeaveTracker: status === 'approved'
+    processedAt: row.processedAt || row.processed_at || null,
+    syncedToRoster: row.status === 'approved' ? true : Boolean(row.syncedToRoster ?? row.synced_to_roster ?? false),
+    syncedToLeaveTracker: row.status === 'approved' ? true : Boolean(row.syncedToLeaveTracker ?? row.synced_to_leave_tracker ?? false)
   };
 }
 
@@ -4640,105 +4459,78 @@ function leavePayloadAttempts(row){
     notes: clean.notes
   };
 
-  const attempts = [
-    {
-      ...core,
-      submitted: clean.submitted,
-      processed_at: clean.processedAt || clean.processed_at || null,
-      synced_to_roster: !!clean.syncedToRoster,
-      synced_to_leave_tracker: !!clean.syncedToLeaveTracker
-    },
-    { ...core, submitted: clean.submitted },
-    { ...core },
-    {
-      id: core.id,
-      emp_id: core.emp_id,
-      type: core.type,
-      from: core.from,
-      to: core.to,
-      status: core.status
-    }
-  ];
+  const withSubmitted = {
+    ...core,
+    submitted: clean.submitted
+  };
 
-  const seen = new Set();
-  return attempts.filter(payload => {
-    const key = JSON.stringify(payload);
-    if(seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
+  const withSnakeCaseExtras = {
+    ...withSubmitted,
+    processed_at: clean.processedAt,
+    synced_to_roster: clean.syncedToRoster,
+    synced_to_leave_tracker: clean.syncedToLeaveTracker
+  };
 
-function isSchemaCompatibilityError(error){
-  const msg = String(error?.message || '').toLowerCase();
-  return msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find');
+  return [withSnakeCaseExtras, withSubmitted, core];
 }
 
 async function upsertOneLeaveRequest(row){
   const clean = normaliseLeaveRequestRow(row);
-  if(!clean.empId || !clean.from || !clean.to) throw new Error('Staff member and dates are required.');
-
-  _setSyncIndicator('saving');
   let lastError = null;
 
-  for(const payload of leavePayloadAttempts(clean)){
-    const { error } = await supabaseClient
-      .from('leave_requests')
-      .upsert(payload, { onConflict: 'id' });
+  _setSyncIndicator('saving');
+  beginKeySave('leaveRequests');
 
-    if(!error){
-      const { data: verified, error: verifyError } = await supabaseClient
+  try {
+    for (const payload of leavePayloadAttempts(clean)) {
+      const result = await supabaseClient
         .from('leave_requests')
+        .upsert(payload, { onConflict: 'id' })
         .select('*')
-        .eq('id', clean.id)
         .maybeSingle();
 
-      if(verifyError){
-        console.warn('Leave saved but could not be read back:', verifyError.message);
+      if (!result.error) {
+        const saved = result.data || payload;
         _setSyncIndicator('saved');
-        return clean;
+        return normaliseLeaveRequestRow({ ...clean, ...saved, empId: saved.emp_id || clean.empId });
       }
 
-      if(!verified){
-        lastError = new Error('Supabase accepted the request but the leave record could not be verified. Check the leave_requests SELECT policy.');
-        continue;
-      }
-
-      _setSyncIndicator('saved');
-      return normaliseLeaveRequestRow(mapFromSupabase('leaveRequests', [verified])[0]);
+      lastError = result.error;
+      const msg = String(result.error.message || '').toLowerCase();
+      const canRetry = msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find');
+      if (!canRetry) break;
     }
 
-    lastError = error;
-    if(!isSchemaCompatibilityError(error)) break;
+    throw lastError || new Error('Could not save leave request.');
+  } finally {
+    endKeySave('leaveRequests');
+    if (lastError) _setSyncIndicator('error');
   }
-
-  _setSyncIndicator('error');
-  throw lastError || new Error('Could not save leave request.');
 }
 
 async function saveLeaveRequest(){
+  const empId = document.getElementById('al-emp')?.value || '';
+  const type = document.getElementById('al-type')?.value || 'Annual Leave';
+  const from = document.getElementById('al-from')?.value || '';
+  const to = document.getElementById('al-to')?.value || '';
+  const status = document.getElementById('al-status')?.value || 'pending';
+  const notes = document.getElementById('al-notes')?.value || '';
   const saveBtn = document.querySelector('#m-add-leave .btn-primary');
-  const empId = document.getElementById('al-emp').value;
-  const type = document.getElementById('al-type').value;
-  const from = document.getElementById('al-from').value;
-  const to = document.getElementById('al-to').value;
-  const status = document.getElementById('al-status').value;
-  const notes = document.getElementById('al-notes').value || '';
 
   if(!empId || !from || !to || from > to){
     alert('Please enter valid leave details.');
     return;
   }
 
-  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
-
   let reqs = DB.get('leaveRequests') || [];
-  const existing = editingLeaveId ? reqs.find(l => String(l.id) === String(editingLeaveId)) : null;
+  const existing = editingLeaveId
+    ? reqs.find(l => String(l.id) === String(editingLeaveId))
+    : null;
   const now = new Date().toISOString();
 
   const row = normaliseLeaveRequestRow({
     ...(existing || {}),
-    id: editingLeaveId || 'lr' + Date.now(),
+    id: editingLeaveId || ('lr' + Date.now()),
     empId,
     type,
     from,
@@ -4751,17 +4543,22 @@ async function saveLeaveRequest(){
     syncedToLeaveTracker: status === 'approved'
   });
 
+  if(saveBtn){
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+  }
+
   try {
     const saved = await upsertOneLeaveRequest(row);
 
     if(editingLeaveId){
       reqs = reqs.map(l => String(l.id) === String(editingLeaveId) ? {...l, ...saved} : l);
     } else {
-      reqs = [...reqs, saved];
+      reqs.push(saved);
     }
 
     CACHE['rx3_leaveRequests'] = reqs;
-    try { localStorage.setItem('rx3_leaveRequests', JSON.stringify(reqs)); } catch(e) {}
+    bumpDataVersion('leaveRequests');
 
     CM('m-add-leave');
     editingLeaveId = null;
@@ -4771,56 +4568,49 @@ async function saveLeaveRequest(){
     renderDashboard();
     if(typeof renderCalendar === 'function') renderCalendar();
     if(typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
-
-    alert('Leave saved successfully.');
   } catch(err) {
     console.error('Save leave failed:', err);
     alert('Could not save leave: ' + (err.message || err));
   } finally {
-    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = 'Save'; }
+    if(saveBtn){
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save';
+    }
   }
 }
 
-async function deleteLeaveRecordById(leaveId){
-  const { data, error } = await supabaseClient
+async function deleteLeaveRequestById(leaveId){
+  const result = await supabaseClient
     .from('leave_requests')
     .delete()
-    .eq('id', String(leaveId))
+    .eq('id', leaveId)
     .select('id');
 
-  if(error) throw error;
+  if(result.error) throw result.error;
 
-  if(!data || !data.length){
-    const { data: stillThere, error: verifyError } = await supabaseClient
-      .from('leave_requests')
-      .select('id')
-      .eq('id', String(leaveId))
-      .maybeSingle();
-    if(verifyError) throw verifyError;
-    if(stillThere) throw new Error('The leave record was not deleted. Check the leave_requests DELETE policy.');
-  }
+  const verify = await supabaseClient
+    .from('leave_requests')
+    .select('id')
+    .eq('id', leaveId)
+    .maybeSingle();
+
+  if(verify.error && verify.error.code !== 'PGRST116') throw verify.error;
+  if(verify.data) throw new Error('Supabase did not delete the leave record. Check the delete policy on leave_requests.');
 }
 
 async function deleteLeaveRequest(){
   if(!editingLeaveId) return;
-  const leaveId = String(editingLeaveId);
 
+  const leaveId = editingLeaveId;
   if(!confirm('Delete this leave request? This will remove it from the Leave & Sick page, roster, timesheets and staff portal.')) return;
 
-  const deleteBtn = document.getElementById('al-delete-btn');
-  if(deleteBtn){ deleteBtn.disabled = true; deleteBtn.textContent = 'Deleting…'; }
-  _setSyncIndicator('saving');
-
   try{
-    await deleteLeaveRecordById(leaveId);
+    await deleteLeaveRequestById(leaveId);
 
-    const reqs = (DB.get('leaveRequests') || [])
-      .filter(l => String(l.id) !== leaveId);
+    CACHE['rx3_leaveRequests'] = (DB.get('leaveRequests') || [])
+      .filter(l => String(l.id) !== String(leaveId));
+    bumpDataVersion('leaveRequests');
 
-    CACHE['rx3_leaveRequests'] = reqs;
-    try { localStorage.setItem('rx3_leaveRequests', JSON.stringify(reqs)); } catch(e) {}
-
-    _setSyncIndicator('saved');
     CM('m-add-leave');
     editingLeaveId = null;
 
@@ -4829,14 +4619,9 @@ async function deleteLeaveRequest(){
     renderRoster();
     if(typeof renderCalendar === 'function') renderCalendar();
     if(typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
-
-    alert('Leave removed successfully.');
   } catch(err){
-    _setSyncIndicator('error');
     console.error('Delete leave failed:', err);
     alert('Could not delete leave: ' + (err.message || err));
-  } finally {
-    if(deleteBtn){ deleteBtn.disabled = false; deleteBtn.textContent = 'Delete'; }
   }
 }
 
@@ -6458,7 +6243,6 @@ function saveSettings(){
 
 // ── SMART SYNC ─────────────────────────────────────────────────
 let _mgrLastModified = '0';
-let LAST_MANAGER_SYNC_FAILURES = [];
 
 function renderActiveManagerPage(){
   const activePg = document.querySelector('.pg.active');
@@ -6571,8 +6355,7 @@ async function manualSync() {
   if (btn) { btn.textContent = '⟳'; btn.disabled = true; }
   _setSyncIndicator('loading');
   try {
-    const ok = await runManagerRefresh({ manual: true });
-    if (ok) _setSyncIndicator('saved');
+    await runManagerRefresh({ manual: true });
   } finally {
     if (btn) { btn.textContent = '↻'; btn.disabled = false; }
   }

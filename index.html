@@ -3252,58 +3252,98 @@ function openPublishModal(){
 }
 
 async function publishRoster(){
-  const we=new Date(currentWeekStart);we.setDate(we.getDate()+6);
-  const ws=FD(currentWeekStart),wed=FD(we);
-  // Mark all week shifts as published and capture the updated array
-  const allShifts=(DB.get('shifts')||[]).map(s=>{
-    if(s.date>=ws&&s.date<=wed) return Object.assign({},s,{published:true,status:'published'});
-    return s;
-  });
-  const publishResult = await DB.set('shifts',allShifts);
-  if (!publishResult?.ok) return;
-  CM('m-publish');renderRoster();
-  const el=document.getElementById('pub-status');
-  el.style.display='block';
-  el.textContent='Sending roster emails to all staff...';
-  // Pass shiftsOverride so server uses the just-published shifts without waiting
-  // for PropertiesService to reflect the DB.set write (which can lag by seconds)
-  const payload=JSON.stringify({weekStart:ws,weekEnd:wed,shiftsOverride:allShifts});
-const shifts = DB.get('shifts') || [];
-const staff = DB.get('staff') || [];
+  const we = new Date(currentWeekStart);
+  we.setDate(we.getDate() + 6);
+  const ws = FD(currentWeekStart);
+  const wed = FD(we);
 
-const empIds = [...new Set(
-  shifts
-    .filter(s => s.published && s.date >= currentWeekStart && s.date <= addDays(currentWeekStart, 6))
-    .map(s => s.empId)
-)];
+  const current = (DB.get('shifts') || []).map(s => ({ ...s }));
+  const weekShifts = current.filter(s => s.date >= ws && s.date <= wed);
+  const weekIds = weekShifts.map(s => String(s.id)).filter(Boolean);
 
-// Send roster emails in background — NEVER block publishing
-setTimeout(async () => {
-
-  for (const empId of empIds) {
-
-    try {
-
-      await notify('roster_published', {
-        sendToStaff: true,
-        ...staffPayload(empId),
-        weekStart: currentWeekStart,
-        weekEnd: addDays(currentWeekStart, 6),
-        weekLabel: `${currentWeekStart} to ${addDays(currentWeekStart, 6)}`
-      });
-
-      // tiny stagger prevents GAS/Gmail throttling
-      await new Promise(r => setTimeout(r, 120));
-
-    } catch(err) {
-
-      console.error('Roster email failed for', empId, err);
-
-    }
-
+  if (!weekIds.length) {
+    alert('There are no shifts in this week to publish.');
+    return;
   }
 
-}, 50);
+  _setSyncIndicator('saving');
+  beginKeySave('shifts');
+
+  try {
+    // Publish only the rows in this week. Do not upsert the entire cached shifts
+    // table, because cached/UI-only fields can cause Supabase to reject the whole
+    // request and leave the staff portal and clock with no published roster.
+    const { error: updateError } = await supabaseClient
+      .from(TABLE_MAP['shifts'])
+      .update({ published: true, status: 'published' })
+      .in('id', weekIds);
+
+    if (updateError) throw updateError;
+
+    const { data: verifiedRows, error: verifyError } = await supabaseClient
+      .from(TABLE_MAP['shifts'])
+      .select('*')
+      .in('id', weekIds);
+
+    if (verifyError) throw verifyError;
+
+    const mappedVerified = mapFromSupabase('shifts', verifiedRows || []);
+    const verifiedById = new Map(mappedVerified.map(s => [String(s.id), s]));
+    const missing = weekIds.filter(id => {
+      const row = verifiedById.get(id);
+      return !row || !isPublishedShift(row);
+    });
+
+    if (missing.length) {
+      throw new Error('Supabase did not confirm publication for ' + missing.length + ' shift(s).');
+    }
+
+    CACHE['rx3_shifts'] = current.map(s =>
+      verifiedById.has(String(s.id)) ? verifiedById.get(String(s.id)) : s
+    );
+    bumpDataVersion('shifts');
+    _setSyncIndicator('saved');
+
+    CM('m-publish');
+    renderRoster();
+    renderDashboard();
+
+    const el = document.getElementById('pub-status');
+    if (el) {
+      el.style.display = 'block';
+      el.textContent = 'Roster published successfully. Sending roster emails...';
+    }
+
+    const staff = DB.get('staff') || [];
+    const empIds = [...new Set(
+      CACHE['rx3_shifts']
+        .filter(s => isPublishedShift(s) && s.date >= ws && s.date <= wed)
+        .map(s => String(s.empId))
+    )];
+
+    setTimeout(async () => {
+      for (const empId of empIds) {
+        try {
+          await notify('roster_published', {
+            sendToStaff: true,
+            ...staffPayload(empId),
+            weekStart: ws,
+            weekEnd: wed,
+            weekLabel: `${ws} to ${wed}`
+          });
+          await new Promise(r => setTimeout(r, 120));
+        } catch (err) {
+          console.error('Roster email failed for', empId, err);
+        }
+      }
+    }, 50);
+  } catch (error) {
+    console.error('Roster publish failed:', error);
+    _setSyncIndicator('error');
+    alert('Roster was not published: ' + error.message);
+  } finally {
+    endKeySave('shifts');
+  }
 }
 
 // SICK LEAVE HELPERS

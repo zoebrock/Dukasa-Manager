@@ -1420,6 +1420,64 @@ async function fetchAllSupabaseRows(table, pageSize = 1000) {
   return { data: allRows, error: null };
 }
 
+
+const OPTIONAL_SYNC_KEYS = new Set(['lateReports','rosterTemplates']);
+
+function isMissingRelationError(error){
+  const msg = String(error?.message || '').toLowerCase();
+  const code = String(error?.code || '').toUpperCase();
+  return code === '42P01' || code === 'PGRST205' ||
+    msg.includes('does not exist') || msg.includes('could not find the table') ||
+    (msg.includes('relation') && msg.includes('not found'));
+}
+
+function shiftPayloadVariants(item){
+  const s = item || {};
+  const baseline = stripUndefined({
+    id: s.id,
+    emp_id: s.empId ?? s.emp_id,
+    date: s.date,
+    start: s.start,
+    end: s.end,
+    break_min: s.breakMin ?? s.break_min ?? 0,
+    notes: s.notes ?? '',
+    published: isPublishedShift(s)
+  });
+
+  const extended = stripUndefined({
+    ...baseline,
+    paid_break_min: s.paidBreakMin ?? s.paid_break_min,
+    is_ot: s.isOT ?? s.is_ot,
+    ot_id: s.otId ?? s.ot_id,
+    ot_original_start: s.otOriginalStart ?? s.ot_original_start,
+    ot_original_end: s.otOriginalEnd ?? s.ot_original_end,
+    ot_annotations: s.otAnnotations ?? s.ot_annotations,
+    template_id: s.templateId ?? s.template_id,
+    entry_type: s.entryType ?? s.entry_type,
+    leave_type: s.leaveType ?? s.leave_type,
+    leave_reason: s.leaveReason ?? s.leave_reason
+  });
+
+  return [extended, baseline];
+}
+
+async function upsertShiftRows(items){
+  const rows = Array.isArray(items) ? items : [];
+  if(!rows.length) return { ok:true };
+
+  let lastError = null;
+  for(const variantIndex of [0,1]){
+    const payloads = rows.map(r => shiftPayloadVariants(r)[variantIndex]);
+    const { error } = await supabaseClient.from(TABLE_MAP.shifts).upsert(payloads, { onConflict:'id' });
+    if(!error) return { ok:true, payloads };
+    lastError = error;
+    const msg = String(error.message || '').toLowerCase();
+    const schemaMismatch = msg.includes('column') || msg.includes('schema cache') || msg.includes('could not find');
+    if(!schemaMismatch) break;
+  }
+  return { ok:false, error:lastError || new Error('Could not save shifts.') };
+}
+
 const DB = {
   get(k) {
     return CACHE['rx3_' + k] ?? null;
@@ -1439,6 +1497,13 @@ const DB = {
 
     try {
       if (!rows.length) {
+        _setSyncIndicator('saved');
+        return { ok: true };
+      }
+
+      if (k === 'shifts') {
+        const result = await upsertShiftRows(v);
+        if (!result.ok) throw result.error;
         _setSyncIndicator('saved');
         return { ok: true };
       }
@@ -1472,6 +1537,7 @@ const DB = {
   async preload(keys, callback, options = {}) {
     const preserveOnError = options.preserveOnError !== false;
     _setSyncIndicator('loading');
+    LAST_MANAGER_SYNC_FAILURES = [];
     const results = {};
 
     for (const k of keys) {
@@ -1492,7 +1558,14 @@ const DB = {
         const { data, error } = await fetchAllSupabaseRows(table);
 
         if (error) {
+          if (OPTIONAL_SYNC_KEYS.has(k) && isMissingRelationError(error)) {
+            console.warn('Optional Supabase table unavailable:', table, error.message);
+            if (!(cacheKey in CACHE)) CACHE[cacheKey] = k === 'settings' ? {} : [];
+            results[k] = true;
+            continue;
+          }
           console.error('Could not load', k, error.message);
+          LAST_MANAGER_SYNC_FAILURES.push({ key:k, table, message:error.message || String(error) });
           if (!preserveOnError && !(cacheKey in CACHE)) CACHE[cacheKey] = k === 'settings' ? {} : [];
           results[k] = false;
           continue;
@@ -1541,7 +1614,14 @@ function _setSyncIndicator(state) {
   };
 
   const s = states[state] || states.idle;
-  el.textContent = s.text;
+  if (state === 'error' && LAST_MANAGER_SYNC_FAILURES.length) {
+    const first = LAST_MANAGER_SYNC_FAILURES[0];
+    el.textContent = `⚠ Sync error: ${first.table || first.key}`;
+    el.title = LAST_MANAGER_SYNC_FAILURES.map(x => `${x.table || x.key}: ${x.message}`).join('\n');
+  } else {
+    el.textContent = s.text;
+    el.title = '';
+  }
   el.style.color = s.color;
 
   if (state === 'saved') {
@@ -3273,12 +3353,15 @@ async function publishRoster(){
     // Publish only the rows in this week. Do not upsert the entire cached shifts
     // table, because cached/UI-only fields can cause Supabase to reject the whole
     // request and leave the staff portal and clock with no published roster.
-    const { error: updateError } = await supabaseClient
+    let { error: updateError } = await supabaseClient
       .from(TABLE_MAP['shifts'])
-      .update({ published: true, status: 'published' })
+      .update({ published: true })
       .in('id', weekIds);
 
-    if (updateError) throw updateError;
+    if (updateError) {
+      const fallback = await upsertShiftRows(weekShifts.map(s => ({ ...s, published:true })));
+      if (!fallback.ok) throw fallback.error;
+    }
 
     const { data: verifiedRows, error: verifyError } = await supabaseClient
       .from(TABLE_MAP['shifts'])
@@ -6292,6 +6375,7 @@ function saveSettings(){
 
 // ── SMART SYNC ─────────────────────────────────────────────────
 let _mgrLastModified = '0';
+let LAST_MANAGER_SYNC_FAILURES = [];
 
 function renderActiveManagerPage(){
   const activePg = document.querySelector('.pg.active');
@@ -6404,7 +6488,8 @@ async function manualSync() {
   if (btn) { btn.textContent = '⟳'; btn.disabled = true; }
   _setSyncIndicator('loading');
   try {
-    await runManagerRefresh({ manual: true });
+    const ok = await runManagerRefresh({ manual: true });
+    if (ok) _setSyncIndicator('saved');
   } finally {
     if (btn) { btn.textContent = '↻'; btn.disabled = false; }
   }

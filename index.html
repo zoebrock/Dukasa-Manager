@@ -230,6 +230,12 @@ function isRosterInteractionActive(){
   return isKeySaving('shifts') || isModalOpen('m-shift') || isModalOpen('m-publish') ||
     isModalOpen('m-template') || isModalOpen('m-shift-detail');
 }
+
+function isPublishedShift(shift){
+  if(!shift) return false;
+  if(shift.published === true || shift.published === 1 || String(shift.published).toLowerCase() === 'true') return true;
+  return String(shift.status || '').toLowerCase() === 'published';
+}
   
 // Inject apple-touch-icon dynamically (required for Google Apps Script hosted pages)
 (function(){
@@ -3111,9 +3117,17 @@ async function openBulkDeleteShifts(){
     return;
   }
 
-  const notifyStaff = confirm(
-    `Delete ${ids.length} selected shift(s)?\n\nPress OK to delete AND notify affected staff.\nPress Cancel to delete without notifying.`
-  );
+  const idSet = new Set(ids.map(String));
+  const selected = (DB.get('shifts') || []).filter(s => idSet.has(String(s.id)));
+  const publishedCount = selected.filter(isPublishedShift).length;
+  const draftCount = selected.length - publishedCount;
+
+  let notifyStaff = false;
+  if(publishedCount > 0){
+    notifyStaff = confirm(
+      `Delete ${ids.length} selected shift(s)?${draftCount ? `\n\n${draftCount} draft shift(s) will be deleted silently.` : ''}\n\nPress OK to notify staff about the ${publishedCount} published shift(s) being removed.\nPress Cancel to delete without notifications.`
+    );
+  }
 
   if(!confirm(`Confirm delete ${ids.length} selected shift(s)?`)) return;
 
@@ -3140,7 +3154,7 @@ async function bulkDeleteShifts(ids, notifyStaff){
     if(notifyStaff){
       const byEmp = {};
 
-      deletedShifts.forEach(s => {
+      deletedShifts.filter(isPublishedShift).forEach(s => {
         if(!byEmp[s.empId]) byEmp[s.empId] = [];
         byEmp[s.empId].push(s);
       });

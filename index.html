@@ -2898,7 +2898,12 @@ async function saveShift(publishMode){
     role: emp ? emp.role : '',
     notes: document.getElementById('sh-notes').value,
     published: shouldPublish,
-    status: shouldPublish ? 'published' : 'draft'
+    status: shouldPublish ? 'published' : 'draft',
+    isOT: previousShift?.isOT || false,
+    otId: previousShift?.otId || null,
+    otOriginalStart: previousShift?.otOriginalStart || null,
+    otOriginalEnd: previousShift?.otOriginalEnd || null,
+    otAnnotations: previousShift?.otAnnotations || []
   };
 
   if (editingShiftId) {
@@ -2923,6 +2928,11 @@ const dbRow = {
   notes: ns.notes,
   published: ns.published,
   status: ns.status,
+  is_ot: ns.isOT || false,
+  ot_id: ns.otId || null,
+  ot_original_start: ns.otOriginalStart || null,
+  ot_original_end: ns.otOriginalEnd || null,
+  ot_annotations: ns.otAnnotations || [],
   entry_type: ns.entryType || 'shift',
   leave_type: ns.leaveType || null,
   leave_reason: ns.leaveReason || null
@@ -3964,6 +3974,18 @@ async function reconcileManagerOTDecisions(){
       }
     }
 
+    // Repair legacy data where an approved OT request exists both as a normal
+    // shift extension and as a second standalone shift row.
+    for (const o of reqs.filter(x => x.approved === true)) {
+      const shifts = DB.get('shifts') || [];
+      const hasBase = shifts.some(s => String(s.empId ?? '') === String(o.empId ?? '') && String(s.date ?? '') === String(o.date ?? '') && !s.isOT);
+      const hasStandalone = shifts.some(s => s.isOT && String(s.otId ?? '') === String(o.id ?? ''));
+      if (hasBase && hasStandalone) {
+        await approveOT(o.id, { bypassAvailabilityGuard: true, fromReconcile: true });
+        changed = true;
+      }
+    }
+
     if (changed) {
       await DB.set('otRequests', reqs);
       renderOT(otFilter);
@@ -4146,12 +4168,15 @@ async function approveOT(id, opts = {}){
   // the staff portal or a previous approval), don't create another one.
   const alreadyHasOTShift = shifts.some(s => String(s.otId ?? '') === String(id));
 
-  const shiftIdx = shifts.findIndex(s =>
-    String(s.empId ?? '') === oEmpId &&
-    String(s.date  ?? '') === oDate  &&
-    !s.isOT &&
-    s.published
-  );
+  const matchingBaseIndexes = shifts
+    .map((s, i) => ({ s, i }))
+    .filter(({s}) =>
+      String(s.empId ?? '') === oEmpId &&
+      String(s.date ?? '') === oDate &&
+      !s.isOT
+    )
+    .sort((a,b) => Number(isPublishedShift(b.s)) - Number(isPublishedShift(a.s)));
+  const shiftIdx = matchingBaseIndexes.length ? matchingBaseIndexes[0].i : -1;
 
 if (shiftIdx >= 0) {
   const s = shifts[shiftIdx];
@@ -4179,11 +4204,20 @@ if (shiftIdx >= 0) {
     ...s,
     start: newStart,
     end: newEnd,
+    published: true,
+    status: 'published',
     otOriginalStart: origStart,
     otOriginalEnd: origEnd,
     otAnnotations: annotations
   };
 
+  // Remove any legacy standalone row for this OT now that it is represented on
+  // the canonical ordinary shift. Otherwise the clock can see two shifts.
+  const duplicateOTRows = shifts.filter(x => x.isOT && String(x.otId ?? '') === String(id));
+  for (const duplicate of duplicateOTRows) {
+    await deleteSupabaseRow('shifts', duplicate.id);
+  }
+  shifts = shifts.filter(x => !(x.isOT && String(x.otId ?? '') === String(id)));
   await DB.set('shifts', shifts);
 
 } else if (!alreadyHasOTShift) {

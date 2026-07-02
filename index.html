@@ -2352,7 +2352,7 @@ function renderRoster(){
   o.date === ds &&
   o.approved === true
 );
-      const avail=emp.availability?emp.availability[dname]:true;
+      const avail=normaliseAvailabilityEntry(emp.availability&&emp.availability[dname]);
       const isToday=ds===today;
 
       let content='';
@@ -2379,6 +2379,8 @@ const chipText = isPartialLeave
   const pubDot=s.published?'':'';
   const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
   const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
+  const availabilityConflict=!isShiftWithinAvailability(emp,dname,s.start,s.end);
+  const availabilityBadge=availabilityConflict?`<span class="chip chip-unavail chip-small" style="margin-top:2px">Outside availability</span>`:'';
 
   content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="${isPartialLeave ? `openPartialLeaveModal('${s.empId}','${s.date}','${s.id}')` : `openShiftPopup(event,'${s.id}')`}">
 
@@ -2396,6 +2398,7 @@ const chipText = isPartialLeave
     </span>
 
     ${otBadge}
+    ${availabilityBadge}
   </div>`;
 });
 
@@ -2403,7 +2406,7 @@ const chipText = isPartialLeave
       if(isSick) content+=`<span class="chip chip-sick chip-small" style="cursor:pointer" onclick="openSickPopup(event,'${emp.id}','${ds}')" title="Click to manage sick day">Sick</span>`;
       else if(onLeave&&!dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">${onLeave.type.replace(' Leave','').replace(' leave','')}</span>`;
       else if(onLeave&&dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer;font-size:8px" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">Leave</span>`;
-      if(showAvail&&!avail&&!dayShifts.length&&!onLeave&&!isSick) content+=`<span class="chip chip-unavail chip-small">Unavail.</span>`;
+      if(showAvail&&!dayShifts.length&&!onLeave&&!isSick){ if(avail.mode==='unavailable') content+=`<span class="chip chip-unavail chip-small">Unavailable</span>`; else if(avail.mode==='times') content+=`<span class="chip chip-partial-leave chip-small">Avail ${avail.start}–${avail.end}</span>`; }
 
       // Only show + button if no shifts exist for this day
       const hasShifts=dayShifts.length>0;
@@ -4423,6 +4426,35 @@ async function reverseOTFromShift(otId, empId, date){
 }
 
 // STAFF
+
+function normaliseAvailabilityEntry(value) {
+  if (value === false || value === null) return { mode:'unavailable', start:'', end:'' };
+  if (value === true || value === undefined) return { mode:'full', start:'', end:'' };
+  if (typeof value === 'string') {
+    const mode=String(value).toLowerCase();
+    return { mode:mode==='times'?'times':mode==='unavailable'?'unavailable':'full', start:'', end:'' };
+  }
+  const mode=String(value.mode||value.type||(value.available===false?'unavailable':'full')).toLowerCase();
+  return {
+    mode:mode==='times'?'times':mode==='unavailable'?'unavailable':'full',
+    start:String(value.start||value.from||'').slice(0,5),
+    end:String(value.end||value.to||'').slice(0,5)
+  };
+}
+function availabilityLabel(value) {
+  const entry=normaliseAvailabilityEntry(value);
+  if(entry.mode==='unavailable') return 'Unavailable';
+  if(entry.mode==='times') return `${entry.start||'—'}–${entry.end||'—'}`;
+  return 'All day';
+}
+function isShiftWithinAvailability(emp, day, start, end) {
+  const entry=normaliseAvailabilityEntry(emp?.availability?.[day]);
+  if(entry.mode==='full') return true;
+  if(entry.mode==='unavailable') return false;
+  if(!entry.start||!entry.end||!start||!end) return true;
+  return MD(start,end)>=0 && MD(entry.start,start)>=0 && MD(end,entry.end)>=0;
+}
+
 function renderStaff(){
   const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
   const q=(document.getElementById('staff-search')?document.getElementById('staff-search').value||'':'').toLowerCase();
@@ -4474,17 +4506,19 @@ function staffInfoHTML(emp){
   <div><span style="color:var(--t2)">PIN:</span> ${emp.pin||'—'}</div>
   <div style="grid-column:1/-1"><span style="color:var(--t2)">Contracted hours:</span> <span style="font-weight:500">${contractSummary}</span></div>
 </div>`;}
-function staffAvailHTML(emp){const days=DAYS;return`<div style="margin-top:4px">
-  <div class="avail-grid">${days.map(d=>`<div class="avail-day ${emp.availability&&emp.availability[d]?'on':'off'}" onclick="toggleStaffAvail('${emp.id}','${d}',this)">${d}<br><span style="font-size:9px">${emp.availability&&emp.availability[d]?'Avail':'Unavail'}</span></div>`).join('')}</div>
-  <div style="font-size:11px;color:var(--t2);margin-top:6px">Notes: ${emp.availNotes||'None'}</div>
-</div>`;}
-function toggleStaffAvail(empId,day,el){
-  const staff=DB.get('staff')||[];const idx=staff.findIndex(s=>s.id===empId);if(idx<0)return;
-  if(!staff[idx].availability) staff[idx].availability={};
-  staff[idx].availability[day]=!staff[idx].availability[day];DB.set('staff',staff);
-  el.classList.toggle('on',staff[idx].availability[day]);el.classList.toggle('off',!staff[idx].availability[day]);
-  el.innerHTML=day+'<br><span style="font-size:9px">'+(staff[idx].availability[day]?'Avail':'Unavail')+'</span>';
+function staffAvailHTML(emp){
+  const days=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  return `<div style="display:flex;flex-direction:column;gap:7px">${days.map(day=>{
+    const entry=normaliseAvailabilityEntry(emp.availability&&emp.availability[day]);
+    const badgeClass=entry.mode==='unavailable'?'br':entry.mode==='times'?'ba':'bg';
+    return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 11px;border:1px solid var(--border);border-radius:var(--rsm);background:var(--surface)">
+      <strong style="font-size:12px">${day}</strong>
+      <span class="badge ${badgeClass}">${availabilityLabel(entry)}</span>
+    </div>`;
+  }).join('')}</div>
+  <div style="font-size:11px;color:var(--t2);margin-top:8px">Notes: ${emp.availNotes||'None'}</div>`;
 }
+function toggleStaffAvail(){ /* Detailed availability is edited through the staff modal. */ }
 function staffLeaveHTML(empId){
   const leaveReqs=(DB.get('leaveRequests')||[]).filter(l=>l.empId===empId).sort((a,b)=>b.submitted?.localeCompare(a.submitted||'')||0);
   const sickDays=(DB.get('sickDays')||[]).filter(s=>s.empId===empId);
@@ -4531,7 +4565,43 @@ function editStaff(id){
   staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');
 }
 function buildModalAvailGrid(avail){
-  document.getElementById('modal-avail-grid').innerHTML=DAYS.map(d=>`<div class="avail-day ${avail[d]!==false?'on':'off'}" onclick="this.classList.toggle('on');this.classList.toggle('off');this.querySelector('span').textContent=this.classList.contains('on')?'Avail':'Unavail'" data-day="${d}">${d}<br><span style="font-size:9px">${avail[d]!==false?'Avail':'Unavail'}</span></div>`).join('');
+  const container=document.getElementById('modal-avail-grid');
+  if(!container)return;
+  container.style.display='flex';
+  container.style.flexDirection='column';
+  container.style.gap='7px';
+  container.innerHTML=DAYS.map(day=>{
+    const entry=normaliseAvailabilityEntry(avail&&avail[day]);
+    return `<div data-day="${day}" style="border:1px solid var(--border);border-radius:var(--rsm);padding:9px;background:var(--surface)">
+      <div style="display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;align-items:center">
+        <strong style="font-size:12px">${day}</strong>
+        <select class="modal-avail-mode" data-day="${day}" onchange="updateManagerAvailabilityRow('${day}')" style="font-size:12px;padding:6px 8px">
+          <option value="full" ${entry.mode==='full'?'selected':''}>Available all day</option>
+          <option value="times" ${entry.mode==='times'?'selected':''}>Available between times</option>
+          <option value="unavailable" ${entry.mode==='unavailable'?'selected':''}>Unavailable</option>
+        </select>
+      </div>
+      <div id="modal-avail-times-${day}" style="display:${entry.mode==='times'?'grid':'none'};grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;padding-left:50px">
+        <div><label>From</label><input type="time" class="modal-avail-start" data-day="${day}" value="${entry.start||'09:00'}"></div>
+        <div><label>Until</label><input type="time" class="modal-avail-end" data-day="${day}" value="${entry.end||'17:00'}"></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function updateManagerAvailabilityRow(day){
+  const mode=document.querySelector(`.modal-avail-mode[data-day="${day}"]`)?.value||'full';
+  const row=document.getElementById(`modal-avail-times-${day}`);
+  if(row)row.style.display=mode==='times'?'grid':'none';
+}
+function readManagerAvailability(){
+  const result={};
+  DAYS.forEach(day=>{
+    const mode=document.querySelector(`.modal-avail-mode[data-day="${day}"]`)?.value||'full';
+    const start=document.querySelector(`.modal-avail-start[data-day="${day}"]`)?.value||'';
+    const end=document.querySelector(`.modal-avail-end[data-day="${day}"]`)?.value||'';
+    result[day]=mode==='times'?{mode:'times',start,end}:mode==='unavailable'?{mode:'unavailable',start:'',end:''}:{mode:'full',start:'',end:''};
+  });
+  return result;
 }
 function buildModalPayrollDays(avail){ /* legacy — no longer used, kept for safety */ }
 
@@ -4618,7 +4688,7 @@ function saveStaff(){
   const first=document.getElementById('sf-first').value.trim();const last=document.getElementById('sf-last').value.trim();
   if(!first||!last){alert('First and last name required');return;}
   const staff=DB.get('staff')||[];
-  const avail={};DAYS.forEach(d=>{const el=document.querySelector(`#modal-avail-grid [data-day="${d}"]`);avail[d]=el?el.classList.contains('on'):true;});
+  const avail=readManagerAvailability();
   const contractPerDay=readContractPerDay();
   // Derive legacy single-time fields from Mon contract (or first active day) for backward compat
   const firstActive=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].find(d=>contractPerDay[d]&&contractPerDay[d].on);

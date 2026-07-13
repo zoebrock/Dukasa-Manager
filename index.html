@@ -1562,6 +1562,10 @@ if (['leaveRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
     ...r,
     empId: r.emp_id,
     ts: r.timestamp || r.ts,
+    denialReason: r.denialReason || r.denial_reason || '',
+    syncedToRoster: r.syncedToRoster ?? r.synced_to_roster ?? false,
+    syncedToLeaveTracker: r.syncedToLeaveTracker ?? r.synced_to_leave_tracker ?? false,
+    processedAt: r.processedAt || r.processed_at || null,
     processedBy: r.processedBy || r.processed_by,
     processedByName: r.processedByName || r.processed_by_name,
     processedByRole: r.processedByRole || r.processed_by_role,
@@ -1687,6 +1691,20 @@ if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].inclu
 
   delete x.empId;
   delete x.ts;
+}
+
+if (key === 'leaveRequests') {
+  // Supabase uses snake_case. Never send browser-only camelCase fields,
+  // otherwise PostgREST rejects the entire save (for example denialReason).
+  x.denial_reason = x.denialReason || null;
+  x.processed_at = x.processedAt || null;
+  x.synced_to_roster = !!x.syncedToRoster;
+  x.synced_to_leave_tracker = !!x.syncedToLeaveTracker;
+
+  delete x.denialReason;
+  delete x.processedAt;
+  delete x.syncedToRoster;
+  delete x.syncedToLeaveTracker;
 }
 
 if (key === 'otRequests') {
@@ -4917,6 +4935,7 @@ function normaliseLeaveRequestRow(row){
     notes: row.notes || '',
     submitted: row.submitted || row.created_at || new Date().toISOString(),
     processedAt: row.processedAt || row.processed_at || null,
+    denialReason: row.denialReason || row.denial_reason || '',
     syncedToRoster: row.status === 'approved' ? true : Boolean(row.syncedToRoster ?? row.synced_to_roster ?? false),
     syncedToLeaveTracker: row.status === 'approved' ? true : Boolean(row.syncedToLeaveTracker ?? row.synced_to_leave_tracker ?? false)
   };
@@ -4931,7 +4950,8 @@ function leavePayloadAttempts(row){
     from: clean.from,
     to: clean.to,
     status: clean.status,
-    notes: clean.notes
+    notes: clean.notes,
+    denial_reason: clean.denialReason || null
   };
 
   const withSubmitted = {
@@ -5292,41 +5312,55 @@ function initiateDecline(){
   }
 }
 
-function processLeave(decision, denialReason){
-  // Re-read from DB immediately before writing to avoid stale cache overwriting other changes
-  let reqs=DB.get('leaveRequests')||[];
-  const idx=reqs.findIndex(l=>l.id===reviewingLeaveId);
-  if(idx<0)return;
-  reqs[idx].status=decision;
-  stampManagerDecision(reqs[idx], decision);
-  if(decision==='approved'){
-    reqs[idx].syncedToRoster=true;
-    reqs[idx].syncedToLeaveTracker=true;
+async function processLeave(decision, denialReason){
+  // Save only the selected request. This avoids re-upserting every leave row
+  // and prevents unrelated browser-only fields from breaking the write.
+  let reqs = DB.get('leaveRequests') || [];
+  const idx = reqs.findIndex(l => String(l.id) === String(reviewingLeaveId));
+  if(idx < 0) return;
+
+  const updated = normaliseLeaveRequestRow({ ...reqs[idx] });
+  updated.status = decision;
+  stampManagerDecision(updated, decision);
+  updated.denialReason = decision === 'declined' ? (denialReason || '') : '';
+
+  if(decision === 'approved'){
+    updated.syncedToRoster = true;
+    updated.syncedToLeaveTracker = true;
+  } else {
+    updated.syncedToRoster = false;
+    updated.syncedToLeaveTracker = false;
   }
-  if(decision==='declined'&&denialReason){
-    reqs[idx].denialReason=denialReason;
-  }
-  DB.set('leaveRequests',reqs);
-  delete CACHE['rx3_leaveRequests'];
-  CACHE['rx3_leaveRequests']=reqs;
-  CM('m-leave-review');
-  setTimeout(()=>{
+
+  try {
+    const saved = await upsertOneLeaveRequest(updated);
+    reqs[idx] = { ...updated, ...saved };
+    CACHE['rx3_leaveRequests'] = reqs;
+    bumpDataVersion('leaveRequests');
+
+    CM('m-leave-review');
     renderLeave(currentLeaveFilter);
     renderDashboard();
     renderRoster();
-  },150);
-  const lr=reqs[idx];
-notify('leave_decision', {
-  sendToStaff: true,
-  ...staffPayload(lr.empId),
-  decision,
-  approved: decision === 'approved',
-  type: lr.type,
-  from: lr.from,
-  to: lr.to,
-  notes: lr.notes || '',
-  denialReason: denialReason || ''
-});
+    if(typeof renderCalendar === 'function') renderCalendar();
+    if(typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
+
+    const lr = reqs[idx];
+    notify('leave_decision', {
+      sendToStaff: true,
+      ...staffPayload(lr.empId),
+      decision,
+      approved: decision === 'approved',
+      type: lr.type,
+      from: lr.from,
+      to: lr.to,
+      notes: lr.notes || '',
+      denialReason: lr.denialReason || ''
+    });
+  } catch(err) {
+    console.error('Process leave failed:', err);
+    alert('Could not process leave request: ' + (err.message || err));
+  }
 }
   
 // CALENDAR

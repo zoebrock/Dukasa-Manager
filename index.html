@@ -1767,6 +1767,27 @@ if (key === 'otRequests') {
   delete x.staffConfirmed;
 }
 
+// These fields are added to the browser-side normalised objects for leave
+// workflow display, but they are not columns in sick_days, med_certs or
+// custom_hours. Strip them before sending those records to PostgREST.
+if (['sickDays', 'medCerts', 'customHours'].includes(key)) {
+  [
+    'denialReason',
+    'syncedToRoster',
+    'syncedToLeaveTracker',
+    'processedAt',
+    'processedBy',
+    'processedByName',
+    'processedByRole',
+    'approvedBy',
+    'approvedByName',
+    'approvedByRole',
+    'deniedBy',
+    'deniedByName',
+    'deniedByRole'
+  ].forEach(field => delete x[field]);
+}
+
 return x;
   });
 }

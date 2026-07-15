@@ -1742,17 +1742,58 @@ if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].inclu
 }
 
 if (key === 'leaveRequests') {
-  // Supabase uses snake_case. Never send browser-only camelCase fields,
-  // otherwise PostgREST rejects the entire save (for example denialReason).
-  x.denial_reason = x.denialReason || null;
-  x.processed_at = x.processedAt || null;
-  x.synced_to_roster = !!x.syncedToRoster;
-  x.synced_to_leave_tracker = !!x.syncedToLeaveTracker;
+  x.denial_reason =
+    x.denialReason ||
+    null;
+
+  x.processed_at =
+    x.processedAt ||
+    null;
+
+  x.synced_to_roster =
+    Boolean(x.syncedToRoster);
+
+  x.synced_to_leave_tracker =
+    Boolean(x.syncedToLeaveTracker);
+
+  x.request_kind =
+    x.requestKind ??
+    x.request_kind ??
+    'full_day';
+
+  x.partial_start =
+    x.request_kind === 'partial_day'
+      ? (
+          x.partialStart ??
+          x.partial_start ??
+          null
+        )
+      : null;
+
+  x.partial_end =
+    x.request_kind === 'partial_day'
+      ? (
+          x.partialEnd ??
+          x.partial_end ??
+          null
+        )
+      : null;
+
+  x.medical_certificate_required = Boolean(
+    x.medicalCertificateRequired ??
+    x.medical_certificate_required ??
+    false
+  );
 
   delete x.denialReason;
   delete x.processedAt;
   delete x.syncedToRoster;
   delete x.syncedToLeaveTracker;
+
+  delete x.requestKind;
+  delete x.partialStart;
+  delete x.partialEnd;
+  delete x.medicalCertificateRequired;
 }
 
 if (key === 'otRequests') {
@@ -5016,30 +5057,110 @@ function openEditLeaveModal(id){
 
 
 function normaliseLeaveRequestRow(row){
-  const requestKind = row.requestKind || row.request_kind || 'full_day';
+  const r = row || {};
+
+  const requestKind =
+    r.requestKind ??
+    r.request_kind ??
+    'full_day';
+
+  const partialStart =
+    r.partialStart ??
+    r.partial_start ??
+    null;
+
+  const partialEnd =
+    r.partialEnd ??
+    r.partial_end ??
+    null;
+
   return {
-    ...row,
-    id: String(row.id || ('lr' + Date.now())),
-    empId: String(row.empId || row.emp_id || '').trim(),
-    type: row.type || 'Annual Leave',
-    from: row.from || '',
-    to: row.to || '',
-    status: row.status || 'pending',
-    notes: row.notes || '',
-    submitted: row.submitted || row.created_at || new Date().toISOString(),
-    processedAt: row.processedAt || row.processed_at || null,
-    denialReason: row.denialReason || row.denial_reason || '',
+    ...r,
+
+    id: String(
+      r.id ||
+      ('lr' + Date.now())
+    ),
+
+    empId: String(
+      r.empId ??
+      r.emp_id ??
+      ''
+    ).trim(),
+
+    type:
+      r.type ||
+      'Annual Leave',
+
+    from:
+      r.from ||
+      '',
+
+    to:
+      r.to ||
+      '',
+
+    status:
+      r.status ||
+      'pending',
+
+    notes:
+      r.notes ||
+      '',
+
+    submitted:
+      r.submitted ||
+      r.created_at ||
+      new Date().toISOString(),
+
+    processedAt:
+      r.processedAt ??
+      r.processed_at ??
+      null,
+
+    denialReason:
+      r.denialReason ??
+      r.denial_reason ??
+      '',
+
+    syncedToRoster:
+      Boolean(
+        r.syncedToRoster ??
+        r.synced_to_roster ??
+        false
+      ),
+
+    syncedToLeaveTracker:
+      Boolean(
+        r.syncedToLeaveTracker ??
+        r.synced_to_leave_tracker ??
+        false
+      ),
+
     requestKind,
-    partialStart: requestKind === 'partial_day' ? (row.partialStart || row.partial_start || null) : null,
-    partialEnd: requestKind === 'partial_day' ? (row.partialEnd || row.partial_end || null) : null,
-    medicalCertificateRequired: Boolean(row.medicalCertificateRequired ?? row.medical_certificate_required ?? false),
-    syncedToRoster: Boolean(row.syncedToRoster ?? row.synced_to_roster ?? false),
-    syncedToLeaveTracker: Boolean(row.syncedToLeaveTracker ?? row.synced_to_leave_tracker ?? false)
+
+    partialStart:
+      partialStart
+        ? String(partialStart).slice(0, 5)
+        : null,
+
+    partialEnd:
+      partialEnd
+        ? String(partialEnd).slice(0, 5)
+        : null,
+
+    medicalCertificateRequired:
+      Boolean(
+        r.medicalCertificateRequired ??
+        r.medical_certificate_required ??
+        false
+      )
   };
 }
 
 function leavePayloadAttempts(row){
   const clean = normaliseLeaveRequestRow(row);
+
   const core = {
     id: clean.id,
     emp_id: clean.empId,
@@ -5048,7 +5169,27 @@ function leavePayloadAttempts(row){
     to: clean.to,
     status: clean.status,
     notes: clean.notes,
-    denial_reason: clean.denialReason || null
+
+    request_kind:
+      clean.requestKind ||
+      'full_day',
+
+    partial_start:
+      clean.requestKind === 'partial_day'
+        ? clean.partialStart
+        : null,
+
+    partial_end:
+      clean.requestKind === 'partial_day'
+        ? clean.partialEnd
+        : null,
+
+    medical_certificate_required:
+      Boolean(clean.medicalCertificateRequired),
+
+    denial_reason:
+      clean.denialReason ||
+      null
   };
 
   const withSubmitted = {
@@ -5058,18 +5199,23 @@ function leavePayloadAttempts(row){
 
   const withSnakeCaseExtras = {
     ...withSubmitted,
-    processed_at: clean.processedAt,
-    synced_to_roster: clean.syncedToRoster,
-    synced_to_leave_tracker: clean.syncedToLeaveTracker,
-    request_kind: clean.requestKind,
-    partial_start: clean.partialStart,
-    partial_end: clean.partialEnd,
-    medical_certificate_required: clean.medicalCertificateRequired
+
+    processed_at:
+      clean.processedAt,
+
+    synced_to_roster:
+      Boolean(clean.syncedToRoster),
+
+    synced_to_leave_tracker:
+      Boolean(clean.syncedToLeaveTracker)
   };
 
-  return [withSnakeCaseExtras, withSubmitted, core];
+  return [
+    withSnakeCaseExtras,
+    withSubmitted,
+    core
+  ];
 }
-
 async function upsertOneLeaveRequest(row){
   const clean = normaliseLeaveRequestRow(row);
   let lastError = null;

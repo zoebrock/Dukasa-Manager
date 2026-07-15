@@ -5463,7 +5463,8 @@ async function applyApprovedPartialLeaveToRoster(lr){
     status:'published',
     notes:baseNotes?`${baseNotes} | ${leaveNote}`:leaveNote,
     leaveType:clean.type,
-    leaveReason:clean.notes||''
+    leaveReason:clean.notes||'',
+    partialLeaveRequestId:clean.id
   };
 
   if(effectiveStart<=shiftStart&&effectiveEnd>=shiftEnd){

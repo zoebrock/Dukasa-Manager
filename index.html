@@ -2275,7 +2275,7 @@ function SP(p){
   else if(p==='roster'){renderRoster();setTimeout(renderRosterAlerts,100);}
   else if(p==='staff') renderStaff();
   else if(p==='leave'){
-    DB.refresh(['leaveRequests','sickDays','medCerts'],function(){
+    DB.refresh(['leaveRequests','sickDays','medCerts','shifts'],function(){
       currentLeaveFilter='pending';renderLeave('pending');updateBadges();
     });
   }
@@ -5016,6 +5016,7 @@ function openEditLeaveModal(id){
 
 
 function normaliseLeaveRequestRow(row){
+  const requestKind = row.requestKind || row.request_kind || 'full_day';
   return {
     ...row,
     id: String(row.id || ('lr' + Date.now())),
@@ -5028,8 +5029,12 @@ function normaliseLeaveRequestRow(row){
     submitted: row.submitted || row.created_at || new Date().toISOString(),
     processedAt: row.processedAt || row.processed_at || null,
     denialReason: row.denialReason || row.denial_reason || '',
-    syncedToRoster: row.status === 'approved' ? true : Boolean(row.syncedToRoster ?? row.synced_to_roster ?? false),
-    syncedToLeaveTracker: row.status === 'approved' ? true : Boolean(row.syncedToLeaveTracker ?? row.synced_to_leave_tracker ?? false)
+    requestKind,
+    partialStart: requestKind === 'partial_day' ? (row.partialStart || row.partial_start || null) : null,
+    partialEnd: requestKind === 'partial_day' ? (row.partialEnd || row.partial_end || null) : null,
+    medicalCertificateRequired: Boolean(row.medicalCertificateRequired ?? row.medical_certificate_required ?? false),
+    syncedToRoster: Boolean(row.syncedToRoster ?? row.synced_to_roster ?? false),
+    syncedToLeaveTracker: Boolean(row.syncedToLeaveTracker ?? row.synced_to_leave_tracker ?? false)
   };
 }
 
@@ -5055,7 +5060,11 @@ function leavePayloadAttempts(row){
     ...withSubmitted,
     processed_at: clean.processedAt,
     synced_to_roster: clean.syncedToRoster,
-    synced_to_leave_tracker: clean.syncedToLeaveTracker
+    synced_to_leave_tracker: clean.syncedToLeaveTracker,
+    request_kind: clean.requestKind,
+    partial_start: clean.partialStart,
+    partial_end: clean.partialEnd,
+    medical_certificate_required: clean.medicalCertificateRequired
   };
 
   return [withSnakeCaseExtras, withSubmitted, core];
@@ -5313,7 +5322,7 @@ function renderLeave(filter){
       let conflictNote=hasConflict?`<div style="font-size:11px;color:var(--rd);margin-bottom:5px;padding:6px 8px;background:var(--rl);border-radius:var(--rsm)">⚠ Overlaps with ${conflictNames} (same role: ${emp?.role||'?'}). ${isFirst?'This request was submitted first.':'This request was submitted after '+conflictNames+'.'}</div>`:'';
       return`<div class="${cardCls}">
         <div class="lcard-h">
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><strong>${emp?emp.first+' '+emp.last:'?'}</strong>${leaveBadge(lr.type)}<span style="color:var(--t2);font-size:12px">${FDS(lr.from)} – ${FDS(lr.to)}</span></div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><strong>${emp?emp.first+' '+emp.last:'?'}</strong>${leaveBadge(lr.type)}<span style="color:var(--t2);font-size:12px">${FDS(lr.from)} – ${FDS(lr.to)}${lr.requestKind==='partial_day'&&lr.partialStart&&lr.partialEnd?` · Partial day ${lr.partialStart}–${lr.partialEnd}`:''}</span></div>
           <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${badges}<button class="btn btn-sm" onclick="openEditLeaveModal('${lr.id}')">Edit</button></div>
         </div>
         ${conflictNote}
@@ -5333,7 +5342,7 @@ function openLeaveReview(id){
   const leaveReqs=DB.get('leaveRequests')||[];const staff=DB.get('staff')||[];const shifts=DB.get('shifts')||[];
   const lr=leaveReqs.find(l=>l.id===id);if(!lr)return;
   const emp=staff.find(s=>s.id===lr.empId);
-  const conflicts=shifts.filter(s=>s.empId===lr.empId&&s.date>=lr.from&&s.date<=lr.to);
+  const conflicts=shifts.filter(s=>s.empId===lr.empId&&s.date>=lr.from&&s.date<=lr.to&&(!lr.requestKind||lr.requestKind!=='partial_day'||(s.start<lr.partialEnd&&s.end>lr.partialStart)));
   // Conflict check
   const leaveConflicts=getLeaveConflicts(lr,leaveReqs,staff);
   const isFirst=isFirstRequester(lr,leaveReqs,staff);
@@ -5358,6 +5367,7 @@ function openLeaveReview(id){
     <div style="background:var(--s2);border-radius:var(--rsm);padding:11px;margin-bottom:10px;font-size:12px">
       <div style="margin-bottom:4px"><strong>${emp?emp.first+' '+emp.last:'?'}</strong> — ${lr.type}</div>
       <div style="color:var(--t2)">${FDS(lr.from)} – ${FDS(lr.to)}</div>
+      ${lr.requestKind==='partial_day'&&lr.partialStart&&lr.partialEnd?`<div style="margin-top:4px;font-weight:600;color:var(--cd)">Partial day: ${lr.partialStart}–${lr.partialEnd}</div>`:''}
       ${lr.notes?`<div style="margin-top:5px;color:var(--t2)">${lr.notes}</div>`:''}
       <div style="margin-top:6px;font-size:10px;color:var(--t3)">Submitted: ${lr.submitted?new Date(lr.submitted).toLocaleString('en-AU'):'Unknown'}</div>
       ${decisionAuditHTML(lr)}
@@ -5368,7 +5378,7 @@ function openLeaveReview(id){
     </div>`:''}
     ${pharmacistWarn}
     ${conflicts.length?`<div class="alert aw" style="font-size:11px">⚠ ${conflicts.length} rostered shift(s) exist during this period.</div>`:''}
-    <div class="alert ai" style="font-size:11px">Approving syncs leave to the roster and leave tracker.</div>`;
+    <div class="alert ai" style="font-size:11px">Approving syncs leave to the roster and leave tracker. Partial-day leave automatically adjusts the rostered shift and recalculates its break.</div>`;
   OM('m-leave-review');
   // Reset denial reason field each time modal opens
   const wrap=document.getElementById('lr-denial-reason-wrap');
@@ -5404,54 +5414,154 @@ function initiateDecline(){
   }
 }
 
-async function processLeave(decision, denialReason){
-  // Save only the selected request. This avoids re-upserting every leave row
-  // and prevents unrelated browser-only fields from breaking the write.
-  let reqs = DB.get('leaveRequests') || [];
-  const idx = reqs.findIndex(l => String(l.id) === String(reviewingLeaveId));
-  if(idx < 0) return;
+function normaliseShiftTime(value){
+  const match=String(value||'').match(/^(\d{1,2}):(\d{2})/);
+  return match?String(match[1]).padStart(2,'0')+':'+match[2]:'';
+}
 
-  const updated = normaliseLeaveRequestRow({ ...reqs[idx] });
-  updated.status = decision;
-  stampManagerDecision(updated, decision);
-  updated.denialReason = decision === 'declined' ? (denialReason || '') : '';
+function makePartialLeaveShiftId(baseId, leaveId, suffix){
+  return `${baseId}-leave-${leaveId}-${suffix}`.replace(/[^a-zA-Z0-9_-]/g,'');
+}
 
-  if(decision === 'approved'){
-    updated.syncedToRoster = true;
-    updated.syncedToLeaveTracker = true;
-  } else {
-    updated.syncedToRoster = false;
-    updated.syncedToLeaveTracker = false;
+async function applyApprovedPartialLeaveToRoster(lr){
+  const clean=normaliseLeaveRequestRow(lr);
+  if(clean.requestKind!=='partial_day') return;
+  if(clean.syncedToRoster) return;
+  if(!clean.partialStart||!clean.partialEnd) throw new Error('Partial leave times are missing.');
+  if(clean.from!==clean.to) throw new Error('A partial-day leave request must be for one date only.');
+
+  const leaveStart=normaliseShiftTime(clean.partialStart);
+  const leaveEnd=normaliseShiftTime(clean.partialEnd);
+  if(!leaveStart||!leaveEnd||leaveStart>=leaveEnd) throw new Error('The partial leave time range is invalid.');
+
+  let shifts=DB.get('shifts')||[];
+  const matching=shifts
+    .map((shift,index)=>({shift,index}))
+    .filter(({shift})=>
+      String(shift.empId||'')===String(clean.empId||'')&&
+      String(shift.date||'')===String(clean.from||'')&&
+      !shift.isOT&&
+      String(shift.entryType||shift.entry_type||'shift')!=='leave'
+    )
+    .sort((a,b)=>Number(isPublishedShift(b.shift))-Number(isPublishedShift(a.shift)));
+
+  if(!matching.length) throw new Error('No rostered shift was found for this employee on the partial leave date.');
+
+  const {shift,index}=matching[0];
+  const shiftStart=normaliseShiftTime(shift.start);
+  const shiftEnd=normaliseShiftTime(shift.end);
+  if(!shiftStart||!shiftEnd) throw new Error('The rostered shift has invalid start or end times.');
+  if(leaveEnd<=shiftStart||leaveStart>=shiftEnd) throw new Error('The requested partial leave does not overlap the rostered shift.');
+
+  const effectiveStart=leaveStart<shiftStart?shiftStart:leaveStart;
+  const effectiveEnd=leaveEnd>shiftEnd?shiftEnd:leaveEnd;
+  const baseNotes=String(shift.notes||'').replace(/\s*\|\s*Partial leave.*$/,'');
+  const leaveNote=`Partial leave ${effectiveStart}–${effectiveEnd} (${clean.type})`;
+  const common={
+    ...shift,
+    published:true,
+    status:'published',
+    notes:baseNotes?`${baseNotes} | ${leaveNote}`:leaveNote,
+    leaveType:clean.type,
+    leaveReason:clean.notes||''
+  };
+
+  if(effectiveStart<=shiftStart&&effectiveEnd>=shiftEnd){
+    shifts.splice(index,1);
+  }else if(effectiveStart<=shiftStart){
+    shifts[index]={
+      ...common,
+      start:effectiveEnd,
+      end:shiftEnd,
+      breakMin:calcBreakMin(effectiveEnd,shiftEnd),
+      paidBreakMin:paidBreakMin()
+    };
+  }else if(effectiveEnd>=shiftEnd){
+    shifts[index]={
+      ...common,
+      start:shiftStart,
+      end:effectiveStart,
+      breakMin:calcBreakMin(shiftStart,effectiveStart),
+      paidBreakMin:paidBreakMin()
+    };
+  }else{
+    const first={
+      ...common,
+      id:shift.id,
+      start:shiftStart,
+      end:effectiveStart,
+      breakMin:calcBreakMin(shiftStart,effectiveStart),
+      paidBreakMin:paidBreakMin()
+    };
+    const second={
+      ...common,
+      id:makePartialLeaveShiftId(shift.id,clean.id,'after'),
+      start:effectiveEnd,
+      end:shiftEnd,
+      breakMin:calcBreakMin(effectiveEnd,shiftEnd),
+      paidBreakMin:paidBreakMin()
+    };
+    shifts.splice(index,1,first,second);
   }
 
-  try {
-    const saved = await upsertOneLeaveRequest(updated);
-    reqs[idx] = { ...updated, ...saved };
-    CACHE['rx3_leaveRequests'] = reqs;
+  await DB.set('shifts',shifts);
+  CACHE['rx3_shifts']=shifts;
+  bumpDataVersion('shifts');
+}
+
+async function processLeave(decision, denialReason){
+  let reqs=DB.get('leaveRequests')||[];
+  const idx=reqs.findIndex(l=>String(l.id)===String(reviewingLeaveId));
+  if(idx<0)return;
+
+  const updated=normaliseLeaveRequestRow({...reqs[idx]});
+  const wasAlreadyRosterSynced=updated.syncedToRoster===true;
+  updated.status=decision;
+  stampManagerDecision(updated,decision);
+  updated.denialReason=decision==='declined'?(denialReason||''):'';
+
+  try{
+    if(decision==='approved'){
+      if(updated.requestKind==='partial_day'&&!wasAlreadyRosterSynced){
+        await applyApprovedPartialLeaveToRoster(updated);
+      }
+      updated.syncedToRoster=true;
+      updated.syncedToLeaveTracker=true;
+    }else{
+      updated.syncedToRoster=false;
+      updated.syncedToLeaveTracker=false;
+    }
+
+    const saved=await upsertOneLeaveRequest(updated);
+    reqs[idx]={...updated,...saved};
+    CACHE['rx3_leaveRequests']=reqs;
     bumpDataVersion('leaveRequests');
 
     CM('m-leave-review');
     renderLeave(currentLeaveFilter);
     renderDashboard();
     renderRoster();
-    if(typeof renderCalendar === 'function') renderCalendar();
-    if(typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
+    if(typeof renderCalendar==='function')renderCalendar();
+    if(typeof renderTS==='function'&&document.getElementById('pg-timesheets')?.classList.contains('active'))renderTS();
 
-    const lr = reqs[idx];
-    notify('leave_decision', {
-      sendToStaff: true,
+    const lr=reqs[idx];
+    notify('leave_decision',{
+      sendToStaff:true,
       ...staffPayload(lr.empId),
       decision,
-      approved: decision === 'approved',
-      type: lr.type,
-      from: lr.from,
-      to: lr.to,
-      notes: lr.notes || '',
-      denialReason: lr.denialReason || ''
+      approved:decision==='approved',
+      type:lr.type,
+      from:lr.from,
+      to:lr.to,
+      requestKind:lr.requestKind,
+      partialStart:lr.partialStart,
+      partialEnd:lr.partialEnd,
+      notes:lr.notes||'',
+      denialReason:lr.denialReason||''
     });
-  } catch(err) {
-    console.error('Process leave failed:', err);
-    alert('Could not process leave request: ' + (err.message || err));
+  }catch(err){
+    console.error('Process leave failed:',err);
+    alert('Could not process leave request: '+(err.message||err));
   }
 }
   

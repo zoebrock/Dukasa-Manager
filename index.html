@@ -5055,24 +5055,8 @@ function openEditLeaveModal(id){
   OM('m-add-leave');
 }
 
-
 function normaliseLeaveRequestRow(row){
   const r = row || {};
-
-  const requestKind =
-    r.requestKind ??
-    r.request_kind ??
-    'full_day';
-
-  const partialStart =
-    r.partialStart ??
-    r.partial_start ??
-    null;
-
-  const partialEnd =
-    r.partialEnd ??
-    r.partial_end ??
-    null;
 
   return {
     ...r,
@@ -5137,17 +5121,24 @@ function normaliseLeaveRequestRow(row){
         false
       ),
 
-    requestKind,
+    requestKind:
+      r.requestKind ??
+      r.request_kind ??
+      'full_day',
 
     partialStart:
-      partialStart
-        ? String(partialStart).slice(0, 5)
-        : null,
+      String(
+        r.partialStart ??
+        r.partial_start ??
+        ''
+      ).slice(0, 5) || null,
 
     partialEnd:
-      partialEnd
-        ? String(partialEnd).slice(0, 5)
-        : null,
+      String(
+        r.partialEnd ??
+        r.partial_end ??
+        ''
+      ).slice(0, 5) || null,
 
     medicalCertificateRequired:
       Boolean(
@@ -5161,7 +5152,7 @@ function normaliseLeaveRequestRow(row){
 function leavePayloadAttempts(row){
   const clean = normaliseLeaveRequestRow(row);
 
-  const core = {
+  const payload = {
     id: clean.id,
     emp_id: clean.empId,
     type: clean.type,
@@ -5171,8 +5162,7 @@ function leavePayloadAttempts(row){
     notes: clean.notes,
 
     request_kind:
-      clean.requestKind ||
-      'full_day',
+      clean.requestKind || 'full_day',
 
     partial_start:
       clean.requestKind === 'partial_day'
@@ -5188,17 +5178,10 @@ function leavePayloadAttempts(row){
       Boolean(clean.medicalCertificateRequired),
 
     denial_reason:
-      clean.denialReason ||
-      null
-  };
+      clean.denialReason || null,
 
-  const withSubmitted = {
-    ...core,
-    submitted: clean.submitted
-  };
-
-  const withSnakeCaseExtras = {
-    ...withSubmitted,
+    submitted:
+      clean.submitted,
 
     processed_at:
       clean.processedAt,
@@ -5210,12 +5193,9 @@ function leavePayloadAttempts(row){
       Boolean(clean.syncedToLeaveTracker)
   };
 
-  return [
-    withSnakeCaseExtras,
-    withSubmitted,
-    core
-  ];
+  return [payload];
 }
+  
 async function upsertOneLeaveRequest(row){
   const clean = normaliseLeaveRequestRow(row);
   let lastError = null;

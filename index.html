@@ -5592,91 +5592,179 @@ function makePartialLeaveShiftId(baseId, leaveId, suffix){
 
 async function applyApprovedPartialLeaveToRoster(lr){
   const clean=normaliseLeaveRequestRow(lr);
+
   if(clean.requestKind!=='partial_day') return;
-  if(clean.syncedToRoster) return;
-  if(!clean.partialStart||!clean.partialEnd) throw new Error('Partial leave times are missing.');
-  if(clean.from!==clean.to) throw new Error('A partial-day leave request must be for one date only.');
+  if(!clean.partialStart||!clean.partialEnd){
+    throw new Error('Partial leave times are missing.');
+  }
+  if(clean.from!==clean.to){
+    throw new Error('A partial-day leave request must be for one date only.');
+  }
 
   const leaveStart=normaliseShiftTime(clean.partialStart);
   const leaveEnd=normaliseShiftTime(clean.partialEnd);
-  if(!leaveStart||!leaveEnd||leaveStart>=leaveEnd) throw new Error('The partial leave time range is invalid.');
 
-  let shifts=DB.get('shifts')||[];
+  if(!leaveStart||!leaveEnd||leaveStart>=leaveEnd){
+    throw new Error('The partial leave time range is invalid.');
+  }
+
+  let shifts=[...(DB.get('shifts')||[])];
+
+  // A deterministic leave-segment ID prevents duplicate partial-leave chips
+  // when an approval is retried.
+  const leaveSegmentId=`partial-leave-${clean.id}`.replace(/[^a-zA-Z0-9_-]/g,'');
+
+  const existingLeaveSegment=shifts.find(s=>
+    String(s.id||'')===leaveSegmentId ||
+    (
+      String(s.partialLeaveRequestId||s.partial_leave_request_id||'')===String(clean.id) &&
+      String(s.entryType||s.entry_type||'')==='leave'
+    )
+  );
+
+  // Find the employee's actual working shift. Do not select a leave segment,
+  // an OT-only entry, or a shift already adjusted by this same request.
   const matching=shifts
     .map((shift,index)=>({shift,index}))
     .filter(({shift})=>
-      String(shift.empId||'')===String(clean.empId||'')&&
-      String(shift.date||'')===String(clean.from||'')&&
-      !shift.isOT&&
-      String(shift.entryType||shift.entry_type||'shift')!=='leave'
+      String(shift.empId||shift.emp_id||'')===String(clean.empId||'') &&
+      String(shift.date||'')===String(clean.from||'') &&
+      !Boolean(shift.isOT||shift.is_ot) &&
+      String(shift.entryType||shift.entry_type||'shift')!=='leave' &&
+      String(shift.partialLeaveRequestId||shift.partial_leave_request_id||'')!==String(clean.id)
     )
     .sort((a,b)=>Number(isPublishedShift(b.shift))-Number(isPublishedShift(a.shift)));
 
-  if(!matching.length) throw new Error('No rostered shift was found for this employee on the partial leave date.');
+  // If both the leave segment and an adjusted working shift already exist,
+  // the request has already been applied and no further shortening is needed.
+  const adjustedWorkingShiftExists=shifts.some(s=>
+    String(s.empId||s.emp_id||'')===String(clean.empId||'') &&
+    String(s.date||'')===String(clean.from||'') &&
+    String(s.entryType||s.entry_type||'shift')!=='leave' &&
+    String(s.partialLeaveRequestId||s.partial_leave_request_id||'')===String(clean.id)
+  );
+
+  if(existingLeaveSegment&&adjustedWorkingShiftExists){
+    return;
+  }
+
+  if(!matching.length){
+    if(existingLeaveSegment){
+      return;
+    }
+    throw new Error(
+      'No unadjusted rostered shift was found for this employee on the partial leave date.'
+    );
+  }
 
   const {shift,index}=matching[0];
   const shiftStart=normaliseShiftTime(shift.start);
   const shiftEnd=normaliseShiftTime(shift.end);
-  if(!shiftStart||!shiftEnd) throw new Error('The rostered shift has invalid start or end times.');
-  if(leaveEnd<=shiftStart||leaveStart>=shiftEnd) throw new Error('The requested partial leave does not overlap the rostered shift.');
+
+  if(!shiftStart||!shiftEnd){
+    throw new Error('The rostered shift has invalid start or end times.');
+  }
+  if(leaveEnd<=shiftStart||leaveStart>=shiftEnd){
+    throw new Error('The requested partial leave does not overlap the rostered shift.');
+  }
 
   const effectiveStart=leaveStart<shiftStart?shiftStart:leaveStart;
   const effectiveEnd=leaveEnd>shiftEnd?shiftEnd:leaveEnd;
   const baseNotes=String(shift.notes||'').replace(/\s*\|\s*Partial leave.*$/,'');
   const leaveNote=`Partial leave ${effectiveStart}–${effectiveEnd} (${clean.type})`;
-  const common={
+
+  // These properties stay on the remaining working portion(s), allowing the
+  // portal to recognise that the hours were changed by this leave request.
+  const workingCommon={
     ...shift,
     published:true,
     status:'published',
     notes:baseNotes?`${baseNotes} | ${leaveNote}`:leaveNote,
-    leaveType:clean.type,
-    leaveReason:clean.notes||'',
     partialLeaveRequestId:clean.id
   };
 
+  const replacementWorkingShifts=[];
+
   if(effectiveStart<=shiftStart&&effectiveEnd>=shiftEnd){
-    shifts.splice(index,1);
+    // Entire rostered shift is covered by leave: no working portion remains.
   }else if(effectiveStart<=shiftStart){
-    shifts[index]={
-      ...common,
+    replacementWorkingShifts.push({
+      ...workingCommon,
+      id:shift.id,
       start:effectiveEnd,
       end:shiftEnd,
       breakMin:calcBreakMin(effectiveEnd,shiftEnd),
       paidBreakMin:paidBreakMin()
-    };
+    });
   }else if(effectiveEnd>=shiftEnd){
-    shifts[index]={
-      ...common,
-      start:shiftStart,
-      end:effectiveStart,
-      breakMin:calcBreakMin(shiftStart,effectiveStart),
-      paidBreakMin:paidBreakMin()
-    };
-  }else{
-    const first={
-      ...common,
+    replacementWorkingShifts.push({
+      ...workingCommon,
       id:shift.id,
       start:shiftStart,
       end:effectiveStart,
       breakMin:calcBreakMin(shiftStart,effectiveStart),
       paidBreakMin:paidBreakMin()
-    };
-    const second={
-      ...common,
+    });
+  }else{
+    replacementWorkingShifts.push({
+      ...workingCommon,
+      id:shift.id,
+      start:shiftStart,
+      end:effectiveStart,
+      breakMin:calcBreakMin(shiftStart,effectiveStart),
+      paidBreakMin:paidBreakMin()
+    });
+
+    replacementWorkingShifts.push({
+      ...workingCommon,
       id:makePartialLeaveShiftId(shift.id,clean.id,'after'),
       start:effectiveEnd,
       end:shiftEnd,
       breakMin:calcBreakMin(effectiveEnd,shiftEnd),
       paidBreakMin:paidBreakMin()
-    };
-    shifts.splice(index,1,first,second);
+    });
+  }
+
+  const leaveSegment={
+    id:leaveSegmentId,
+    empId:clean.empId,
+    date:clean.from,
+    start:effectiveStart,
+    end:effectiveEnd,
+    breakMin:0,
+    paidBreakMin:0,
+    role:shift.role||'',
+    notes:clean.notes||leaveNote,
+    published:true,
+    status:clean.type||'Leave',
+    entryType:'leave',
+    leaveType:clean.type||'Leave',
+    leaveReason:clean.notes||'',
+    partialLeaveRequestId:clean.id
+  };
+
+  // Replace the original working shift with the shortened/split working
+  // portion(s), then add or replace the visible partial-leave segment.
+  shifts.splice(index,1,...replacementWorkingShifts);
+
+  const leaveIndex=shifts.findIndex(s=>
+    String(s.id||'')===leaveSegmentId ||
+    (
+      String(s.partialLeaveRequestId||s.partial_leave_request_id||'')===String(clean.id) &&
+      String(s.entryType||s.entry_type||'')==='leave'
+    )
+  );
+
+  if(leaveIndex>=0){
+    shifts[leaveIndex]=leaveSegment;
+  }else{
+    shifts.push(leaveSegment);
   }
 
   await DB.set('shifts',shifts);
   CACHE['rx3_shifts']=shifts;
   bumpDataVersion('shifts');
 }
-
 async function processLeave(decision, denialReason){
   let reqs=DB.get('leaveRequests')||[];
   const idx=reqs.findIndex(l=>String(l.id)===String(reviewingLeaveId));
@@ -5690,8 +5778,15 @@ async function processLeave(decision, denialReason){
 
   try{
     if(decision==='approved'){
-      if(updated.requestKind==='partial_day'&&!wasAlreadyRosterSynced){
-        await applyApprovedPartialLeaveToRoster(updated);
+      if(updated.requestKind==='partial_day'){
+        const existingPartialSegment=(DB.get('shifts')||[]).some(s=>
+          String(s.partialLeaveRequestId||s.partial_leave_request_id||'')===String(updated.id) &&
+          String(s.entryType||s.entry_type||'')==='leave'
+        );
+
+        if(!wasAlreadyRosterSynced||!existingPartialSegment){
+          await applyApprovedPartialLeaveToRoster(updated);
+        }
       }
       updated.syncedToRoster=true;
       updated.syncedToLeaveTracker=true;

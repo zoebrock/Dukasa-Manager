@@ -1605,7 +1605,39 @@ if (key === 'lateReports') {
   return rows.map(normaliseLateReport).filter(r => r.empId || r.date || r.reason);
 }
 
-if (['leaveRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
+if (key === 'leaveRequests') {
+  return rows.map(r => normaliseLeaveRequestRow({
+    ...r,
+    empId: r.empId ?? r.emp_id,
+    ts: r.timestamp || r.ts,
+    denialReason: r.denialReason ?? r.denial_reason ?? '',
+    syncedToRoster: r.syncedToRoster ?? r.synced_to_roster ?? false,
+    syncedToLeaveTracker: r.syncedToLeaveTracker ?? r.synced_to_leave_tracker ?? false,
+    processedAt: r.processedAt ?? r.processed_at ?? null,
+    processedBy: r.processedBy ?? r.processed_by,
+    processedByName: r.processedByName ?? r.processed_by_name,
+    processedByRole: r.processedByRole ?? r.processed_by_role,
+    approvedBy: r.approvedBy ?? r.approved_by,
+    approvedByName: r.approvedByName ?? r.approved_by_name,
+    approvedByRole: r.approvedByRole ?? r.approved_by_role,
+    deniedBy: r.deniedBy ?? r.denied_by,
+    deniedByName: r.deniedByName ?? r.denied_by_name,
+    deniedByRole: r.deniedByRole ?? r.denied_by_role,
+
+    // Partial-leave fields must be mapped into the camelCase properties
+    // used throughout the manager portal UI and approval workflow.
+    requestKind: r.requestKind ?? r.request_kind ?? 'full_day',
+    partialStart: String(r.partialStart ?? r.partial_start ?? '').slice(0, 5) || null,
+    partialEnd: String(r.partialEnd ?? r.partial_end ?? '').slice(0, 5) || null,
+    medicalCertificateRequired: Boolean(
+      r.medicalCertificateRequired ??
+      r.medical_certificate_required ??
+      false
+    )
+  }));
+}
+
+if (['sickDays', 'medCerts', 'customHours'].includes(key)) {
   return rows.map(r => ({
     ...r,
     empId: r.emp_id,
@@ -2230,7 +2262,7 @@ function renderDashboard(){
 
 // Update all nav badges and dashboard counts from current cache
 function updateBadges(){
-  const leaveReqs=DB.get('leaveRequests')||[];
+  const leaveReqs=(DB.get('leaveRequests')||[]).map(normaliseLeaveRequestRow);
   const otReqs=DB.get('otRequests')||[];
   const pendingLR=leaveReqs.filter(l=>l.status==='pending');
   const pendingOT=otReqs.filter(o=>o.approved===null||o.approved===undefined);
@@ -5442,6 +5474,9 @@ function renderLeave(filter){
       const conflictNames=conflicts.map(c=>{const ce=staff.find(s=>s.id===c.empId);return ce?ce.first+' '+ce.last:'?';}).join(', ');
       const cardCls='lcard'+(hasConflict?' conflict-card':'');
       let badges=`<span class="badge ${bc}">${lr.status}</span>`;
+      if(lr.requestKind==='partial_day'&&lr.partialStart&&lr.partialEnd){
+        badges+=`<span class="badge bc">Partial day · ${lr.partialStart}–${lr.partialEnd}</span>`;
+      }
       if(hasConflict) badges+=`<span class="conflict-badge">⚠ Conflict</span>`;
       if(hasConflict&&isFirst) badges+=`<span class="first-badge">Requested first</span>`;
       if(hasConflict&&!isFirst) badges+=`<span class="badge ba">Requested later</span>`;
@@ -5465,7 +5500,7 @@ function renderLeave(filter){
 function filterLeave(f,el){document.querySelectorAll('#pg-leave .tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');renderLeave(f);}
 function openLeaveReview(id){
   reviewingLeaveId=id;
-  const leaveReqs=DB.get('leaveRequests')||[];const staff=DB.get('staff')||[];const shifts=DB.get('shifts')||[];
+  const leaveReqs=(DB.get('leaveRequests')||[]).map(normaliseLeaveRequestRow);const staff=DB.get('staff')||[];const shifts=DB.get('shifts')||[];
   const lr=leaveReqs.find(l=>l.id===id);if(!lr)return;
   const emp=staff.find(s=>s.id===lr.empId);
   const conflicts=shifts.filter(s=>s.empId===lr.empId&&s.date>=lr.from&&s.date<=lr.to&&(!lr.requestKind||lr.requestKind!=='partial_day'||(s.start<lr.partialEnd&&s.end>lr.partialStart)));

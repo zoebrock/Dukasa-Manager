@@ -1586,7 +1586,8 @@ if (key === 'shifts') {
     otAnnotations: s.ot_annotations || [],
     entryType: s.entry_type,
     leaveType: s.leave_type,
-    leaveReason: s.leave_reason
+    leaveReason: s.leave_reason,
+    partialLeaveRequestId: s.partial_leave_request_id || null
   }));
 }
 
@@ -1741,6 +1742,10 @@ if (key === 'shifts') {
   x.entry_type = x.entryType || x.entry_type || 'shift';
   x.leave_type = x.leaveType || x.leave_type || null;
   x.leave_reason = x.leaveReason || x.leave_reason || null;
+  x.partial_leave_request_id =
+    x.partialLeaveRequestId ||
+    x.partial_leave_request_id ||
+    null;
 
   delete x.empId;
   delete x.breakMin;
@@ -1755,6 +1760,7 @@ if (key === 'shifts') {
   delete x.entryType;
   delete x.leaveType;
   delete x.leaveReason;
+  delete x.partialLeaveRequestId;
 }
 
     if (key === 'announcements') {

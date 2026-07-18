@@ -7545,14 +7545,26 @@ async function _gasPost(body) {
   ) || {};
 }
 
-function staffPayload(empId){
-  const emp = staffById(empId);
+function staffPayload(empId) {
+  const emp = staffById(empId) || {};
+
   return {
-    empId,
-    empEmail: emp.email || '',
-    empFirst: emp.first || '',
-    empLast: emp.last || '',
-    empName: `${emp.first || ''} ${emp.last || ''}`.trim()
+    empId: empId,
+
+    empEmail:
+      emp.email || '',
+
+    empPhone:
+      emp.phone || '',
+
+    empFirst:
+      emp.first || '',
+
+    empLast:
+      emp.last || '',
+
+    empName:
+      `${emp.first || ''} ${emp.last || ''}`.trim()
   };
 }
 

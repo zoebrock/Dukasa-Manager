@@ -3912,46 +3912,74 @@ async function publishRoster(){
   CM('m-publish');renderRoster();
   const el=document.getElementById('pub-status');
   el.style.display='block';
-  el.textContent='Sending roster emails to all staff...';
-  // Pass shiftsOverride so server uses the just-published shifts without waiting
-  // for PropertiesService to reflect the DB.set write (which can lag by seconds)
-  const payload=JSON.stringify({weekStart:ws,weekEnd:wed,shiftsOverride:allShifts});
-const shifts = DB.get('shifts') || [];
-const staff = DB.get('staff') || [];
+  el.textContent='Sending roster notifications to affected staff...';
 
-const empIds = [...new Set(
-  shifts
-    .filter(s => s.published && s.date >= ws && s.date <= wed)
-    .map(s => s.empId)
-)];
+  const publishedWeekShifts = allShifts.filter(
+    shift =>
+      isPublishedShift(shift) &&
+      shift.date >= ws &&
+      shift.date <= wed
+  );
 
-// Send roster emails in background — NEVER block publishing
-setTimeout(async () => {
+  const empIds = [...new Set(
+    publishedWeekShifts
+      .map(shift => shift.empId)
+      .filter(Boolean)
+  )];
 
-  for (const empId of empIds) {
+  // Send one personalised notification to each staff member who has a shift
+  // in this published week. Each payload contains only that employee's shifts.
+  setTimeout(async () => {
+    let sentCount = 0;
 
-    try {
+    for (const empId of empIds) {
+      const employeeShifts = publishedWeekShifts
+        .filter(
+          shift =>
+            String(shift.empId) === String(empId)
+        )
+        .sort(
+          (a, b) =>
+            String(a.date).localeCompare(String(b.date)) ||
+            String(a.start || '').localeCompare(String(b.start || ''))
+        )
+        .map(shift => ({
+          date: shift.date,
+          start: shift.start,
+          end: shift.end
+        }));
 
-      await notify('roster_published', {
-        sendToStaff: true,
-        ...staffPayload(empId),
-        weekStart: ws,
-        weekEnd: wed,
-        weekLabel: `${ws} to ${wed}`
-      });
+      try {
+        await notify('roster_published', {
+          sendToStaff: true,
+          ...staffPayload(empId),
+          weekStart: ws,
+          weekEnd: wed,
+          weekLabel: `${ws} to ${wed}`,
+          shifts: employeeShifts
+        });
 
-      // tiny stagger prevents GAS/Gmail throttling
-      await new Promise(r => setTimeout(r, 120));
-
-    } catch(err) {
-
-      console.error('Roster email failed for', empId, err);
-
+        sentCount += 1;
+        await new Promise(resolve => setTimeout(resolve, 120));
+      } catch (err) {
+        console.error(
+          'Roster notification failed for',
+          empId,
+          err
+        );
+      }
     }
 
-  }
+    if (el) {
+      el.textContent = empIds.length
+        ? `Roster published — ${sentCount} affected staff member${sentCount === 1 ? '' : 's'} notified.`
+        : 'Roster published — no staff had shifts in this week.';
 
-}, 50);
+      setTimeout(() => {
+        el.style.display = 'none';
+      }, 6000);
+    }
+  }, 50);
 }
 
 // SICK LEAVE HELPERS
@@ -4451,6 +4479,7 @@ async function saveOT(){
       otId: no.id,
       empId: no.empId,
       empEmail: staffInfo.empEmail || '',
+      empPhone: staffInfo.empPhone || '',
       empFirst: staffInfo.empFirst || '',
       empLast: staffInfo.empLast || '',
       empName: staffInfo.empName || '',

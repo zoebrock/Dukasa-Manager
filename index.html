@@ -543,7 +543,7 @@ async function testCellcastSms() {
       '[onclick="testCellcastSms()"]'
     );
 
-  const originalButtonText =
+  const originalText =
     button?.textContent;
 
   try {
@@ -553,82 +553,30 @@ async function testCellcastSms() {
         'Sending…';
     }
 
-    const requestPayload = {
-      token:
-        ROSTERRX_SMS_TOKEN,
+    const result =
+      await _gasPost({
+        action:
+          'sendCellcastSms',
 
-      notificationType:
-        'test',
+        payload: {
+          token:
+            ROSTERRX_SMS_TOKEN,
 
-      mobile:
-        testMobile,
+          notificationType:
+            'test',
 
-      message:
-        'RosterRX SMS test successful. This number can now receive Dukasa roster notifications. - Dukasa',
-    };
+          mobile:
+            testMobile,
 
-    const formData =
-      new URLSearchParams();
-
-    formData.set(
-      'action',
-      'sendCellcastSms'
-    );
-
-    formData.set(
-      'payload',
-      JSON.stringify(
-        requestPayload
-      )
-    );
-
-    const response =
-      await fetch(
-        ROSTERRX_APPS_SCRIPT_URL,
-        {
-          method:
-            'POST',
-
-          body:
-            formData,
-
-          redirect:
-            'follow',
-        }
-      );
-
-    const rawResponse =
-      await response.text();
-
-    let result;
-
-    try {
-      result =
-        rawResponse
-          ? JSON.parse(rawResponse)
-          : {};
-    } catch (parseError) {
-      console.error(
-        'Apps Script returned non-JSON:',
-        rawResponse
-      );
-
-      throw new Error(
-        'Apps Script returned an unexpected response. Check that the correct /exec URL was used and that the latest deployment was published.'
-      );
-    }
+          message:
+            'RosterRX SMS test successful. This number can now receive Dukasa roster notifications. - Dukasa',
+        },
+      });
 
     console.log(
-      'Cellcast Apps Script result:',
+      'Cellcast test result:',
       result
     );
-
-    if (!result?.success) {
-      throw new Error(
-        result?.error ||
-        'The SMS request failed.'
-      );
-    }
 
     window.alert(
       'Success — the test SMS was accepted by Cellcast.'
@@ -649,7 +597,7 @@ async function testCellcastSms() {
     if (button) {
       button.disabled = false;
       button.textContent =
-        originalButtonText ||
+        originalText ||
         'Test SMS';
     }
   }

@@ -517,88 +517,141 @@ const supabaseClient =
 
 const IS_GAS = false;
 
+const ROSTERRX_APPS_SCRIPT_URL =
+  'https://script.google.com/macros/s/AKfycbx6H0pmdXwjpShJUbAYOmXC1R1PiqtMjPQpy6VrVjHW1gIB__s0Nfdq9RM8O23Hwt9J/exec';
+
+const ROSTERRX_SMS_TOKEN =
+  'RxSMS-2026-H7pQ4mL9xW2kT8vN';
+
 
 /* =========================================
    CELLCAST TEST SMS
 ========================================= */
 
 async function testCellcastSms() {
-  const testMobile = window.prompt(
-    'Enter the mobile number that should receive the test SMS:'
-  );
+  const testMobile =
+    window.prompt(
+      'Enter the mobile number that should receive the test SMS:'
+    );
 
   if (!testMobile) {
     return;
   }
 
-  try {
-    const {
-      data,
-      error,
-    } = await supabaseClient.functions.invoke(
-      'send-cellcast-sms',
-      {
-        body: {
-          notificationType: 'test',
-          mobile: testMobile,
-          message:
-            'RosterRX SMS test successful. This number can now receive Dukasa roster notifications.',
-        },
-      }
+  const button =
+    document.querySelector(
+      '[onclick="testCellcastSms()"]'
     );
 
-    if (error) {
-      console.error(
-        'Cellcast Edge Function error:',
-        error
-      );
+  const originalButtonText =
+    button?.textContent;
 
-      window.alert(
-        `SMS test failed: ${
-          error.message ||
-          'Unknown Edge Function error'
-        }`
-      );
-
-      return;
+  try {
+    if (button) {
+      button.disabled = true;
+      button.textContent =
+        'Sending…';
     }
 
-    if (!data?.success) {
+    const requestPayload = {
+      token:
+        ROSTERRX_SMS_TOKEN,
+
+      notificationType:
+        'test',
+
+      mobile:
+        testMobile,
+
+      message:
+        'RosterRX SMS test successful. This number can now receive Dukasa roster notifications. - Dukasa',
+    };
+
+    const formData =
+      new URLSearchParams();
+
+    formData.set(
+      'action',
+      'sendCellcastSms'
+    );
+
+    formData.set(
+      'payload',
+      JSON.stringify(
+        requestPayload
+      )
+    );
+
+    const response =
+      await fetch(
+        ROSTERRX_APPS_SCRIPT_URL,
+        {
+          method:
+            'POST',
+
+          body:
+            formData,
+
+          redirect:
+            'follow',
+        }
+      );
+
+    const rawResponse =
+      await response.text();
+
+    let result;
+
+    try {
+      result =
+        rawResponse
+          ? JSON.parse(rawResponse)
+          : {};
+    } catch (parseError) {
       console.error(
-        'Cellcast rejected the request:',
-        data
+        'Apps Script returned non-JSON:',
+        rawResponse
       );
 
-      window.alert(
-        `SMS test failed: ${
-          data?.error ||
-          'Cellcast rejected the request'
-        }`
+      throw new Error(
+        'Apps Script returned an unexpected response. Check that the correct /exec URL was used and that the latest deployment was published.'
       );
-
-      return;
     }
 
     console.log(
-      'Cellcast test succeeded:',
-      data
+      'Cellcast Apps Script result:',
+      result
     );
 
+    if (!result?.success) {
+      throw new Error(
+        result?.error ||
+        'The SMS request failed.'
+      );
+    }
+
     window.alert(
-      'The test SMS was accepted by Cellcast.'
+      'Success — the test SMS was accepted by Cellcast.'
     );
   } catch (error) {
     console.error(
-      'Unexpected Cellcast test error:',
+      'Cellcast test failed:',
       error
     );
 
     window.alert(
-      `SMS test failed: ${
+      `SMS test failed:\n\n${
         error?.message ||
-        'Unexpected error'
+        String(error)
       }`
     );
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent =
+        originalButtonText ||
+        'Test SMS';
+    }
   }
 }
 

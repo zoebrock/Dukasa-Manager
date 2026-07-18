@@ -508,8 +508,99 @@ body.shift-popup-open{overflow:hidden}
 <script>
 const SUPABASE_URL = 'https://jfowikvmnqlebranlggf.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_-x_b0RnXfUjoKML_cRYvjA_r2udt8PQ';
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const supabaseClient =
+  window.supabase.createClient(
+    SUPABASE_URL,
+    SUPABASE_KEY
+  );
+
 const IS_GAS = false;
+
+
+/* =========================================
+   CELLCAST TEST SMS
+========================================= */
+
+async function testCellcastSms() {
+  const testMobile = window.prompt(
+    'Enter the mobile number that should receive the test SMS:'
+  );
+
+  if (!testMobile) {
+    return;
+  }
+
+  try {
+    const {
+      data,
+      error,
+    } = await supabaseClient.functions.invoke(
+      'send-cellcast-sms',
+      {
+        body: {
+          notificationType: 'test',
+          mobile: testMobile,
+          message:
+            'RosterRX SMS test successful. This number can now receive Dukasa roster notifications.',
+        },
+      }
+    );
+
+    if (error) {
+      console.error(
+        'Cellcast Edge Function error:',
+        error
+      );
+
+      window.alert(
+        `SMS test failed: ${
+          error.message ||
+          'Unknown Edge Function error'
+        }`
+      );
+
+      return;
+    }
+
+    if (!data?.success) {
+      console.error(
+        'Cellcast rejected the request:',
+        data
+      );
+
+      window.alert(
+        `SMS test failed: ${
+          data?.error ||
+          'Cellcast rejected the request'
+        }`
+      );
+
+      return;
+    }
+
+    console.log(
+      'Cellcast test succeeded:',
+      data
+    );
+
+    window.alert(
+      'The test SMS was accepted by Cellcast.'
+    );
+  } catch (error) {
+    console.error(
+      'Unexpected Cellcast test error:',
+      error
+    );
+
+    window.alert(
+      `SMS test failed: ${
+        error?.message ||
+        'Unexpected error'
+      }`
+    );
+  }
+}
 
 // GLOBAL APP STATE (REQUIRED)
 let currentWeekStart = null;

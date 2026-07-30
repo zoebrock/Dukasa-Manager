@@ -7865,6 +7865,59 @@ async function saveRunningLateReport(payload = {}){
   return report;
 }
 
+// ── Cellcast SMS ──────────────────────────────────────────────
+// Notification types that should also go out as an SMS (in addition to email)
+// whenever the recipient has a phone number on file.
+const SMS_NOTIFY_TYPES = new Set([
+  'roster_published',
+  'manager_ot_request',
+  'ot_decision',
+  'announcement',
+  'staff_late_warning'
+]);
+
+function normalisePhoneForSMS(phone){
+  if(!phone) return '';
+  let p = String(phone).replace(/[\s\-()]/g,'');
+  if(p.startsWith('+')) return p;
+  if(p.startsWith('0')) return '+61' + p.slice(1);
+  if(p.startsWith('61')) return '+' + p;
+  return p;
+}
+
+function smsMessageForType(type, payload){
+  const name = payload.empFirst || payload.empName || 'there';
+  switch(type){
+    case 'roster_published':
+      return `Hi ${name}, your roster for ${payload.weekLabel || (payload.weekStart+' to '+payload.weekEnd)} has been published. Check the RosterRx staff portal for your shifts.`;
+    case 'manager_ot_request':
+      return `Hi ${name}, you've been offered overtime on ${payload.date} (${payload.start}-${payload.end}). Please confirm your availability in the RosterRx staff portal.`;
+    case 'ot_decision':
+      return `Hi ${name}, your overtime request for ${payload.date} (${payload.start}-${payload.end}) was ${payload.decision === 'approved' ? 'approved' : 'declined'}.`;
+    case 'announcement':
+      return `Announcement: ${payload.title}${payload.date ? ' — ' + payload.date : ''}${payload.location ? ' @ ' + payload.location : ''}. Check the staff portal for details.`;
+    case 'staff_late_warning':
+      return `Hi ${name}, please check your email for a note from management regarding your recent punctuality record.`;
+    default:
+      return payload.message || 'You have a new notification in RosterRx — check the staff portal.';
+  }
+}
+
+async function _smsPost(toPhone, message){
+  const to = normalisePhoneForSMS(toPhone);
+  if(!to) throw new Error('No phone number on file');
+  const res = await fetch('/api/sms', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to, message })
+  });
+  const text = await res.text();
+  let json;
+  try { json = JSON.parse(text); } catch { json = { ok:false, error:text }; }
+  if(!json.ok) throw new Error(json.error || 'SMS send failed');
+  return json;
+}
+
 async function notify(type, payload = {}){
   const finalPayload = isRunningLateType(type) ? enrichRunningLatePayload(payload) : payload;
 
@@ -7873,6 +7926,15 @@ async function notify(type, payload = {}){
       if(typeof renderDashboard === 'function') renderDashboard();
       if(typeof updateBadges === 'function') updateBadges();
     });
+  }
+
+  // Fire the SMS in parallel via Cellcast for staff-facing notification types.
+  // This never blocks or fails the email path below — SMS errors are logged only,
+  // since a missing/invalid phone number shouldn't stop the email notification.
+  if(finalPayload.sendToStaff && finalPayload.empPhone && SMS_NOTIFY_TYPES.has(type)){
+    _smsPost(finalPayload.empPhone, smsMessageForType(type, finalPayload))
+      .then(r => console.log('SMS sent:', type, r))
+      .catch(err => console.error('SMS failed:', type, err));
   }
 
   return _gasPost({

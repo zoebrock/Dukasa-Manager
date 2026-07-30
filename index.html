@@ -1025,7 +1025,13 @@ function isPublishedShift(shift){
         <button class="btn btn-primary btn-sm" onclick="openNewGroupChatModal()">+ New group chat</button>
       </div>
       <div style="display:flex;gap:16px;align-items:flex-start">
-        <div style="width:280px;flex-shrink:0;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);max-height:calc(100vh - 190px);overflow-y:auto" id="chat-list"></div>
+        <div style="width:280px;flex-shrink:0;display:flex;flex-direction:column">
+          <div class="tabs" style="margin-bottom:8px" id="chat-list-tabs">
+            <div class="tab active" onclick="setChatListFilterMgr('groups',this)">Group chats</div>
+            <div class="tab" onclick="setChatListFilterMgr('dms',this)">Staff messages</div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:var(--r);background:var(--surface);max-height:calc(100vh - 230px);overflow-y:auto" id="chat-list"></div>
+        </div>
         <div style="flex:1;min-width:0;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);min-height:calc(100vh - 190px);display:flex;flex-direction:column" id="chat-thread">
           <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:13px">Select a chat to get started.</div>
         </div>
@@ -1379,11 +1385,11 @@ function isPublishedShift(shift){
     <div class="fr">
       <label>Members</label>
       <div id="gm-staff-list" style="padding:6px 2px;max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--rsm)"></div>
-      <div style="font-size:11px;color:var(--t3);margin-top:6px">Check who should be in this group, then save.</div>
+      <div id="gm-hint" style="font-size:11px;color:var(--t3);margin-top:6px">Check who should be in this group, then save.</div>
     </div>
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="btn" onclick="CM('m-group-members')">Cancel</button>
-      <button class="btn btn-primary" onclick="saveGroupMembers()">Save members</button>
+      <button class="btn btn-primary" id="gm-save-btn" onclick="saveGroupMembers()">Save members</button>
     </div>
   </div>
 </div>
@@ -8214,37 +8220,54 @@ async function renderChat(){
   if(chatState.activeChatId) await renderChatThreadMgr_();
 }
 
+let chatListFilterMgr = 'groups';
+function setChatListFilterMgr(filter, el){
+  chatListFilterMgr = filter;
+  document.querySelectorAll('#chat-list-tabs .tab').forEach(t=>t.classList.remove('active'));
+  if(el) el.classList.add('active');
+  renderChatListMgr_();
+}
+
 function renderChatListMgr_(){
   const el = document.getElementById('chat-list');
   if(!el) return;
   const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first));
 
-  const existingDmIds = new Set(
-    chatState.chats.filter(c=>c.type==='dm').map(c=>(c.member_ids||[]).find(id=>id!==MGR_ID)).filter(Boolean).map(String)
-  );
-  const staffWithoutDm = staff.filter(s=>!existingDmIds.has(String(s.id)));
+  if(chatListFilterMgr === 'dms'){
+    const existingDmIds = new Set(
+      chatState.chats.filter(c=>c.type==='dm').map(c=>(c.member_ids||[]).find(id=>id!==MGR_ID)).filter(Boolean).map(String)
+    );
+    const staffWithoutDm = staff.filter(s=>!existingDmIds.has(String(s.id)));
 
-  const rows = chatState.chats.map(c => {
-    const unread = chatIsUnreadMgr_(c);
-    return `<div class="chat-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);${chatState.activeChatId===c.id?'background:var(--s2)':''}" onclick="openChatThreadMgr('${c.id}')">
-      <div style="width:32px;height:32px;border-radius:50%;background:var(--pl);display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0">${chatIconMgr_(c)}</div>
+    const dmChats = chatState.chats.filter(c=>c.type==='dm');
+    const rows = dmChats.map(c => chatRowHTMLMgr_(c)).join('');
+    const dmPrompts = staffWithoutDm.map(s => `<div class="chat-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border)" onclick="openChatThreadMgr('dm-${s.id}')">
+      <div style="width:32px;height:32px;border-radius:50%;background:${s.color}22;color:${s.color};display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0">${INI(s)}</div>
       <div style="flex:1;min-width:0">
-        <div style="font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(chatDisplayNameMgr_(c))}</div>
-        <div style="font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(c.last_message_preview || 'No messages yet.')}</div>
+        <div style="font-size:12.5px;font-weight:600">${escHTML(s.first)} ${escHTML(s.last)}</div>
+        <div style="font-size:11px;color:var(--t3)">Start a direct message</div>
       </div>
-      ${unread?'<span style="width:8px;height:8px;border-radius:50%;background:var(--purple);flex-shrink:0"></span>':''}
-    </div>`;
-  }).join('');
+    </div>`).join('');
+    el.innerHTML = rows + dmPrompts || '<div style="padding:14px;font-size:12px;color:var(--t3)">No staff on file yet.</div>';
+    return;
+  }
 
-  const dmPrompts = staffWithoutDm.map(s => `<div class="chat-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border)" onclick="openChatThreadMgr('dm-${s.id}')">
-    <div style="width:32px;height:32px;border-radius:50%;background:${s.color}22;color:${s.color};display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0">${INI(s)}</div>
+  // 'groups' — Dukasa Crew always first, then admin-created group chats
+  const groupChats = chatState.chats.filter(c=>c.type==='crew' || c.type==='group')
+    .sort((a,b)=> (a.type==='crew'?-1:0) - (b.type==='crew'?-1:0) || (b.updated_at||'').localeCompare(a.updated_at||''));
+  el.innerHTML = groupChats.map(c=>chatRowHTMLMgr_(c)).join('') || '<div style="padding:14px;font-size:12px;color:var(--t3)">No group chats yet.</div>';
+}
+
+function chatRowHTMLMgr_(c){
+  const unread = chatIsUnreadMgr_(c);
+  return `<div class="chat-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);${chatState.activeChatId===c.id?'background:var(--s2)':''}" onclick="openChatThreadMgr('${c.id}')">
+    <div style="width:32px;height:32px;border-radius:50%;background:var(--pl);display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0">${chatIconMgr_(c)}</div>
     <div style="flex:1;min-width:0">
-      <div style="font-size:12.5px;font-weight:600">${escHTML(s.first)} ${escHTML(s.last)}</div>
-      <div style="font-size:11px;color:var(--t3)">Start a direct message</div>
+      <div style="font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(chatDisplayNameMgr_(c))}</div>
+      <div style="font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(c.last_message_preview || 'No messages yet.')}</div>
     </div>
-  </div>`).join('');
-
-  el.innerHTML = rows + dmPrompts;
+    ${unread?'<span style="width:8px;height:8px;border-radius:50%;background:var(--purple);flex-shrink:0"></span>':''}
+  </div>`;
 }
 
 function chatMessageBubbleMgr_(m){
@@ -8284,8 +8307,9 @@ async function renderChatThreadMgr_(){
       <div>
         <div style="font-weight:700;font-size:13.5px">${escHTML(chatDisplayNameMgr_(chat))}</div>
         ${chat.type==='group' ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${(chat.member_ids||[]).filter(id=>id!==MGR_ID).length} member${(chat.member_ids||[]).filter(id=>id!==MGR_ID).length===1?'':'s'}</div>` : ''}
+        ${chat.type==='crew' ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${(DB.get('staff')||[]).length} member${(DB.get('staff')||[]).length===1?'':'s'} · everyone, automatically</div>` : ''}
       </div>
-      ${chat.type==='group' ? `<button class="btn btn-sm" onclick="openGroupMembersModal('${chat.id}')">👥 Members</button>` : ''}
+      ${(chat.type==='group'||chat.type==='crew') ? `<button class="btn btn-sm" onclick="openGroupMembersModal('${chat.id}')">👥 Members</button>` : ''}
     </div>
     <div id="chat-messages-mgr" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:300px">
       ${messages.length ? messages.map(chatMessageBubbleMgr_).join('') : '<div style="color:var(--t3);font-size:12px">No messages yet.</div>'}
@@ -8474,16 +8498,31 @@ function openGroupMembersModal(chatId){
   const chat = chatState.chats.find(c => c.id === chatId);
   if(!chat) return;
   editingGroupChatId = chatId;
+  const isCrew = chat.type === 'crew';
   const currentIds = (chat.member_ids||[]).filter(id=>id!==MGR_ID).map(String);
   const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first));
 
   document.getElementById('gm-title').textContent = 'Members — ' + chatDisplayNameMgr_(chat);
-  document.getElementById('gm-staff-list').innerHTML = staff.map(s => `
-    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
-      <input type="checkbox" class="gm-staff-cb" value="${s.id}" ${currentIds.includes(String(s.id))?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
-      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
-      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
-    </label>`).join('');
+
+  if(isCrew){
+    document.getElementById('gm-staff-list').innerHTML = staff.map(s => `
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px">
+        <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+        <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
+      </div>`).join('') || '<div style="font-size:12px;color:var(--t3);padding:8px 2px">No staff on file yet.</div>';
+  } else {
+    document.getElementById('gm-staff-list').innerHTML = staff.map(s => `
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+        <input type="checkbox" class="gm-staff-cb" value="${s.id}" ${currentIds.includes(String(s.id))?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+        <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+        <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
+      </label>`).join('');
+  }
+
+  const hint = document.getElementById('gm-hint');
+  if(hint) hint.textContent = isCrew ? 'Dukasa Crew automatically includes every staff member — nothing to edit here.' : 'Check who should be in this group, then save.';
+  const saveBtn = document.getElementById('gm-save-btn');
+  if(saveBtn) saveBtn.style.display = isCrew ? 'none' : '';
 
   OM('m-group-members');
 }

@@ -849,6 +849,7 @@ function isPublishedShift(shift){
         <div class="sc"><div class="sl">On leave/sick today</div><div class="sv" id="d-leave">0</div></div>
         <div class="sc"><div class="sl">Pending requests</div><div class="sv" id="d-pending">0</div></div>
       </div>
+      <div id="chat-notifs" class="notif-area"></div>
       <div id="mc-notifs" class="notif-area"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
         <div class="card"><h3 style="margin-bottom:10px">Annual leave requests</h3><div id="d-leave-list"></div></div>
@@ -1047,6 +1048,12 @@ function isPublishedShift(shift){
       <div class="settings-s">
         <h3>Dispensary</h3>
         <div class="fr"><label>Name</label><input type="text" id="set-name" value="Green Leaf Dispensary"></div>
+      </div>
+      <div class="settings-s">
+        <h3>Chat notifications</h3>
+        <div class="fr"><label>Your mobile number</label><input type="tel" id="set-mgr-phone" placeholder="e.g. 0412 345 678">
+          <span style="font-size:11px;color:var(--t3);display:block;margin-top:4px">You'll get an SMS to this number whenever a staff member sends a new chat message (Dukasa Crew, a group chat, or a direct message to you).</span>
+        </div>
       </div>
       <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
     </div>
@@ -1362,6 +1369,21 @@ function isPublishedShift(shift){
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="btn" onclick="CM('m-new-group-chat')">Cancel</button>
       <button class="btn btn-primary" onclick="createGroupChat()">Create group</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="m-group-members">
+  <div class="modal">
+    <div class="mh"><h2 id="gm-title">Group members</h2><button class="xbtn" onclick="CM('m-group-members')">×</button></div>
+    <div class="fr">
+      <label>Members</label>
+      <div id="gm-staff-list" style="padding:6px 2px;max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--rsm)"></div>
+      <div style="font-size:11px;color:var(--t3);margin-top:6px">Check who should be in this group, then save.</div>
+    </div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="CM('m-group-members')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveGroupMembers()">Save members</button>
     </div>
   </div>
 </div>
@@ -2365,6 +2387,7 @@ function renderLateNotifications(staff, shifts, clockEvents){
 }
 
 function renderDashboard(){
+  renderDashboardChatAlert_();
   const staff=DB.get('staff')||[];
   const shifts=DB.get('shifts')||[];
   const ce=getClockEvents();
@@ -7619,6 +7642,7 @@ function loadSettings(){
   if(s.otMultiplier) document.getElementById('set-otm').value=s.otMultiplier;
   if(s.gracePeriod!==undefined) document.getElementById('set-grace').value=s.gracePeriod;
   if(s.dispensaryName) document.getElementById('set-name').value=s.dispensaryName;
+  if(s.managerNotifyPhone) document.getElementById('set-mgr-phone').value=s.managerNotifyPhone;
 }
 function togSet(k){
   const s=DB.get('settings')||{};
@@ -7634,7 +7658,8 @@ function saveSettings(){
     weeklyOTHours:parseFloat(document.getElementById('set-woth').value),
     otMultiplier:parseFloat(document.getElementById('set-otm').value),
     gracePeriod:parseFloat(document.getElementById('set-grace').value),
-    dispensaryName:document.getElementById('set-name').value
+    dispensaryName:document.getElementById('set-name').value,
+    managerNotifyPhone:document.getElementById('set-mgr-phone').value.trim()
   };
   DB.set('settings',s);
   alert('Settings saved!');
@@ -8099,12 +8124,10 @@ async function notifyChatMessageMgr_(chat, msg){
   }
   targets.delete(String(MGR_ID));
 
-  const chatLabel = chat.type === 'crew' ? 'Dukasa Crew' : chat.type === 'dm' ? 'a direct message' : (chat.name || 'a group chat');
-  const text = `${msg.sender_name} in ${chatLabel}: ${msg.body}`.slice(0, 280) + ` — Staff Portal: ${STAFF_PORTAL_URL}`;
-
   for(const id of targets){
     const person = staff.find(s => String(s.id) === id);
     if(!person || !person.phone) continue;
+    const text = `Hey ${person.first || 'there'}! You have a new Dukasa message. Please make sure you acknowledge and reply ASAP. ${STAFF_PORTAL_URL}`;
     try { await _smsPost(person.phone, text); }
     catch(e){ console.warn('Chat SMS to', id, 'failed:', e.message); }
   }
@@ -8155,6 +8178,17 @@ function updateChatBadgeMgr_(){
   const count = chatBadgeCountMgr_();
   badge.style.display = count ? 'inline-block' : 'none';
   badge.textContent = count;
+}
+
+function renderDashboardChatAlert_(){
+  const el = document.getElementById('chat-notifs');
+  if(!el) return;
+  const unreadChats = (chatState.chats||[]).filter(chatIsUnreadMgr_);
+  if(!unreadChats.length){ el.innerHTML = ''; return; }
+  el.innerHTML = `<div class="alert ai" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+    <span>💬 <strong>${unreadChats.length} chat${unreadChats.length>1?'s':''}</strong> with unread messages</span>
+    <button class="btn btn-sm btn-primary" onclick="SP('chat')">View chat</button>
+  </div>`;
 }
 
 function chatDisplayNameMgr_(c){
@@ -8246,7 +8280,13 @@ async function renderChatThreadMgr_(){
   chatState.messages = messages;
 
   el.innerHTML = `
-    <div style="padding:12px 16px;border-bottom:1px solid var(--border);font-weight:700;font-size:13.5px">${escHTML(chatDisplayNameMgr_(chat))}</div>
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div>
+        <div style="font-weight:700;font-size:13.5px">${escHTML(chatDisplayNameMgr_(chat))}</div>
+        ${chat.type==='group' ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${(chat.member_ids||[]).filter(id=>id!==MGR_ID).length} member${(chat.member_ids||[]).filter(id=>id!==MGR_ID).length===1?'':'s'}</div>` : ''}
+      </div>
+      ${chat.type==='group' ? `<button class="btn btn-sm" onclick="openGroupMembersModal('${chat.id}')">👥 Members</button>` : ''}
+    </div>
     <div id="chat-messages-mgr" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:300px">
       ${messages.length ? messages.map(chatMessageBubbleMgr_).join('') : '<div style="color:var(--t3);font-size:12px">No messages yet.</div>'}
     </div>
@@ -8380,6 +8420,7 @@ function startChatListRealtimeMgr_(){
     .on('postgres_changes', { event: '*', schema: 'public', table: 'chats' }, async () => {
       await loadChatDataMgr_().catch(()=>{});
       updateChatBadgeMgr_();
+      if(document.getElementById('pg-dashboard')?.classList.contains('active')) renderDashboardChatAlert_();
       if(document.getElementById('pg-chat')?.classList.contains('active')) renderChatListMgr_();
     })
     .subscribe(status => console.log('Manager realtime chats:', status));
@@ -8423,6 +8464,50 @@ async function createGroupChat(){
     await openChatThreadMgr(chat.id);
   } catch(e) {
     alert('Could not create group chat: ' + e.message);
+  }
+}
+
+// ── GROUP MEMBERS ────────────────────────────────────────────────
+let editingGroupChatId = null;
+
+function openGroupMembersModal(chatId){
+  const chat = chatState.chats.find(c => c.id === chatId);
+  if(!chat) return;
+  editingGroupChatId = chatId;
+  const currentIds = (chat.member_ids||[]).filter(id=>id!==MGR_ID).map(String);
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first));
+
+  document.getElementById('gm-title').textContent = 'Members — ' + chatDisplayNameMgr_(chat);
+  document.getElementById('gm-staff-list').innerHTML = staff.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="gm-staff-cb" value="${s.id}" ${currentIds.includes(String(s.id))?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
+    </label>`).join('');
+
+  OM('m-group-members');
+}
+
+async function saveGroupMembers(){
+  if(!editingGroupChatId) return;
+  const memberIds = [...document.querySelectorAll('.gm-staff-cb:checked')].map(cb => cb.value);
+  if(!memberIds.length){ alert('A group needs at least one member.'); return; }
+
+  try {
+    const { error } = await supabaseClient.from('chats').update({
+      member_ids: [MGR_ID, ...memberIds],
+      updated_at: new Date().toISOString()
+    }).eq('id', editingGroupChatId);
+    if(error) throw error;
+    CM('m-group-members');
+    await loadChatDataMgr_();
+    updateChatBadgeMgr_();
+    renderChatListMgr_();
+    if(chatState.activeChatId === editingGroupChatId) await renderChatThreadMgr_();
+  } catch(e) {
+    alert('Could not update members: ' + e.message);
+  } finally {
+    editingGroupChatId = null;
   }
 }
 
@@ -8528,7 +8613,7 @@ DB.preload(ALL_KEYS, function(){
   }
   // Start 10-second ping-based sync
   startManagerSync();
-  loadChatDataMgr_().then(updateChatBadgeMgr_).catch(e=>console.warn('Initial chat load failed:', e.message));
+  loadChatDataMgr_().then(()=>{ updateChatBadgeMgr_(); renderDashboardChatAlert_(); }).catch(e=>console.warn('Initial chat load failed:', e.message));
   startChatListRealtimeMgr_();
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-overlay.open').forEach(m=>m.classList.remove('open'));});

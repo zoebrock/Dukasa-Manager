@@ -7885,21 +7885,35 @@ function normalisePhoneForSMS(phone){
   return p;
 }
 
+const STAFF_PORTAL_URL = 'https://dukasa-staff-portal.vercel.app';
+
+function fmt12h(t){
+  if(!t) return '';
+  const [h,m] = t.split(':').map(Number);
+  if(isNaN(h)||isNaN(m)) return t;
+  const period = h>=12 ? 'pm' : 'am';
+  const h12 = ((h+11)%12)+1;
+  return `${h12}${m?':'+String(m).padStart(2,'0'):''}${period}`;
+}
+
 function smsMessageForType(type, payload){
   const name = payload.empFirst || payload.empName || 'there';
+  const dateLabel = payload.date ? FDS(payload.date) : '';
+  const timeLabel = payload.start && payload.end ? `${fmt12h(payload.start)} - ${fmt12h(payload.end)}` : '';
+  const dateTimeLabel = [dateLabel, timeLabel].filter(Boolean).join(', ');
   switch(type){
     case 'roster_published':
-      return `Hi ${name}, your roster for ${payload.weekLabel || (payload.weekStart+' to '+payload.weekEnd)} has been published. Check the RosterRx staff portal for your shifts.`;
+      return `Hi ${name}, your roster for ${payload.weekLabel || (payload.weekStart+' to '+payload.weekEnd)} has been published. Check the Staff Portal for your shifts: ${STAFF_PORTAL_URL}`;
     case 'manager_ot_request':
-      return `Hi ${name}, you've been offered overtime on ${payload.date} (${payload.start}-${payload.end}). Please confirm your availability in the RosterRx staff portal.`;
+      return `Hey ${name}! There is a new OT request - ${dateTimeLabel} - awaiting your approval. Please confirm your availability via the Staff Portal: ${STAFF_PORTAL_URL} Thanks!`;
     case 'ot_decision':
-      return `Hi ${name}, your overtime request for ${payload.date} (${payload.start}-${payload.end}) was ${payload.decision === 'approved' ? 'approved' : 'declined'}.`;
+      return `Hi ${name}, your overtime request for ${dateTimeLabel} was ${payload.decision === 'approved' ? 'approved' : 'declined'}. Check the Staff Portal for details: ${STAFF_PORTAL_URL}`;
     case 'announcement':
-      return `Announcement: ${payload.title}${payload.date ? ' — ' + payload.date : ''}${payload.location ? ' @ ' + payload.location : ''}. Check the staff portal for details.`;
+      return `Announcement: ${payload.title}${payload.date ? ' — ' + payload.date : ''}${payload.location ? ' @ ' + payload.location : ''}. Check the Staff Portal for details: ${STAFF_PORTAL_URL}`;
     case 'staff_late_warning':
-      return `Hi ${name}, please check your email for a note from management regarding your recent punctuality record.`;
+      return `Hi ${name}, please check your email for a note from management regarding your recent punctuality record. Staff Portal: ${STAFF_PORTAL_URL}`;
     default:
-      return payload.message || 'You have a new notification in RosterRx — check the staff portal.';
+      return payload.message || `You have a new notification in RosterRx — check the Staff Portal: ${STAFF_PORTAL_URL}`;
   }
 }
 

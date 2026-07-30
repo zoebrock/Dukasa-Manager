@@ -752,6 +752,11 @@ function isPublishedShift(shift){
         Announcements
         <span id="ann-badge" class="badge br" style="margin-left:auto;display:none;font-size:10px;padding:1px 6px">0</span>
       </button>
+      <button class="ni" onclick="SP('chat')" id="nav-chat">
+        <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Chat
+        <span id="chat-badge" class="badge br" style="margin-left:auto;display:none;font-size:10px;padding:1px 6px">0</span>
+      </button>
       <button class="ni" onclick="SP('settings')" id="nav-settings">
         <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         Settings
@@ -1010,6 +1015,20 @@ function isPublishedShift(shift){
       </div>
 
       <div id="ann-list"></div>
+    </div>
+
+    <!-- CHAT -->
+    <div class="pg" id="pg-chat">
+      <div class="ph">
+        <h2>Chat</h2>
+        <button class="btn btn-primary btn-sm" onclick="openNewGroupChatModal()">+ New group chat</button>
+      </div>
+      <div style="display:flex;gap:16px;align-items:flex-start">
+        <div style="width:280px;flex-shrink:0;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);max-height:calc(100vh - 190px);overflow-y:auto" id="chat-list"></div>
+        <div style="flex:1;min-width:0;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);min-height:calc(100vh - 190px);display:flex;flex-direction:column" id="chat-thread">
+          <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:13px">Select a chat to get started.</div>
+        </div>
+      </div>
     </div>
 
     <!-- SETTINGS -->
@@ -1328,6 +1347,21 @@ function isPublishedShift(shift){
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="btn" onclick="CM('m-warning')">Cancel</button>
       <button class="btn btn-primary" style="background:var(--red);border-color:var(--red)" onclick="sendWarningEmail()">Send warning email</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="m-new-group-chat">
+  <div class="modal">
+    <div class="mh"><h2>New group chat</h2><button class="xbtn" onclick="CM('m-new-group-chat')">×</button></div>
+    <div class="fr"><label>Group name</label><input type="text" id="ngc-name" placeholder="e.g. Dispensary Team, Weekend Crew"></div>
+    <div class="fr">
+      <label>Members</label>
+      <div id="ngc-staff-list" style="padding:6px 2px;max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--rsm)"></div>
+    </div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="CM('m-new-group-chat')">Cancel</button>
+      <button class="btn btn-primary" onclick="createGroupChat()">Create group</button>
     </div>
   </div>
 </div>
@@ -2511,7 +2545,7 @@ function SP(p){
   const navEl=document.getElementById('nav-'+p);
   if(pgEl) pgEl.classList.add('active');
   if(navEl) navEl.classList.add('active');
-  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',announcements:'Announcements',settings:'Settings'}[p]||p;
+  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',announcements:'Announcements',chat:'Chat',settings:'Settings'}[p]||p;
   if(!currentWeekStart) initWeek(new Date());
   // Refresh from server for data-heavy pages, then render
   if(p==='dashboard'){
@@ -2537,6 +2571,9 @@ else if(p==='timesheets'){
 }
 else if(p==='announcements'){
   renderAnnouncements();
+}
+else if(p==='chat'){
+  renderChat();
 }
 else if(p==='settings'){
   renderSettings();
@@ -7963,6 +8000,432 @@ async function notify(type, payload = {}){
   });
 }
 
+// ── CHAT ──────────────────────────────────────────────────────
+const MGR_ID = 'admin';
+
+const chatState = {
+  chats: [],
+  activeChatId: null,
+  messages: [],
+  reads: {},
+  members: [],
+  pendingMentions: [],
+  channel: null
+};
+
+async function fetchAllChats_(){
+  const { data, error } = await supabaseClient.from('chats').select('*');
+  if(error){ console.warn('chats load failed:', error.message); return []; }
+  const rows = data || [];
+  rows.sort((a,b)=>(b.updated_at||'').localeCompare(a.updated_at||''));
+  return rows;
+}
+
+async function fetchMyReadsMgr_(){
+  const { data, error } = await supabaseClient.from('chat_reads').select('*').eq('reader_id', MGR_ID);
+  if(error){ console.warn('chat_reads load failed:', error.message); return {}; }
+  const map = {};
+  (data||[]).forEach(r => map[r.chat_id] = r.last_read_at);
+  return map;
+}
+
+async function loadChatDataMgr_(){
+  const [chats, reads] = await Promise.all([fetchAllChats_(), fetchMyReadsMgr_()]);
+  chatState.chats = chats;
+  chatState.reads = reads;
+}
+
+async function ensureChatExistsMgr_(chatId, defaults){
+  const { data: existing } = await supabaseClient.from('chats').select('*').eq('id', chatId).maybeSingle();
+  if(existing) return existing;
+  const now = new Date().toISOString();
+  const row = { id: chatId, created_at: now, updated_at: now, ...defaults };
+  const { data, error } = await supabaseClient.from('chats').insert(row).select().maybeSingle();
+  if(error) throw error;
+  return data;
+}
+
+async function openDmWithStaffMgr_(empId){
+  const chatId = 'dm-' + empId;
+  return ensureChatExistsMgr_(chatId, {
+    name: 'Direct message',
+    type: 'dm',
+    member_ids: [MGR_ID, empId],
+    created_by: MGR_ID
+  });
+}
+
+async function fetchChatMessagesMgr_(chatId, limit=200){
+  const { data, error } = await supabaseClient.from('chat_messages').select('*').eq('chat_id', chatId).order('created_at',{ascending:true}).limit(limit);
+  if(error){ console.warn('fetchChatMessagesMgr_ failed:', error.message); return []; }
+  return data || [];
+}
+
+async function markChatReadMgr_(chatId){
+  const { error } = await supabaseClient.from('chat_reads').upsert({
+    chat_id: chatId,
+    reader_id: MGR_ID,
+    last_read_at: new Date().toISOString()
+  }, { onConflict: 'chat_id,reader_id' });
+  if(error) console.warn('markChatReadMgr_ failed:', error.message);
+}
+
+function chatMembersForMentionMgr_(chat){
+  const staff = DB.get('staff') || [];
+  if(chat.type === 'crew') return staff.map(s=>({id:s.id, name:`${s.first} ${s.last}`}));
+  if(chat.type === 'dm') return [];
+  return (chat.member_ids||[]).filter(id=>id!==MGR_ID).map(id=>{
+    const s = staff.find(x=>String(x.id)===String(id));
+    return s ? {id:s.id, name:`${s.first} ${s.last}`} : null;
+  }).filter(Boolean);
+}
+
+// Notifies staff by SMS when @mentioned (individually or via @dukasateam/"all") in a
+// crew or group chat, and whenever the admin sends them a direct message.
+async function notifyChatMessageMgr_(chat, msg){
+  const staff = DB.get('staff') || [];
+  const targets = new Set();
+
+  if(chat.type === 'dm'){
+    const otherId = (chat.member_ids||[]).find(id=>id!==MGR_ID);
+    if(otherId) targets.add(String(otherId));
+  } else {
+    const mentions = msg.mentions || [];
+    if(mentions.includes('all')){
+      const memberIds = chat.type === 'crew' ? staff.map(s=>s.id) : (chat.member_ids||[]).filter(id=>id!==MGR_ID);
+      memberIds.forEach(id => targets.add(String(id)));
+    }
+    mentions.forEach(id => { if(id !== 'all') targets.add(String(id)); });
+  }
+  targets.delete(String(MGR_ID));
+
+  const chatLabel = chat.type === 'crew' ? 'Dukasa Crew' : chat.type === 'dm' ? 'a direct message' : (chat.name || 'a group chat');
+  const text = `${msg.sender_name} in ${chatLabel}: ${msg.body}`.slice(0, 280) + ` — Staff Portal: ${STAFF_PORTAL_URL}`;
+
+  for(const id of targets){
+    const person = staff.find(s => String(s.id) === id);
+    if(!person || !person.phone) continue;
+    try { await _smsPost(person.phone, text); }
+    catch(e){ console.warn('Chat SMS to', id, 'failed:', e.message); }
+  }
+}
+
+async function sendChatMessageMgr_(chat, body, mentions){
+  const trimmed = (body||'').trim();
+  if(!trimmed) return;
+  const mgr = getCurrentManager();
+  const now = new Date().toISOString();
+  const msg = {
+    id: 'msg' + Date.now() + Math.random().toString(36).slice(2,7),
+    chat_id: chat.id,
+    sender_id: MGR_ID,
+    sender_name: mgr.name || 'Manager',
+    body: trimmed,
+    mentions: mentions || [],
+    created_at: now
+  };
+  const { error } = await supabaseClient.from('chat_messages').insert(msg);
+  if(error) throw error;
+
+  await supabaseClient.from('chats').update({
+    updated_at: now,
+    last_message_preview: trimmed.slice(0,140),
+    last_sender_id: MGR_ID
+  }).eq('id', chat.id);
+
+  await markChatReadMgr_(chat.id);
+  notifyChatMessageMgr_(chat, msg).catch(err => console.warn('Chat SMS notify failed:', err.message));
+}
+
+function chatIsUnreadMgr_(c){
+  if(String(c.last_sender_id||'') === MGR_ID) return false;
+  if(!c.last_message_preview) return false;
+  const lastRead = chatState.reads[c.id];
+  if(!lastRead) return true;
+  return new Date(c.updated_at) > new Date(lastRead);
+}
+
+function chatBadgeCountMgr_(){
+  return chatState.chats.filter(chatIsUnreadMgr_).length;
+}
+
+function updateChatBadgeMgr_(){
+  const badge = document.getElementById('chat-badge');
+  if(!badge) return;
+  const count = chatBadgeCountMgr_();
+  badge.style.display = count ? 'inline-block' : 'none';
+  badge.textContent = count;
+}
+
+function chatDisplayNameMgr_(c){
+  if(c.type === 'crew') return 'Dukasa Crew';
+  if(c.type === 'dm'){
+    const staff = DB.get('staff') || [];
+    const otherId = (c.member_ids||[]).find(id=>id!==MGR_ID);
+    const s = staff.find(x=>String(x.id)===String(otherId));
+    return s ? `${s.first} ${s.last}` : 'Direct message';
+  }
+  return c.name || 'Group chat';
+}
+function chatIconMgr_(c){
+  if(c.type === 'crew') return '👥';
+  if(c.type === 'dm') return '💬';
+  return '🗂️';
+}
+
+async function renderChat(){
+  await loadChatDataMgr_().catch(e=>console.warn('loadChatDataMgr_ failed:', e.message));
+  updateChatBadgeMgr_();
+  renderChatListMgr_();
+  if(chatState.activeChatId) await renderChatThreadMgr_();
+}
+
+function renderChatListMgr_(){
+  const el = document.getElementById('chat-list');
+  if(!el) return;
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first));
+
+  const existingDmIds = new Set(
+    chatState.chats.filter(c=>c.type==='dm').map(c=>(c.member_ids||[]).find(id=>id!==MGR_ID)).filter(Boolean).map(String)
+  );
+  const staffWithoutDm = staff.filter(s=>!existingDmIds.has(String(s.id)));
+
+  const rows = chatState.chats.map(c => {
+    const unread = chatIsUnreadMgr_(c);
+    return `<div class="chat-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);${chatState.activeChatId===c.id?'background:var(--s2)':''}" onclick="openChatThreadMgr('${c.id}')">
+      <div style="width:32px;height:32px;border-radius:50%;background:var(--pl);display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0">${chatIconMgr_(c)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(chatDisplayNameMgr_(c))}</div>
+        <div style="font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(c.last_message_preview || 'No messages yet.')}</div>
+      </div>
+      ${unread?'<span style="width:8px;height:8px;border-radius:50%;background:var(--purple);flex-shrink:0"></span>':''}
+    </div>`;
+  }).join('');
+
+  const dmPrompts = staffWithoutDm.map(s => `<div class="chat-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border)" onclick="openChatThreadMgr('dm-${s.id}')">
+    <div style="width:32px;height:32px;border-radius:50%;background:${s.color}22;color:${s.color};display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0">${INI(s)}</div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:12.5px;font-weight:600">${escHTML(s.first)} ${escHTML(s.last)}</div>
+      <div style="font-size:11px;color:var(--t3)">Start a direct message</div>
+    </div>
+  </div>`).join('');
+
+  el.innerHTML = rows + dmPrompts;
+}
+
+function chatMessageBubbleMgr_(m){
+  const mine = String(m.sender_id) === MGR_ID;
+  const time = new Date(m.created_at).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit'});
+  return `<div style="align-self:${mine?'flex-end':'flex-start'};max-width:70%">
+    ${!mine ? `<div style="font-size:10.5px;font-weight:700;color:var(--purple);margin-bottom:2px">${escHTML(m.sender_name)}</div>` : ''}
+    <div style="background:${mine?'var(--purple)':'var(--s2)'};color:${mine?'#fff':'var(--t1)'};padding:8px 12px;border-radius:14px;${mine?'border-bottom-right-radius:4px':'border-bottom-left-radius:4px'};font-size:13px;white-space:pre-wrap;word-break:break-word">${escHTML(m.body)}</div>
+    <div style="font-size:10px;color:var(--t3);margin-top:2px;text-align:${mine?'right':'left'}">${time}</div>
+  </div>`;
+}
+
+function scrollChatToBottomMgr_(){
+  const box = document.getElementById('chat-messages-mgr');
+  if(box) box.scrollTop = box.scrollHeight;
+}
+
+async function renderChatThreadMgr_(){
+  const el = document.getElementById('chat-thread');
+  if(!el) return;
+
+  let chat = chatState.chats.find(c => c.id === chatState.activeChatId);
+  if(!chat && String(chatState.activeChatId).startsWith('dm-')){
+    const empId = chatState.activeChatId.slice(3);
+    chat = await openDmWithStaffMgr_(empId);
+    chatState.chats.push(chat);
+  }
+  if(!chat){ el.innerHTML = '<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:13px">Select a chat to get started.</div>'; return; }
+
+  chatState.members = chatMembersForMentionMgr_(chat);
+  chatState.pendingMentions = [];
+  const messages = await fetchChatMessagesMgr_(chat.id);
+  chatState.messages = messages;
+
+  el.innerHTML = `
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);font-weight:700;font-size:13.5px">${escHTML(chatDisplayNameMgr_(chat))}</div>
+    <div id="chat-messages-mgr" style="flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-height:300px">
+      ${messages.length ? messages.map(chatMessageBubbleMgr_).join('') : '<div style="color:var(--t3);font-size:12px">No messages yet.</div>'}
+    </div>
+    <div style="position:relative;padding:12px 16px;border-top:1px solid var(--border)">
+      <div id="chat-mention-list-mgr" style="display:none;position:absolute;bottom:100%;left:16px;right:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rsm);box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:180px;overflow-y:auto;margin-bottom:6px;z-index:20"></div>
+      <div style="display:flex;gap:8px;align-items:flex-end">
+        <textarea id="chat-input-mgr" rows="2" placeholder="${chat.type==='dm'?'Message this staff member…':'Message the team… type @ to mention'}" oninput="onChatInputMgr_()" onkeydown="onChatKeydownMgr_(event)" style="flex:1;resize:none;border:1px solid var(--border);border-radius:var(--rsm);padding:8px 10px;font-size:13px;font-family:inherit"></textarea>
+        <button class="btn btn-primary" onclick="submitChatMessageMgr_()">Send</button>
+      </div>
+    </div>
+  `;
+  scrollChatToBottomMgr_();
+  startChatMessagesRealtimeMgr_(chat.id);
+}
+
+async function openChatThreadMgr(chatId){
+  chatState.activeChatId = chatId;
+  renderChatListMgr_();
+  await renderChatThreadMgr_();
+  await markChatReadMgr_(chatId);
+  chatState.reads[chatId] = new Date().toISOString();
+  updateChatBadgeMgr_();
+  renderChatListMgr_();
+}
+
+function onChatInputMgr_(){
+  const ta = document.getElementById('chat-input-mgr');
+  const list = document.getElementById('chat-mention-list-mgr');
+  if(!ta || !list) return;
+  const cursor = ta.selectionStart;
+  const textBefore = ta.value.slice(0, cursor);
+  const match = textBefore.match(/(^|\s)@(\w*)$/);
+  if(!match){ list.style.display = 'none'; return; }
+  const chat = chatState.chats.find(c=>c.id===chatState.activeChatId);
+  const prefix = match[2].toLowerCase();
+  const options = [];
+  if(chat && chat.type !== 'dm') options.push({id:'all', name:'dukasateam', hint:'Notify everyone in this chat'});
+  chatState.members.forEach(m => options.push({id:m.id, name:m.name, hint:''}));
+  const filtered = options.filter(o => o.name.toLowerCase().replace(/\s/g,'').startsWith(prefix));
+  if(!filtered.length){ list.style.display = 'none'; return; }
+  list.innerHTML = filtered.map(o => `<div style="padding:8px 12px;cursor:pointer;font-size:12.5px" onmousedown="selectMentionMgr_('${o.id}')">
+    <strong>@${escHTML(o.name.replace(/\s/g,''))}</strong>${o.hint?` <span style="color:var(--t3);font-size:11px">— ${escHTML(o.hint)}</span>`:''}
+  </div>`).join('');
+  list.style.display = 'block';
+}
+
+function selectMentionMgr_(id){
+  const ta = document.getElementById('chat-input-mgr');
+  const list = document.getElementById('chat-mention-list-mgr');
+  if(!ta) return;
+  const cursor = ta.selectionStart;
+  const textBefore = ta.value.slice(0, cursor);
+  const textAfter = ta.value.slice(cursor);
+  const match = textBefore.match(/(^|\s)@(\w*)$/);
+  if(!match) return;
+  const option = (id === 'all')
+    ? {id:'all', label:'dukasateam'}
+    : (() => { const m = chatState.members.find(x=>String(x.id)===String(id)); return m ? {id:m.id, label:m.name.replace(/\s/g,'')} : null; })();
+  if(!option) return;
+  const insertion = `@${option.label} `;
+  const newBefore = textBefore.slice(0, match.index) + (match[1]||'') + insertion;
+  ta.value = newBefore + textAfter;
+  const newCursor = newBefore.length;
+  ta.setSelectionRange(newCursor, newCursor);
+  ta.focus();
+  if(!chatState.pendingMentions.includes(option.id)) chatState.pendingMentions.push(option.id);
+  if(list) list.style.display = 'none';
+}
+
+function onChatKeydownMgr_(e){
+  if(e.key === 'Enter' && !e.shiftKey){
+    e.preventDefault();
+    submitChatMessageMgr_();
+  }
+}
+
+async function submitChatMessageMgr_(){
+  const ta = document.getElementById('chat-input-mgr');
+  if(!ta) return;
+  const body = ta.value;
+  if(!body.trim()) return;
+  let chat = chatState.chats.find(c=>c.id===chatState.activeChatId);
+  if(!chat && String(chatState.activeChatId).startsWith('dm-')){
+    chat = await openDmWithStaffMgr_(chatState.activeChatId.slice(3));
+    chatState.chats.push(chat);
+  }
+  if(!chat) return;
+  const mentions = [...chatState.pendingMentions];
+  ta.value = '';
+  ta.disabled = true;
+  try {
+    await sendChatMessageMgr_(chat, body, mentions);
+    chatState.pendingMentions = [];
+    const messages = await fetchChatMessagesMgr_(chat.id);
+    chatState.messages = messages;
+    const box = document.getElementById('chat-messages-mgr');
+    if(box){ box.innerHTML = messages.map(chatMessageBubbleMgr_).join(''); scrollChatToBottomMgr_(); }
+    renderChatListMgr_();
+  } catch(e) {
+    alert('Could not send message: ' + e.message);
+  } finally {
+    ta.disabled = false;
+    ta.focus();
+  }
+}
+
+function startChatMessagesRealtimeMgr_(chatId){
+  stopChatMessagesRealtimeMgr_();
+  chatState.channel = supabaseClient
+    .channel('mgr-chat-messages-' + chatId)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${chatId}` }, async () => {
+      if(chatState.activeChatId !== chatId) return;
+      const messages = await fetchChatMessagesMgr_(chatId);
+      chatState.messages = messages;
+      const box = document.getElementById('chat-messages-mgr');
+      if(box){ box.innerHTML = messages.map(chatMessageBubbleMgr_).join(''); scrollChatToBottomMgr_(); }
+      markChatReadMgr_(chatId);
+      chatState.reads[chatId] = new Date().toISOString();
+      updateChatBadgeMgr_();
+      renderChatListMgr_();
+    })
+    .subscribe();
+}
+function stopChatMessagesRealtimeMgr_(){
+  if(chatState.channel){ supabaseClient.removeChannel(chatState.channel); chatState.channel = null; }
+}
+
+function startChatListRealtimeMgr_(){
+  supabaseClient
+    .channel('mgr-chat-list-live')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'chats' }, async () => {
+      await loadChatDataMgr_().catch(()=>{});
+      updateChatBadgeMgr_();
+      if(document.getElementById('pg-chat')?.classList.contains('active')) renderChatListMgr_();
+    })
+    .subscribe(status => console.log('Manager realtime chats:', status));
+}
+
+// ── NEW GROUP CHAT ──────────────────────────────────────────────
+function openNewGroupChatModal(){
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first));
+  document.getElementById('ngc-name').value = '';
+  document.getElementById('ngc-staff-list').innerHTML = staff.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="ngc-staff-cb" value="${s.id}" style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
+    </label>`).join('');
+  OM('m-new-group-chat');
+}
+
+async function createGroupChat(){
+  const name = document.getElementById('ngc-name').value.trim();
+  const memberIds = [...document.querySelectorAll('.ngc-staff-cb:checked')].map(cb => cb.value);
+  if(!name){ alert('Group name is required.'); return; }
+  if(!memberIds.length){ alert('Select at least one staff member.'); return; }
+
+  const chat = {
+    id: 'grp' + Date.now(),
+    name,
+    type: 'group',
+    member_ids: [MGR_ID, ...memberIds],
+    created_by: MGR_ID,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+
+  try {
+    const { error } = await supabaseClient.from('chats').insert(chat);
+    if(error) throw error;
+    CM('m-new-group-chat');
+    await loadChatDataMgr_();
+    updateChatBadgeMgr_();
+    await openChatThreadMgr(chat.id);
+  } catch(e) {
+    alert('Could not create group chat: ' + e.message);
+  }
+}
+
 // INIT
 updateTopbar();
 document.body.insertAdjacentHTML('beforeend',
@@ -8065,6 +8528,8 @@ DB.preload(ALL_KEYS, function(){
   }
   // Start 10-second ping-based sync
   startManagerSync();
+  loadChatDataMgr_().then(updateChatBadgeMgr_).catch(e=>console.warn('Initial chat load failed:', e.message));
+  startChatListRealtimeMgr_();
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-overlay.open').forEach(m=>m.classList.remove('open'));});
 

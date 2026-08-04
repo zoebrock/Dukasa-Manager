@@ -1364,6 +1364,31 @@ function isPublishedShift(shift){
   </div>
 </div>
 
+<div class="modal-overlay" id="m-staff-profile">
+  <div class="modal" style="max-width:640px">
+    <div class="mh"><h2 id="spm-title">Staff member</h2><button class="xbtn" onclick="CM('m-staff-profile')">×</button></div>
+    <div class="tabs" id="spm-tabs">
+      <div class="tab active" onclick="staffProfileTab('info',this)">Info</div>
+      <div class="tab" onclick="staffProfileTab('avail',this)">Availability</div>
+      <div class="tab" onclick="staffProfileTab('leave',this)">Leave</div>
+      <div class="tab" onclick="staffProfileTab('payroll',this)">Payroll</div>
+      <div class="tab" onclick="staffProfileTab('punctuality',this)">Punctuality</div>
+    </div>
+    <div style="max-height:56vh;overflow-y:auto;margin-top:10px">
+      <div id="spm-info"></div>
+      <div id="spm-avail" style="display:none"></div>
+      <div id="spm-leave" style="display:none"></div>
+      <div id="spm-payroll" style="display:none"></div>
+      <div id="spm-punctuality" style="display:none"></div>
+    </div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px">
+      <button class="btn btn-sm" onclick="sendWelcomeEmail(currentStaffProfileId)">Welcome email</button>
+      <button class="btn btn-sm" onclick="CM('m-staff-profile');editStaff(currentStaffProfileId)">Edit details</button>
+      <button class="btn" onclick="CM('m-staff-profile')">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="m-new-group-chat">
   <div class="modal">
     <div class="mh"><h2>New group chat</h2><button class="xbtn" onclick="CM('m-new-group-chat')">×</button></div>
@@ -4913,7 +4938,7 @@ function renderStaff(){
   const filtered=q?staff.filter(s=>`${s.first} ${s.last} ${s.role} ${s.email}`.toLowerCase().includes(q)):staff;
   document.getElementById('staff-list').innerHTML=filtered.map(emp=>`
     <div class="staff-card">
-      <div class="staff-card-header" onclick="toggleStaffCard('${emp.id}')">
+      <div class="staff-card-header" onclick="openStaffProfileModal('${emp.id}')">
         <div class="av" style="background:${emp.color}22;color:${emp.color};width:36px;height:36px;font-size:11px">${INI(emp)}</div>
         <div style="flex:1">
           <div style="font-weight:600;font-size:13px">${emp.first} ${emp.last}</div>
@@ -4925,27 +4950,43 @@ function renderStaff(){
           <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();removeStaff('${emp.id}')">Remove</button>
         </div>
       </div>
-      <div class="staff-card-body" id="scb-${emp.id}">
-        <div class="tabs">
-          <div class="tab active" onclick="staffCardTab('${emp.id}','info',this)">Info</div>
-          <div class="tab" onclick="staffCardTab('${emp.id}','avail',this)">Availability</div>
-          <div class="tab" onclick="staffCardTab('${emp.id}','leave',this)">Leave</div>
-          <div class="tab" onclick="staffCardTab('${emp.id}','payroll',this)">Payroll</div>
-          <div class="tab" onclick="staffCardTab('${emp.id}','punctuality',this)">Punctuality</div>
-        </div>
-        <div id="sct-${emp.id}-info">${staffInfoHTML(emp)}</div>
-        <div id="sct-${emp.id}-avail" style="display:none">${staffAvailHTML(emp)}</div>
-        <div id="sct-${emp.id}-leave" style="display:none">${staffLeaveHTML(emp.id)}</div>
-        <div id="sct-${emp.id}-payroll" style="display:none">${staffPayrollHTML(emp)}</div>
-        <div id="sct-${emp.id}-punctuality" style="display:none"></div>
-      </div>
     </div>`).join('');
 }
-function toggleStaffCard(id){const el=document.getElementById('scb-'+id);el.classList.toggle('open');}
-function staffCardTab(empId,tab,el){
-  el.closest('.tabs').querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');
-  ['info','avail','leave','payroll','punctuality'].forEach(t=>{const d=document.getElementById(`sct-${empId}-${t}`);if(d)d.style.display=t===tab?'block':'none';});
-  if(tab==='punctuality'){const d=document.getElementById(`sct-${empId}-punctuality`);if(d)d.innerHTML=staffPunctualityHTML(empId);}
+
+// ── Staff profile modal — centralised popup for Info/Availability/Leave/Payroll/Punctuality ──
+let currentStaffProfileId = null;
+
+function openStaffProfileModal(empId){
+  const emp = (DB.get('staff')||[]).find(s=>String(s.id)===String(empId));
+  if(!emp) return;
+  currentStaffProfileId = empId;
+  document.getElementById('spm-title').textContent = emp.first + ' ' + emp.last;
+  document.querySelectorAll('#spm-tabs .tab').forEach((t,i)=>t.classList.toggle('active', i===0));
+  ['info','avail','leave','payroll','punctuality'].forEach(t=>{
+    const d=document.getElementById('spm-'+t);
+    if(d){ d.innerHTML=''; d.style.display = t==='info' ? 'block' : 'none'; }
+  });
+  document.getElementById('spm-info').innerHTML = staffInfoHTML(emp);
+  OM('m-staff-profile');
+}
+
+function staffProfileTab(tab, el){
+  if(!currentStaffProfileId) return;
+  const emp = (DB.get('staff')||[]).find(s=>String(s.id)===String(currentStaffProfileId));
+  if(!emp) return;
+  document.querySelectorAll('#spm-tabs .tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  ['info','avail','leave','payroll','punctuality'].forEach(t=>{
+    const d=document.getElementById('spm-'+t);
+    if(d) d.style.display = t===tab ? 'block' : 'none';
+  });
+  const target = document.getElementById('spm-'+tab);
+  if(!target) return;
+  if(tab==='info') target.innerHTML = staffInfoHTML(emp);
+  if(tab==='avail') target.innerHTML = staffAvailHTML(emp);
+  if(tab==='leave') target.innerHTML = staffLeaveHTML(emp.id);
+  if(tab==='payroll') target.innerHTML = staffPayrollHTML(emp);
+  if(tab==='punctuality') target.innerHTML = staffPunctualityHTML(emp.id);
 }
 function staffInfoHTML(emp){
   const dow=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -5057,7 +5098,8 @@ function staffPunctualityHTML(empId){
     <div class="sc"><div class="sl">On time / early</div><div class="sv">${stats.onTimeCount+stats.earlyCount}</div></div>
     <div class="sc"><div class="sl">Late ratio</div><div class="sv">${pct}%</div></div>
   </div>
-  <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+  <div style="display:flex;justify-content:flex-end;gap:6px;margin-bottom:8px">
+    <button class="btn btn-sm" onclick="exportPunctualityCSV('${empId}')">Export CSV (last 50 shifts)</button>
     <button class="btn btn-sm btn-danger" ${stats.lateCount?'':'disabled'} onclick="openWarningModal('${empId}')">Issue late warning</button>
   </div>
   <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--rsm)">
@@ -5069,6 +5111,61 @@ function staffPunctualityHTML(empId){
     }).join(''):'<tr><td colspan="4" style="text-align:center;color:var(--t2);padding:10px">No clock-in history</td></tr>'}
     </tbody></table>
   </div>`;
+}
+
+// Last 50 rostered shifts (up to today), including ones with no clock-in on record —
+// unlike staffPunctualityStats (which only tracks shifts that HAVE a clock-in), the
+// export is an audit trail so gaps should show up explicitly, not be silently skipped.
+function staffPunctualityRecordsForExport(empId, limit){
+  const shifts=(DB.get('shifts')||[]).filter(s=>
+    String(s.empId)===String(empId) &&
+    !s.isOT &&
+    tsIsPublished(s) &&
+    s.entryType!=='leave' && s.entry_type!=='leave'
+  );
+  const ce=getClockEvents().filter(e=>String(e.empId)===String(empId)&&e.type==='clock-in');
+  const today=FD(new Date());
+  const settings=DB.get('settings')||{gracePeriod:5};
+  const grace=parseFloat(settings.gracePeriod)||0;
+
+  const pastShifts=shifts.filter(s=>s.date<=today).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,limit);
+
+  return pastShifts.map(s=>{
+    const ordStart=s.otOriginalStart||s.start;
+    const ci=ce.find(e=>e.date===s.date);
+    if(!ci) return {date:s.date, rosteredStart:ordStart, clockIn:'', diffMins:'', result:'No clock-in recorded'};
+    const diff=MD(ordStart,ci.time);
+    let result='On time';
+    if(diff>grace) result=`Late +${diff}m`;
+    else if(diff<0) result=`Early ${Math.abs(diff)}m`;
+    return {date:s.date, rosteredStart:ordStart, clockIn:ci.time, diffMins:diff, result};
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+function csvEscape_(v){
+  const s=String(v??'');
+  return /[",\r\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+
+function exportPunctualityCSV(empId){
+  const emp=(DB.get('staff')||[]).find(s=>String(s.id)===String(empId));
+  if(!emp) return;
+  const records=staffPunctualityRecordsForExport(empId, 50);
+  const dayName=ds=>new Date(ds+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short'});
+  const rows=[
+    ['Date','Day','Rostered start','Clocked in','Result'],
+    ...records.map(r=>[r.date, dayName(r.date), r.rosteredStart||'', r.clockIn||'', r.result])
+  ];
+  const csv=rows.map(row=>row.map(csvEscape_).join(',')).join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`${emp.first}_${emp.last}_punctuality_${FD(new Date())}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 let warnEmpId=null;
 function openWarningModal(empId){

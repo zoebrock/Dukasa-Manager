@@ -857,7 +857,7 @@ function isPublishedShift(shift){
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
         <div class="card"><h3 style="margin-bottom:10px">Today's roster</h3><div id="d-today-list"></div></div>
-        <div class="card"><h3 style="margin-bottom:10px">Recent clock events</h3><div id="d-clock-list"></div></div>
+        <div class="card"><h3 style="margin-bottom:10px">Today's clock events</h3><div id="d-clock-list" style="max-height:420px;overflow-y:auto"></div></div>
       </div>
 
     </div>
@@ -2513,14 +2513,28 @@ function renderDashboard(){
     return`<div style="display:flex;align-items:center;gap:7px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><div class="av" style="background:${emp?.color||'#eee'}22;color:${emp?.color||'#999'};width:24px;height:24px;font-size:8px">${emp?INI(emp):'?'}</div><div style="flex:1"><strong>${emp?emp.first+' '+emp.last:'?'}</strong><span style="color:var(--t2);margin-left:4px">${s.start}–${s.end}</span></div>${isSick?'<span class="badge br">Sick</span>':isLeave?'<span class="badge ba">Leave</span>':''}</div>`;
   }).join(''):'<p style="color:var(--t2);font-size:11px">No shifts today.</p>';
 
-  // Recent clock events
+  // Today's clock events — every event today, live, newest first. Clock-ins are
+  // flagged late against the staff member's rostered start with no grace period:
+  // any time after their rostered start counts as late.
   const dClockList=document.getElementById('d-clock-list');
-  if(dClockList) dClockList.innerHTML=(ce.filter(e=>e.date===today).slice(-8).reverse()).map(e=>{
-    const emp=staff.find(s=>s.id===e.empId);
-    const lbl={'clock-in':'In','clock-out':'Out','break-start':'Break ▶','break-end':'Break ◼'}[e.type]||e.type;
-    const cls={'clock-in':'bg','clock-out':'bp','break-start':'ba','break-end':'bb'}[e.type]||'bp';
-    return`<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><span class="badge ${cls}">${lbl}</span><span style="flex:1;font-weight:500">${emp?emp.first+' '+emp.last:'?'}</span><span style="color:var(--t2)">${e.time}</span>${e.photo?`<img class="img-thumb" src="${e.photo}" style="width:24px;height:24px" onclick="viewPhoto('${e.photo}','')">`:''}</div>`;
-  }).join('')||'<p style="color:var(--t2);font-size:11px">No clock events today.</p>';
+  if(dClockList){
+    const todaysEvents=[...ce.filter(e=>e.date===today)].sort((a,b)=>(b.ts||b.time||'').localeCompare(a.ts||a.time||''));
+    dClockList.innerHTML = todaysEvents.length ? todaysEvents.map(e=>{
+      const emp=staff.find(s=>s.id===e.empId);
+      const lbl={'clock-in':'In','clock-out':'Out','break-start':'Break ▶','break-end':'Break ◼'}[e.type]||e.type;
+      const cls={'clock-in':'bg','clock-out':'bp','break-start':'ba','break-end':'bb'}[e.type]||'bp';
+      let lateBadge='';
+      if(e.type==='clock-in'){
+        const shift=todayShifts.find(s=>String(s.empId)===String(e.empId));
+        if(shift){
+          const ordStart=shift.otOriginalStart||shift.start;
+          const diff=MD(ordStart,e.time);
+          if(diff!==null && diff>0) lateBadge=`<span class="badge br" title="Rostered start ${ordStart}">Late +${diff}m</span>`;
+        }
+      }
+      return`<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><span class="badge ${cls}">${lbl}</span><span style="flex:1;font-weight:500">${emp?emp.first+' '+emp.last:'?'}</span>${lateBadge}<span style="color:var(--t2)">${e.time}</span>${e.photo?`<img class="img-thumb" src="${e.photo}" style="width:24px;height:24px" onclick="viewPhoto('${e.photo}','')">`:''}</div>`;
+    }).join('') : '<p style="color:var(--t2);font-size:11px">No clock events today.</p>';
+  }
 }
 
 // Update all nav badges and dashboard counts from current cache
@@ -5057,8 +5071,7 @@ function staffPunctualityStats(empId){
   );
   const ce=getClockEvents().filter(e=>String(e.empId)===String(empId)&&e.type==='clock-in');
   const today=FD(new Date());
-  const settings=DB.get('settings')||{gracePeriod:5};
-  const grace=parseFloat(settings.gracePeriod)||0;
+  // Punctuality tracking has no grace period — any time after rostered start counts as late.
 
   const byDate=new Map();
   shifts.forEach(s=>{
@@ -5075,7 +5088,7 @@ function staffPunctualityStats(empId){
     const diff=MD(ordStart,ci.time);
     if(diff===null) return;
     let bucket='onTime';
-    if(diff>grace) bucket='late';
+    if(diff>0) bucket='late';
     else if(diff<0) bucket='early';
     records.push({date,rosteredStart:ordStart,clockIn:ci.time,diffMins:diff,bucket});
   });
@@ -5126,8 +5139,7 @@ function staffPunctualityRecordsForExport(empId, limit){
   );
   const ce=getClockEvents().filter(e=>String(e.empId)===String(empId)&&e.type==='clock-in');
   const today=FD(new Date());
-  const settings=DB.get('settings')||{gracePeriod:5};
-  const grace=parseFloat(settings.gracePeriod)||0;
+  // Punctuality tracking has no grace period — any time after rostered start counts as late.
 
   const pastShifts=shifts.filter(s=>s.date<=today).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,limit);
 
@@ -5137,7 +5149,7 @@ function staffPunctualityRecordsForExport(empId, limit){
     if(!ci) return {date:s.date, rosteredStart:ordStart, clockIn:'', diffMins:'', result:'No clock-in recorded'};
     const diff=MD(ordStart,ci.time);
     let result='On time';
-    if(diff>grace) result=`Late +${diff}m`;
+    if(diff>0) result=`Late +${diff}m`;
     else if(diff<0) result=`Early ${Math.abs(diff)}m`;
     return {date:s.date, rosteredStart:ordStart, clockIn:ci.time, diffMins:diff, result};
   }).sort((a,b)=>a.date.localeCompare(b.date));
@@ -5183,8 +5195,7 @@ function staffPunctualityWindow(empId, offset, limit){
   );
   const ce=getClockEvents().filter(e=>String(e.empId)===String(empId)&&e.type==='clock-in');
   const today=FD(new Date());
-  const settings=DB.get('settings')||{gracePeriod:5};
-  const grace=parseFloat(settings.gracePeriod)||0;
+  // Punctuality tracking has no grace period — any time after rostered start counts as late.
 
   const pastShiftsSorted=shifts.filter(s=>s.date<=today).sort((a,b)=>b.date.localeCompare(a.date));
   const windowShifts=pastShiftsSorted.slice(offset, offset+limit);
@@ -5195,7 +5206,7 @@ function staffPunctualityWindow(empId, offset, limit){
     if(!ci) return {date:s.date, rosteredStart:ordStart, clockIn:null, diffMins:null, bucket:'noClockIn'};
     const diff=MD(ordStart,ci.time);
     let bucket='onTime';
-    if(diff>grace) bucket='late';
+    if(diff>0) bucket='late';
     else if(diff<0) bucket='early';
     return {date:s.date, rosteredStart:ordStart, clockIn:ci.time, diffMins:diff, bucket};
   }).sort((a,b)=>a.date.localeCompare(b.date));

@@ -928,6 +928,7 @@ function isPublishedShift(shift){
         <h2>Staff</h2>
         <div style="display:flex;gap:6px">
           <input type="text" id="staff-search" placeholder="Search staff..." style="width:160px" oninput="renderStaff()">
+          <button class="btn btn-sm" onclick="exportAllStaffPunctualityCSV()">Export punctuality report</button>
           <button class="btn btn-primary btn-sm" onclick="openAddStaffModal()">+ Add staff</button>
         </div>
       </div>
@@ -5166,6 +5167,127 @@ function exportPunctualityCSV(empId){
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+// A "window" of a staff member's rostered shift history, counting back from today.
+// offset=0 -> most recent `limit` shifts; offset=limit -> the `limit` shifts before that.
+// Late ratio is computed only over shifts that have a clock-in on record (matching
+// staffPunctualityStats' definition) — shifts with no clock-in are reported but
+// excluded from the ratio, and null is returned when there's nothing to rate.
+function staffPunctualityWindow(empId, offset, limit){
+  const shifts=(DB.get('shifts')||[]).filter(s=>
+    String(s.empId)===String(empId) &&
+    !s.isOT &&
+    tsIsPublished(s) &&
+    s.entryType!=='leave' && s.entry_type!=='leave'
+  );
+  const ce=getClockEvents().filter(e=>String(e.empId)===String(empId)&&e.type==='clock-in');
+  const today=FD(new Date());
+  const settings=DB.get('settings')||{gracePeriod:5};
+  const grace=parseFloat(settings.gracePeriod)||0;
+
+  const pastShiftsSorted=shifts.filter(s=>s.date<=today).sort((a,b)=>b.date.localeCompare(a.date));
+  const windowShifts=pastShiftsSorted.slice(offset, offset+limit);
+
+  const records=windowShifts.map(s=>{
+    const ordStart=s.otOriginalStart||s.start;
+    const ci=ce.find(e=>e.date===s.date);
+    if(!ci) return {date:s.date, rosteredStart:ordStart, clockIn:null, diffMins:null, bucket:'noClockIn'};
+    const diff=MD(ordStart,ci.time);
+    let bucket='onTime';
+    if(diff>grace) bucket='late';
+    else if(diff<0) bucket='early';
+    return {date:s.date, rosteredStart:ordStart, clockIn:ci.time, diffMins:diff, bucket};
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+
+  const clocked=records.filter(r=>r.bucket!=='noClockIn');
+  const lateCount=clocked.filter(r=>r.bucket==='late').length;
+  const onTimeCount=clocked.filter(r=>r.bucket==='onTime').length;
+  const earlyCount=clocked.filter(r=>r.bucket==='early').length;
+  const noClockInCount=records.length-clocked.length;
+  const lateRatio=clocked.length?lateCount/clocked.length:null;
+
+  return {records, shiftsInWindow:windowShifts.length, lateCount, onTimeCount, earlyCount, noClockInCount, lateRatio};
+}
+
+function exportAllStaffPunctualityCSV(){
+  if(typeof XLSX === 'undefined'){ alert('Excel export library has not loaded. Please refresh and try again.'); return; }
+
+  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const today=FD(new Date());
+  const dayName=ds=>new Date(ds+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short'});
+
+  const rows=staff.map(emp=>{
+    const current=staffPunctualityWindow(emp.id, 0, 50);
+    const previous=staffPunctualityWindow(emp.id, 50, 50);
+
+    let trend='Not enough data';
+    if(current.lateRatio!==null && previous.lateRatio!==null){
+      const diff=current.lateRatio-previous.lateRatio;
+      trend=Math.abs(diff)<0.0001 ? 'No change' : (diff<0 ? 'Improved' : 'Declined');
+    } else if(current.lateRatio!==null && previous.lateRatio===null){
+      trend='No prior data to compare';
+    }
+
+    return {emp, current, previous, trend};
+  });
+
+  // Rank by current late ratio, worst first. Staff with nothing to rate sort last.
+  rows.sort((a,b)=>{
+    if(a.current.lateRatio===null && b.current.lateRatio===null) return 0;
+    if(a.current.lateRatio===null) return 1;
+    if(b.current.lateRatio===null) return -1;
+    return b.current.lateRatio-a.current.lateRatio;
+  });
+
+  const summaryAoa=[
+    [`Dukasa Punctuality Report — ${today}`,'','','','','','','','',''],
+    [`Ranked by late ratio over each staff member's most recent 50 rostered shifts, compared to their previous 50.`,'','','','','','','','',''],
+    ['','','','','','','','','',''],
+    ['Rank','Name','Role','Shifts rated (current 50)','Late','On time','Early','No clock-in','Late ratio (current)','Late ratio (previous)','Trend']
+  ];
+
+  rows.forEach((row,i)=>{
+    summaryAoa.push([
+      i+1,
+      `${row.emp.first} ${row.emp.last}`,
+      row.emp.role||'',
+      row.current.shiftsInWindow,
+      row.current.lateCount,
+      row.current.onTimeCount,
+      row.current.earlyCount,
+      row.current.noClockInCount,
+      row.current.lateRatio!==null ? (row.current.lateRatio*100).toFixed(1)+'%' : '—',
+      row.previous.lateRatio!==null ? (row.previous.lateRatio*100).toFixed(1)+'%' : '—',
+      row.trend
+    ]);
+  });
+
+  const summarySheet=XLSX.utils.aoa_to_sheet(summaryAoa);
+  summarySheet['!merges']=[{s:{r:0,c:0},e:{r:0,c:10}},{s:{r:1,c:0},e:{r:1,c:10}}];
+  summarySheet['!cols']=[{wch:6},{wch:20},{wch:20},{wch:16},{wch:7},{wch:8},{wch:7},{wch:11},{wch:18},{wch:18},{wch:20}];
+
+  const detailAoa=[['Employee','Role','Date','Day','Rostered start','Clocked in','Result']];
+  const detailMerges=[];
+
+  rows.forEach(({emp,current})=>{
+    const startRow=detailAoa.length;
+    detailAoa.push([`${emp.first} ${emp.last}`, emp.role||'', '', '', '', '', '']);
+    detailMerges.push({s:{r:startRow,c:0},e:{r:startRow,c:1}});
+    current.records.forEach(r=>{
+      const label=r.bucket==='late'?`Late +${r.diffMins}m`:r.bucket==='early'?`Early ${Math.abs(r.diffMins)}m`:r.bucket==='noClockIn'?'No clock-in recorded':'On time';
+      detailAoa.push(['', '', r.date, dayName(r.date), r.rosteredStart||'', r.clockIn||'', label]);
+    });
+  });
+
+  const detailSheet=XLSX.utils.aoa_to_sheet(detailAoa);
+  detailSheet['!merges']=detailMerges;
+  detailSheet['!cols']=[{wch:18},{wch:18},{wch:12},{wch:8},{wch:14},{wch:12},{wch:20}];
+
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, summarySheet, 'Summary');
+  XLSX.utils.book_append_sheet(wb, detailSheet, 'Detail (last 50 shifts)');
+  XLSX.writeFile(wb, `Dukasa Punctuality Report_${today}.xlsx`);
 }
 let warnEmpId=null;
 function openWarningModal(empId){

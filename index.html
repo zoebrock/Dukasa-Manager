@@ -2519,6 +2519,7 @@ function renderDashboard(){
   const dClockList=document.getElementById('d-clock-list');
   if(dClockList){
     const todaysEvents=[...ce.filter(e=>e.date===today)].sort((a,b)=>(b.ts||b.time||'').localeCompare(a.ts||a.time||''));
+    const breakInfoCache={};
     dClockList.innerHTML = todaysEvents.length ? todaysEvents.map(e=>{
       const emp=staff.find(s=>s.id===e.empId);
       const lbl={'clock-in':'In','clock-out':'Out','break-start':'Break ▶','break-end':'Break ◼'}[e.type]||e.type;
@@ -2532,7 +2533,20 @@ function renderDashboard(){
           if(diff!==null && diff>0) lateBadge=`<span class="badge br" title="Rostered start ${ordStart}">Late +${diff}m</span>`;
         }
       }
-      return`<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><span class="badge ${cls}">${lbl}</span><span style="flex:1;font-weight:500">${emp?emp.first+' '+emp.last:'?'}</span>${lateBadge}<span style="color:var(--t2)">${e.time}</span>${e.photo?`<img class="img-thumb" src="${e.photo}" style="width:24px;height:24px" onclick="viewPhoto('${e.photo}','')">`:''}</div>`;
+      let breakBadge='';
+      if(e.type==='break-end'){
+        // Breaks can be taken in multiple blocks — flag against the running total
+        // for the day (up to and including this break), not just this one session.
+        const shift=todayShifts.find(s=>String(s.empId)===String(e.empId));
+        const allotted=(shift&&shift.breakMin)||30;
+        if(!breakInfoCache[e.empId]) breakInfoCache[e.empId]=breakSessionsForDay(e.empId, today, ce);
+        const session=breakInfoCache[e.empId].sessions.find(sess=>sess.endEvent.id===e.id) ||
+          breakInfoCache[e.empId].sessions.find(sess=>sess.endEvent.time===e.time);
+        if(session && session.cumulativeMinAfter>allotted){
+          breakBadge=`<span class="badge br" title="Allotted ${allotted}m/day">Over break limit — ${session.cumulativeMinAfter}m used</span>`;
+        }
+      }
+      return`<div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><span class="badge ${cls}">${lbl}</span><span style="flex:1;font-weight:500">${emp?emp.first+' '+emp.last:'?'}</span>${lateBadge}${breakBadge}<span style="color:var(--t2)">${e.time}</span>${e.photo?`<img class="img-thumb" src="${e.photo}" style="width:24px;height:24px" onclick="viewPhoto('${e.photo}','')">`:''}</div>`;
     }).join('') : '<p style="color:var(--t2);font-size:11px">No clock events today.</p>';
   }
 }
@@ -3679,6 +3693,29 @@ function calcBreakMin(start, end) {
   return 30;                    // 30 paid
 }
 function paidBreakMin() { return 30; } // only 30 min is ever paid
+
+// Breaks can be taken in multiple blocks across a shift, not just one pair of
+// break-start/break-end events — this chronologically pairs up every session
+// for a staff member on a given day and sums them, tracking the running total
+// after each completed session so an over-limit flag can be attached to the
+// specific break-end that pushed them over.
+function breakSessionsForDay(empId, date, ce){
+  const events=(ce||getClockEvents())
+    .filter(e=>String(e.empId)===String(empId)&&e.date===date&&(e.type==='break-start'||e.type==='break-end'))
+    .sort((a,b)=>(a.ts||a.time||'').localeCompare(b.ts||b.time||''));
+  const sessions=[];
+  let pending=null,cumulative=0;
+  events.forEach(e=>{
+    if(e.type==='break-start'){ pending=e; }
+    else if(e.type==='break-end' && pending){
+      const mins=Math.max(0, MD(pending.time,e.time)||0);
+      cumulative+=mins;
+      sessions.push({startEvent:pending, endEvent:e, mins, cumulativeMinAfter:cumulative});
+      pending=null;
+    }
+  });
+  return {sessions, totalMin:cumulative, onBreak:!!pending};
+}
 
 function autoCalcBreak(forceOverride) {
   const start = document.getElementById('sh-start')?.value;
@@ -6993,8 +7030,7 @@ if (s.entryType === 'leave' || s.entry_type === 'leave') {
     const sHrs=SH(s);
     const ci=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-in');
     const co=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-out');
-    const bs=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='break-start');
-    const be=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='break-end');
+    const breakInfo=breakSessionsForDay(s.empId,ds,ce);
     const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===ds);
     const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=ds&&l.to>=ds);
     const approvedOT=otReqs.find(o=>o.empId===s.empId&&o.date===ds);
@@ -7030,12 +7066,16 @@ if (s.entryType === 'leave' || s.entry_type === 'leave') {
       else{autoRoundedOut=co.time;}
       bActMin=s.breakMin;actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
     } else if(ci&&co){
-      bActMin=(bs&&be)?MD(bs.time,be.time):s.breakMin;
+      bActMin=breakInfo.totalMin>0?breakInfo.totalMin:s.breakMin;
       actualHrs=Math.max(0,(MD(ci.time,co.time)-bActMin)/60);
       const ciDiff=MD(s.start,ci.time);const coDiff=MD(s.end,co.time);
       if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});}
       else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → capped to ${s.start}`});}
       if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Late out +${coDiff}m → capped to ${s.end}`});}
+      const allottedBreak=s.breakMin||30;
+      if(breakInfo.totalMin>allottedBreak){
+        flags.push({type:'break-over',msg:`Over break limit — used ${breakInfo.totalMin}m of ${allottedBreak}m allotted${breakInfo.sessions.length>1?` across ${breakInfo.sessions.length} breaks`:''}`});
+      }
       status='Completed';
     }
 
@@ -7086,7 +7126,7 @@ rows.push({
   otHrs,
   status,
   rowCls,
-  ci, co, bs, be, bActMin,
+  ci, co, breakInfo, bActMin,
   flags,
   isSick,
   isLeave,
@@ -7202,21 +7242,8 @@ function renderTS(){
     );
 
     if(!isSick && !isLeave && ci && co){
-      const bs = ce.find(e =>
-        String(e.empId) === String(s.empId) &&
-        e.date === s.date &&
-        e.type === 'break-start'
-      );
-
-      const be = ce.find(e =>
-        String(e.empId) === String(s.empId) &&
-        e.date === s.date &&
-        e.type === 'break-end'
-      );
-
-      const bMin = (bs && be)
-        ? MD(bs.time, be.time)
-        : s.breakMin;
+      const dayBreakInfo = breakSessionsForDay(s.empId, s.date, ce);
+      const bMin = dayBreakInfo.totalMin > 0 ? dayBreakInfo.totalMin : s.breakMin;
 
       const aHrs = Math.max(0, (MD(ci.time, co.time) - bMin) / 60);
 
@@ -7318,6 +7345,7 @@ function renderTSDayBody(ds){
       if(f.type==='sick') return`<span style="background:var(--rl);color:var(--rd);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">${f.msg}</span>`;
       if(f.type==='leave') return`<span style="background:var(--al);color:var(--ad);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">${f.msg}</span>`;
       if(f.type==='ot') return`<span class="ot-badge-ts">${f.msg}</span>`;
+      if(f.type==='break-over') return`<span style="background:var(--rl);color:var(--rd);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">⚠ ${f.msg}</span>`;
       return`<span class="early-badge">${f.msg}</span>`;
     }).join(' '); // OT already included in flags array — don't append again
     // Custom start/end inputs

@@ -571,6 +571,22 @@ body.shift-popup-open{overflow:hidden}
 
   /* Smooth momentum scrolling for horizontally-scrollable panels */
   .roster-wrap,.ts-wrap,#chat-list,#staff-list{-webkit-overflow-scrolling:touch}
+
+  /* Topbar: the date, "Staff Portal" and "Dukasa Clock" links don't fit
+     next to the hamburger + page title + Zoe badge + sync status on a
+     phone-width screen and were wrapping/overflowing off the edge.
+     Keep only the essentials in the topbar; the two links move into
+     the sidebar drawer instead (see #sidebar-mobile-links below). */
+  .topbar{gap:4px}
+  #topbar-date{display:none}
+  .topbar > div:last-child > a.btn-ghost{display:none}
+  #mgr-user-badge{max-width:70px;overflow:hidden;text-overflow:ellipsis}
+  #sidebar-mobile-links{display:block}
+
+  /* Roster: the 7-day grid has no room to breathe on a phone screen —
+     show one day at a time as a scrollable list instead. */
+  .roster-wrap{display:none}
+  #roster-mobile{display:block!important}
 }
 
 @media(max-width:480px){
@@ -841,6 +857,16 @@ function isPublishedShift(shift){
         Settings
       </button>
     </nav>
+    <div id="sidebar-mobile-links" style="display:none;padding:6px 8px;border-top:1px solid var(--border)">
+      <a href="https://dukasa-portal.vercel.app" target="_blank" class="ni" style="text-decoration:none">
+        <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        Staff Portal
+      </a>
+      <a href="https://script.google.com/a/macros/dukasa.com.au/s/AKfycbw5PFfwBTMpR7cVJUtoqMzn7DHc5E9CUgqZ-6N2x4-J4_6InOJGVbRQMbPoDlf89uXp5w/exec?page=dukasa-clock" target="_blank" class="ni" style="text-decoration:none">
+        <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Dukasa Clock
+      </a>
+    </div>
     <div style="padding:12px 12px 14px;border-top:1px solid var(--border)">
       <div id="sidebar-signed-in" style="font-size:11px;color:var(--t3);margin-bottom:7px;padding:0 4px">Signed in as Manager</div>
       <button class="btn btn-sm btn-ghost" style="width:100%;justify-content:center;color:var(--t2)" onclick="logout()">
@@ -980,6 +1006,10 @@ function isPublishedShift(shift){
         <span class="chip chip-unavail" style="cursor:default">Unavailable</span>
       </div>
       <div class="roster-wrap"><table class="rt"><thead id="r-head"></thead><tbody id="r-body"></tbody></table></div>
+      <div id="roster-mobile" style="display:none">
+        <div class="tabs" id="r-mobile-day-tabs" style="margin-bottom:0"></div>
+        <div id="r-mobile-list" style="border:1px solid var(--border);border-top:none;border-radius:0 0 var(--r) var(--r);background:var(--surface);box-shadow:var(--shadow-xs)"></div>
+      </div>
     </div>
 
     <!-- OT TRACKER -->
@@ -2889,77 +2919,10 @@ function renderRoster(){
   document.getElementById('r-body').innerHTML=staff.map(emp=>{
     const cells=days.map(d=>{
       const ds=FD(d);const dname=dayName(d);
-      const dayShifts=shifts.filter(s=>s.empId===emp.id&&s.date===ds&&!s.isOT);
-      const onLeave=leaveReqs.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
-      const isSick=sickDays.find(sk=>sk.empId===emp.id&&sk.date===ds);
-      
-      const hasOT = otReqs.filter(o =>
-  o.empId === emp.id &&
-  o.date === ds &&
-  o.approved === true
-);
-      const avail=normaliseAvailabilityEntry(emp.availability&&emp.availability[dname]);
       const isToday=ds===today;
-
-      let content='';
-
-      // Shift chips — clicking opens the action popup instead of shift detail
-dayShifts.forEach(s=>{
-const isPartialLeave = s.entryType === 'leave' || s.entry_type === 'leave';
-const leaveType = s.leaveType || s.leave_type || s.status || 'Leave';
-
-const hasApprovedOT =
-  (s.otAnnotations && s.otAnnotations.length) ||
-  hasOT.length;
-
-const chipClass =
-  isPartialLeave ? 'chip-partial-leave' :
-  hasApprovedOT ? 'chip-ot' :
-  s.published ? 'chip-shift' : 'chip-draft';
-
-const chipText = isPartialLeave
-  ? `Partial leave - ${leaveType}: ${s.start}–${s.end}`
-  : hasApprovedOT
-    ? `${s.start}–${s.end} · OT added`
-    : `${s.start}–${s.end}`;
-  const pubDot=s.published?'':'';
-  const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
-  const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
-  const availabilityConflict=!isShiftWithinAvailability(emp,dname,s.start,s.end);
-  const availabilityBadge=availabilityConflict?`<span class="chip chip-unavail chip-small" style="margin-top:2px">Outside availability</span>`:'';
-
-  content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="${isPartialLeave ? `openPartialLeaveModal('${s.empId}','${s.date}','${s.id}')` : `openShiftPopup(event,'${s.id}')`}">
-
-    <span class="chip ${chipClass}" style="width:100%;justify-content:center;gap:5px" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">
-
-      ${bulkShiftMode ? `
-        <input
-          type="checkbox"
-          ${selectedShiftIds.has(s.id) ? 'checked' : ''}
-          onclick="event.stopPropagation();toggleShiftSelected('${s.id}', this.checked)"
-          style="width:12px;height:12px">
-      ` : ''}
-
-      ${chipText}
-    </span>
-
-    ${otBadge}
-    ${availabilityBadge}
-  </div>`;
-});
-
-      // Status chips — clickable for sick/leave management
-      if(isSick) content+=`<span class="chip chip-sick chip-small" style="cursor:pointer" onclick="openSickPopup(event,'${emp.id}','${ds}')" title="Click to manage sick day">Sick</span>`;
-      else if(onLeave&&!dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">${onLeave.type.replace(' Leave','').replace(' leave','')}</span>`;
-      else if(onLeave&&dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer;font-size:8px" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">Leave</span>`;
-      if(showAvail&&!dayShifts.length&&!onLeave&&!isSick){ if(avail.mode==='unavailable') content+=`<span class="chip chip-unavail chip-small">Unavailable</span>`; else if(avail.mode==='times') content+=`<span class="chip chip-partial-leave chip-small">Avail ${avail.start}–${avail.end}</span>`; }
-
-      // Only show + button if no shifts exist for this day
-      const hasShifts=dayShifts.length>0;
-      const addBtn=!hasShifts?`<button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift">+</button>`:'';
-
       const cellStyle=isToday?'background:rgba(83,74,183,.04)':'';
-      return `<td style="${cellStyle}"><div class="sc-cell">${content}${addBtn}</div></td>`;
+      const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs);
+      return `<td style="${cellStyle}"><div class="sc-cell">${content}</div></td>`;
     }).join('');
 
     return `<tr>
@@ -2973,6 +2936,121 @@ const chipText = isPartialLeave
       ${cells}
     </tr>`;
   }).join('');
+
+  renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today);
+}
+
+// Builds the shift/leave/sick/availability chips + add-button for one
+// employee on one day. Shared by the desktop week grid and the mobile
+// single-day list so the two views can never drift out of sync.
+function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs){
+  const dayShifts=shifts.filter(s=>s.empId===emp.id&&s.date===ds&&!s.isOT);
+  const onLeave=leaveReqs.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
+  const isSick=sickDays.find(sk=>sk.empId===emp.id&&sk.date===ds);
+
+  const hasOT = otReqs.filter(o =>
+    o.empId === emp.id &&
+    o.date === ds &&
+    o.approved === true
+  );
+  const avail=normaliseAvailabilityEntry(emp.availability&&emp.availability[dname]);
+
+  let content='';
+
+  // Shift chips — clicking opens the action popup instead of shift detail
+  dayShifts.forEach(s=>{
+    const isPartialLeave = s.entryType === 'leave' || s.entry_type === 'leave';
+    const leaveType = s.leaveType || s.leave_type || s.status || 'Leave';
+
+    const hasApprovedOT =
+      (s.otAnnotations && s.otAnnotations.length) ||
+      hasOT.length;
+
+    const chipClass =
+      isPartialLeave ? 'chip-partial-leave' :
+      hasApprovedOT ? 'chip-ot' :
+      s.published ? 'chip-shift' : 'chip-draft';
+
+    const chipText = isPartialLeave
+      ? `Partial leave - ${leaveType}: ${s.start}–${s.end}`
+      : hasApprovedOT
+        ? `${s.start}–${s.end} · OT added`
+        : `${s.start}–${s.end}`;
+    const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
+    const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
+    const availabilityConflict=!isShiftWithinAvailability(emp,dname,s.start,s.end);
+    const availabilityBadge=availabilityConflict?`<span class="chip chip-unavail chip-small" style="margin-top:2px">Outside availability</span>`:'';
+
+    content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="${isPartialLeave ? `openPartialLeaveModal('${s.empId}','${s.date}','${s.id}')` : `openShiftPopup(event,'${s.id}')`}">
+
+      <span class="chip ${chipClass}" style="width:100%;justify-content:center;gap:5px" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">
+
+        ${bulkShiftMode ? `
+          <input
+            type="checkbox"
+            ${selectedShiftIds.has(s.id) ? 'checked' : ''}
+            onclick="event.stopPropagation();toggleShiftSelected('${s.id}', this.checked)"
+            style="width:12px;height:12px">
+        ` : ''}
+
+        ${chipText}
+      </span>
+
+      ${otBadge}
+      ${availabilityBadge}
+    </div>`;
+  });
+
+  // Status chips — clickable for sick/leave management
+  if(isSick) content+=`<span class="chip chip-sick chip-small" style="cursor:pointer" onclick="openSickPopup(event,'${emp.id}','${ds}')" title="Click to manage sick day">Sick</span>`;
+  else if(onLeave&&!dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">${onLeave.type.replace(' Leave','').replace(' leave','')}</span>`;
+  else if(onLeave&&dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer;font-size:8px" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">Leave</span>`;
+  if(showAvail&&!dayShifts.length&&!onLeave&&!isSick){ if(avail.mode==='unavailable') content+=`<span class="chip chip-unavail chip-small">Unavailable</span>`; else if(avail.mode==='times') content+=`<span class="chip chip-partial-leave chip-small">Avail ${avail.start}–${avail.end}</span>`; }
+
+  // Only show + button if no shifts exist for this day
+  const hasShifts=dayShifts.length>0;
+  const addBtn=!hasShifts?`<button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift">+</button>`:'';
+
+  return content+addBtn;
+}
+
+// ── Mobile roster: one day at a time, staff as a scrollable list ──
+let mobileRosterDayIndex=null;
+function renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today){
+  const tabsEl=document.getElementById('r-mobile-day-tabs');
+  const listEl=document.getElementById('r-mobile-list');
+  if(!tabsEl||!listEl) return;
+
+  if(mobileRosterDayIndex===null){
+    const idx=days.findIndex(d=>FD(d)===today);
+    mobileRosterDayIndex=idx>=0?idx:0;
+  }
+
+  const dowShort=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  tabsEl.innerHTML=days.map((d,i)=>{
+    const ds=FD(d);
+    const isToday=ds===today;
+    return `<button class="ts-day-tab${i===mobileRosterDayIndex?' active':''}" onclick="selectRosterMobileDay(${i})">${dowShort[i]} ${d.getDate()}${isToday?' •':''}</button>`;
+  }).join('');
+
+  const d=days[mobileRosterDayIndex];
+  const ds=FD(d);const dname=dayName(d);
+
+  listEl.innerHTML=staff.map(emp=>{
+    const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs);
+    return `<div style="display:flex;align-items:flex-start;gap:10px;padding:12px;border-bottom:1px solid var(--border)">
+      <div class="av" style="background:${emp.color}22;color:${emp.color};flex-shrink:0">${INI(emp)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px">${emp.first} ${emp.last}</div>
+        <span class="badge ${ROLE_BADGE[emp.role]||'bp'}" style="font-size:8px;margin-top:2px;display:inline-block">${emp.role}</span>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center">${content}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+function selectRosterMobileDay(i){
+  mobileRosterDayIndex=i;
+  renderRoster();
 }
 
 // ── SHIFT ACTION POPUP ──────────────────────────────────────────

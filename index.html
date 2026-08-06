@@ -5030,11 +5030,54 @@ function staffAvailHTML(emp){
   <div style="font-size:11px;color:var(--t2);margin-top:8px">Notes: ${emp.availNotes||'None'}</div>`;
 }
 function toggleStaffAvail(){ /* Detailed availability is edited through the staff modal. */ }
+// This app doesn't track leave entitlement/accrual, so "how much leave" means
+// how much has actually been taken — approved Annual Leave days and recorded
+// Sick Leave days, both for the current calendar year and all-time.
+function staffLeaveSummary(empId){
+  const now=new Date();
+  const yearStart=FD(new Date(now.getFullYear(),0,1));
+  const yearEnd=FD(new Date(now.getFullYear(),11,31));
+  const leaveReqs=(DB.get('leaveRequests')||[]).filter(l=>String(l.empId)===String(empId)&&l.status==='approved');
+  const sickDays=(DB.get('sickDays')||[]).filter(s=>String(s.empId)===String(empId));
+
+  function daysForType(type, from, to){
+    return leaveReqs.filter(l=>l.type===type&&l.requestKind!=='partial_day'&&l.from&&l.to&&!(l.to<from||l.from>to))
+      .reduce((sum,l)=>{
+        const f=l.from<from?from:l.from;
+        const t=l.to>to?to:l.to;
+        return sum+dateRangeInclusive(f,t).length;
+      },0);
+  }
+  function partialCountForType(type, from, to){
+    return leaveReqs.filter(l=>l.type===type&&l.requestKind==='partial_day'&&l.from>=from&&l.from<=to).length;
+  }
+
+  return {
+    year: now.getFullYear(),
+    alThisYear: daysForType('Annual Leave', yearStart, yearEnd),
+    alPartialThisYear: partialCountForType('Annual Leave', yearStart, yearEnd),
+    alAllTime: daysForType('Annual Leave', '0000-01-01', '9999-12-31'),
+    alPartialAllTime: partialCountForType('Annual Leave', '0000-01-01', '9999-12-31'),
+    slThisYear: sickDays.filter(s=>s.date>=yearStart&&s.date<=yearEnd).length,
+    slAllTime: sickDays.length
+  };
+}
+
+function staffLeaveSummaryHTML(empId){
+  const s=staffLeaveSummary(empId);
+  return `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px">
+    <div class="sc"><div class="sl">Annual leave — ${s.year}</div><div class="sv">${s.alThisYear}d${s.alPartialThisYear?' +'+s.alPartialThisYear+' partial':''}</div></div>
+    <div class="sc"><div class="sl">Annual leave — all time</div><div class="sv">${s.alAllTime}d${s.alPartialAllTime?' +'+s.alPartialAllTime+' partial':''}</div></div>
+    <div class="sc"><div class="sl">Sick leave — ${s.year}</div><div class="sv">${s.slThisYear}d</div></div>
+    <div class="sc"><div class="sl">Sick leave — all time</div><div class="sv">${s.slAllTime}d</div></div>
+  </div>`;
+}
+
 function staffLeaveHTML(empId){
   const leaveReqs=(DB.get('leaveRequests')||[]).filter(l=>l.empId===empId).sort((a,b)=>b.submitted?.localeCompare(a.submitted||'')||0);
   const sickDays=(DB.get('sickDays')||[]).filter(s=>s.empId===empId);
   const emp=(DB.get('staff')||[]).find(s=>s.id===empId);
-  let html='';
+  let html=staffLeaveSummaryHTML(empId);
   const pending=leaveReqs.filter(l=>l.status==='pending');
   const archived=leaveReqs.filter(l=>l.status!=='pending');
   if(pending.length){html+='<div style="font-size:10px;font-weight:600;color:var(--t2);margin-bottom:5px">PENDING — ACTION REQUIRED</div>';html+=pending.map(lr=>`<div class="lcard"><div class="lcard-h"><div><strong>${lr.type}</strong> · ${FDS(lr.from)}–${FDS(lr.to)}</div><div style="display:flex;gap:4px"><span class="badge ba">Pending</span><button class="btn btn-sm" onclick="openEditLeaveModal('${lr.id}')">Edit</button></div></div>${lr.notes?`<div style="font-size:11px;color:var(--t2)">${lr.notes}</div>`:''}<button class="btn btn-sm btn-primary" style="margin-top:5px" onclick="openLeaveReview('${lr.id}')">Review</button></div>`).join('');}
@@ -6141,6 +6184,7 @@ function openLeaveReview(id){
     }
   }
   document.getElementById('lr-body').innerHTML=`
+    ${emp?staffLeaveSummaryHTML(emp.id):''}
     <div style="background:var(--s2);border-radius:var(--rsm);padding:11px;margin-bottom:10px;font-size:12px">
       <div style="margin-bottom:4px"><strong>${emp?emp.first+' '+emp.last:'?'}</strong> — ${lr.type}</div>
       <div style="color:var(--t2)">${FDS(lr.from)} – ${FDS(lr.to)}</div>

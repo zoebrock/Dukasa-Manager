@@ -539,6 +539,23 @@ body.shift-popup-open{overflow:hidden}
   #chat-list{max-height:260px!important}
   #chat-thread{min-height:60vh}
 
+  /* Roster grid & timesheet: these stay wide and scroll horizontally
+     rather than reflowing (there's genuinely a week/fortnight of data
+     per row), but the name/employee column must stay pinned in view
+     while the days scroll past, or you lose track of whose row it is. */
+  .rt th:first-child,.rt td:first-child{
+    position:sticky;left:0;z-index:5;background:var(--surface);
+    box-shadow:1px 0 0 var(--border);width:104px;
+  }
+  .rt th:first-child{background:var(--s2)}
+  .rt th,.rt td{min-width:64px}
+
+  .ts-tbl th:first-child,.ts-tbl td:first-child{
+    position:sticky;left:0;z-index:5;background:var(--surface);
+    box-shadow:1px 0 0 var(--border);
+  }
+  .ts-tbl th:first-child{background:var(--s2)}
+
   /* Modals: near-full-width with edge-to-edge sheets instead of a
      centered desktop-sized card that leaves almost no room to type. */
   .modal-overlay{padding:8px}

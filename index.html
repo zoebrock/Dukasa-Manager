@@ -1097,6 +1097,9 @@ function isPublishedShift(shift){
       <div id="ts-summary" style="display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-bottom:14px"></div>
       <!-- Day tabs -->
       <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0;overflow-x:auto" id="ts-day-tabs"></div>
+      <div style="display:flex;justify-content:flex-end;padding:8px 0" id="ts-approve-all-wrap">
+        <button class="btn btn-sm btn-success" onclick="approveAllForDay()">✓ Approve all for this day</button>
+      </div>
       <!-- Per-day table -->
       <div class="ts-wrap" style="margin-top:0">
         <table class="ts-tbl">
@@ -2321,7 +2324,9 @@ const DB = {
     } catch (error) {
       console.error('Supabase save failed:', k, error);
       _setSyncIndicator('error');
-      alert('Could not save ' + k + ': ' + error.message);
+      const msg = 'Could not save ' + k + ': ' + error.message;
+      if(typeof toast === 'function') toast(msg, 'error', 6000);
+      else alert(msg);
       return { ok: false, error };
     } finally {
       endKeySave(k);
@@ -6789,6 +6794,17 @@ function popTSWeeks(){
 }
 function popTSEmps(){} // no longer needed — removed emp filter
 
+// IMPORTANT: this is called once per employee per day on every timesheet
+// render (on-screen, CSV export, punctuality report) — purely to compute
+// what the "auto" hours currently are. It must never hit the network: an
+// earlier version called DB.set() here unconditionally, which re-uploaded
+// the ENTIRE customHours table on every single row of every render (tens
+// to hundreds of full-table upserts per page load), overwhelming Supabase
+// and surfacing as "Failed to fetch" errors that blocked the whole page.
+// Auto-computed rows only need to exist locally; they're persisted for
+// real once a manager actually edits or approves them (updateCustomTime/
+// updateCustomHrs/toggleApproved/saveEditHours already call DB.set
+// themselves at that point).
 function getOrCreateCustom(empId,date,actualHrs,autoRoundedIn,autoRoundedOut,effectiveHrs){
   let ch=DB.get('customHours')||[];
   let existing=ch.find(x=>x.empId===empId&&x.date===date);
@@ -6802,7 +6818,8 @@ function getOrCreateCustom(empId,date,actualHrs,autoRoundedIn,autoRoundedOut,eff
       autoRounded:!!(autoRoundedIn||autoRoundedOut),
       manualEntry:false,
       approved:false};
-    ch.push(existing);DB.set('customHours',ch);
+    ch.push(existing);
+    CACHE['rx3_customHours']=ch;
   } else {
     // Backfill flags for older records
     if(existing.manualEntry===undefined) existing.manualEntry=false;
@@ -6813,7 +6830,7 @@ function getOrCreateCustom(empId,date,actualHrs,autoRoundedIn,autoRoundedOut,eff
       existing.customHrs=computedAutoHrs;
     }
     const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
-    if(idx>=0){ch[idx]=existing;DB.set('customHours',ch);}
+    if(idx>=0){ch[idx]=existing;CACHE['rx3_customHours']=ch;}
   }
   return existing;
 }
@@ -6880,7 +6897,46 @@ async function toggleApproved(empId,date,btn){
     await DB.set('customHours',ch);
     updateApprovedHrsDisplay(empId,date);
   }catch(e){
-    alert('Could not save approval: '+e.message);
+    toast('Could not save approval: '+e.message,'error');
+  }
+}
+
+// One click to approve every staff member's current hours for the day
+// being viewed — the main ask behind "seamless approve" was having to
+// click the checkbox once per person; this does the whole day at once,
+// using whatever hours are currently showing (auto or manually edited).
+async function approveAllForDay(){
+  const sv=document.getElementById('ts-week')?.value;
+  if(!sv) return;
+  const wkS=new Date(sv);
+  const d=new Date(wkS); d.setDate(d.getDate()+tsDayIndex);
+  const ds=FD(d);
+
+  const rows=buildTSRows(ds);
+  if(!rows.length){ toast('No shifts to approve on this day.','info'); return; }
+
+  let ch=DB.get('customHours')||[];
+  const now=new Date().toISOString();
+  let count=0;
+
+  rows.forEach(r=>{
+    const idx=ch.findIndex(x=>x.empId===r.s.empId&&x.date===ds);
+    if(idx<0||ch[idx].approved) return;
+    ch[idx].customHrs=ROUND30(ch[idx].customHrs||ch[idx].autoHrs||0);
+    ch[idx].approved=true;
+    ch[idx].approvedHrs=ch[idx].customHrs;
+    ch[idx].approvedAt=now;
+    count++;
+  });
+
+  if(!count){ toast('Everyone on this day is already approved.','info'); return; }
+
+  try{
+    await DB.set('customHours',ch);
+    renderTSDayBody(ds);
+    toast(`Approved hours for ${count} staff member${count>1?'s':''}.`,'success');
+  }catch(e){
+    toast('Could not approve: '+e.message,'error');
   }
 }
 
@@ -6942,7 +6998,7 @@ async function saveEditHours(){
     CM('m-edit-hours');
     if(typeof renderTS==='function') renderTS();
   }catch(e){
-    alert('Could not save hours: '+e.message);
+    toast('Could not save hours: '+e.message,'error');
   }
 }
 

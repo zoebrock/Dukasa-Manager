@@ -1176,6 +1176,9 @@ function isPublishedShift(shift){
         <div class="fr"><label>Your mobile number</label><input type="tel" id="set-mgr-phone" placeholder="e.g. 0412 345 678">
           <span style="font-size:11px;color:var(--t3);display:block;margin-top:4px">You'll get an SMS to this number whenever a staff member sends a new chat message (Dukasa Crew, a group chat, or a direct message to you).</span>
         </div>
+        <div class="fr"><label>Your Staff Portal email</label><input type="email" id="set-mgr-email" placeholder="e.g. operations@dukasa.com.au">
+          <span style="font-size:11px;color:var(--t3);display:block;margin-top:4px">If you also log into the Staff Portal with this email, your admin chats (direct messages and any groups you're in) will appear there too, so you can reply from either app.</span>
+        </div>
       </div>
       <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
     </div>
@@ -8177,6 +8180,7 @@ function loadSettings(){
   if(s.gracePeriod!==undefined) document.getElementById('set-grace').value=s.gracePeriod;
   if(s.dispensaryName) document.getElementById('set-name').value=s.dispensaryName;
   if(s.managerNotifyPhone) document.getElementById('set-mgr-phone').value=s.managerNotifyPhone;
+  if(s.managerEmail) document.getElementById('set-mgr-email').value=s.managerEmail;
 }
 function togSet(k){
   const s=DB.get('settings')||{};
@@ -8193,7 +8197,8 @@ function saveSettings(){
     otMultiplier:parseFloat(document.getElementById('set-otm').value),
     gracePeriod:parseFloat(document.getElementById('set-grace').value),
     dispensaryName:document.getElementById('set-name').value,
-    managerNotifyPhone:document.getElementById('set-mgr-phone').value.trim()
+    managerNotifyPhone:document.getElementById('set-mgr-phone').value.trim(),
+    managerEmail:document.getElementById('set-mgr-email').value.trim()
   };
   DB.set('settings',s);
   alert('Settings saved!');
@@ -8740,6 +8745,19 @@ function chatIconMgr_(c){
   if(c.type === 'dm') return '💬';
   return '🗂️';
 }
+// Real staff initials (not a generic icon) for a DM, so you can tell who
+// you're talking to at a glance — in the chat list AND while a thread is
+// open, where it previously disappeared entirely.
+function chatAvatarHTMLMgr_(c,size){
+  size=size||32;
+  if(c.type === 'dm'){
+    const staff = DB.get('staff') || [];
+    const otherId = (c.member_ids||[]).find(id=>id!==MGR_ID);
+    const s = staff.find(x=>String(x.id)===String(otherId));
+    if(s) return `<div class="av" style="width:${size}px;height:${size}px;background:${s.color}22;color:${s.color};font-size:${Math.round(size*0.32)}px;flex-shrink:0">${INI(s)}</div>`;
+  }
+  return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:var(--pl);display:flex;align-items:center;justify-content:center;font-size:${Math.round(size*0.5)}px;flex-shrink:0">${chatIconMgr_(c)}</div>`;
+}
 
 async function renderChat(){
   await loadChatDataMgr_().catch(e=>console.warn('loadChatDataMgr_ failed:', e.message));
@@ -8788,13 +8806,13 @@ function renderChatListMgr_(){
 
 function chatRowHTMLMgr_(c){
   const unread = chatIsUnreadMgr_(c);
-  return `<div class="chat-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);${chatState.activeChatId===c.id?'background:var(--s2)':''}" onclick="openChatThreadMgr('${c.id}')">
-    <div style="width:32px;height:32px;border-radius:50%;background:var(--pl);display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0">${chatIconMgr_(c)}</div>
+  return `<div class="chat-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);${chatState.activeChatId===c.id?'background:var(--s2)':unread?'background:#F4F2FF':''}" onclick="openChatThreadMgr('${c.id}')">
+    ${chatAvatarHTMLMgr_(c,32)}
     <div style="flex:1;min-width:0">
-      <div style="font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(chatDisplayNameMgr_(c))}</div>
-      <div style="font-size:11px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(c.last_message_preview || 'No messages yet.')}</div>
+      <div style="font-size:12.5px;font-weight:${unread?'800':'600'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(chatDisplayNameMgr_(c))}</div>
+      <div style="font-size:11px;color:${unread?'var(--purple)':'var(--t3)'};font-weight:${unread?'700':'400'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(c.last_message_preview || 'No messages yet.')}</div>
     </div>
-    ${unread?'<span style="width:8px;height:8px;border-radius:50%;background:var(--purple);flex-shrink:0"></span>':''}
+    ${unread?'<span style="font-size:9px;font-weight:800;letter-spacing:.04em;color:#fff;background:var(--red);border-radius:10px;padding:2px 7px;flex-shrink:0">NEW</span>':''}
   </div>`;
 }
 
@@ -8832,10 +8850,13 @@ async function renderChatThreadMgr_(){
 
   el.innerHTML = `
     <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px">
-      <div>
-        <div style="font-weight:700;font-size:13.5px">${escHTML(chatDisplayNameMgr_(chat))}</div>
-        ${chat.type==='group' ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${(chat.member_ids||[]).filter(id=>id!==MGR_ID).length} member${(chat.member_ids||[]).filter(id=>id!==MGR_ID).length===1?'':'s'}</div>` : ''}
-        ${chat.type==='crew' ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${(DB.get('staff')||[]).length} member${(DB.get('staff')||[]).length===1?'':'s'} · everyone, automatically</div>` : ''}
+      <div style="display:flex;align-items:center;gap:10px;min-width:0">
+        ${chatAvatarHTMLMgr_(chat,32)}
+        <div style="min-width:0">
+          <div style="font-weight:700;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHTML(chatDisplayNameMgr_(chat))}</div>
+          ${chat.type==='group' ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${(chat.member_ids||[]).filter(id=>id!==MGR_ID).length} member${(chat.member_ids||[]).filter(id=>id!==MGR_ID).length===1?'':'s'}</div>` : ''}
+          ${chat.type==='crew' ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${(DB.get('staff')||[]).length} member${(DB.get('staff')||[]).length===1?'':'s'} · everyone, automatically</div>` : ''}
+        </div>
       </div>
       ${(chat.type==='group'||chat.type==='crew') ? `<button class="btn btn-sm" onclick="openGroupMembersModal('${chat.id}')">👥 Members</button>` : ''}
     </div>

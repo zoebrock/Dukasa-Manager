@@ -594,6 +594,16 @@ body.shift-popup-open{overflow:hidden}
   .ph h2{font-size:16px}
   .modal{padding:16px 14px}
 }
+
+/* ── Group chat icon picker ──────────────────────────────────────── */
+.icon-pick-btn{
+  width:36px;height:36px;font-size:17px;border-radius:8px;
+  border:1.5px solid var(--border);background:var(--surface);
+  cursor:pointer;display:flex;align-items:center;justify-content:center;
+  transition:border-color var(--ease),background var(--ease);
+}
+.icon-pick-btn:hover{border-color:var(--border2)}
+.icon-pick-btn.selected{border-color:var(--purple);background:var(--pl)}
 </style>
   
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
@@ -1513,6 +1523,10 @@ function isPublishedShift(shift){
     <div class="mh"><h2>New group chat</h2><button class="xbtn" onclick="CM('m-new-group-chat')">×</button></div>
     <div class="fr"><label>Group name</label><input type="text" id="ngc-name" placeholder="e.g. Dispensary Team, Weekend Crew"></div>
     <div class="fr">
+      <label>Icon</label>
+      <div id="ngc-icon-picker" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+    </div>
+    <div class="fr">
       <label>Members</label>
       <div id="ngc-staff-list" style="padding:6px 2px;max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--rsm)"></div>
     </div>
@@ -1526,14 +1540,21 @@ function isPublishedShift(shift){
 <div class="modal-overlay" id="m-group-members">
   <div class="modal">
     <div class="mh"><h2 id="gm-title">Group members</h2><button class="xbtn" onclick="CM('m-group-members')">×</button></div>
+    <div class="fr" id="gm-icon-row">
+      <label>Icon</label>
+      <div id="gm-icon-picker" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+    </div>
     <div class="fr">
       <label>Members</label>
       <div id="gm-staff-list" style="padding:6px 2px;max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--rsm)"></div>
       <div id="gm-hint" style="font-size:11px;color:var(--t3);margin-top:6px">Check who should be in this group, then save.</div>
     </div>
-    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
-      <button class="btn" onclick="CM('m-group-members')">Cancel</button>
-      <button class="btn btn-primary" id="gm-save-btn" onclick="saveGroupMembers()">Save members</button>
+    <div style="display:flex;gap:6px;justify-content:space-between;margin-top:12px">
+      <button class="btn btn-danger btn-sm" id="gm-delete-btn" onclick="deleteGroupChat()">Delete group</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn" onclick="CM('m-group-members')">Cancel</button>
+        <button class="btn btn-primary" id="gm-save-btn" onclick="saveGroupMembers()">Save changes</button>
+      </div>
     </div>
   </div>
 </div>
@@ -8743,7 +8764,7 @@ function chatDisplayNameMgr_(c){
 function chatIconMgr_(c){
   if(c.type === 'crew') return '👥';
   if(c.type === 'dm') return '💬';
-  return '🗂️';
+  return c.icon || '🗂️';
 }
 // Real staff initials (not a generic icon) for a DM, so you can tell who
 // you're talking to at a glance — in the chat list AND while a thread is
@@ -9000,9 +9021,32 @@ function startChatListRealtimeMgr_(){
 }
 
 // ── NEW GROUP CHAT ──────────────────────────────────────────────
+// A distinct icon per group so they don't all look the same in the list.
+const GROUP_CHAT_ICONS = ['🗂️','📦','💊','🧪','🩺','📋','🔔','⭐','🎯','🛠️','📣','🚚'];
+
+function renderIconPicker_(containerId, selected, selectFn){
+  const el = document.getElementById(containerId);
+  if(!el) return;
+  el.innerHTML = GROUP_CHAT_ICONS.map(ic => `<button type="button" class="icon-pick-btn${ic===selected?' selected':''}" onclick="${selectFn}('${ic}',this)" title="${ic}">${ic}</button>`).join('');
+}
+
+let ngcSelectedIcon = GROUP_CHAT_ICONS[0];
+function selectNgcIcon(ic, btn){
+  ngcSelectedIcon = ic;
+  btn.closest('#ngc-icon-picker').querySelectorAll('.icon-pick-btn').forEach(b=>b.classList.toggle('selected', b===btn));
+}
+
+let gmSelectedIcon = GROUP_CHAT_ICONS[0];
+function selectGmIcon(ic, btn){
+  gmSelectedIcon = ic;
+  btn.closest('#gm-icon-picker').querySelectorAll('.icon-pick-btn').forEach(b=>b.classList.toggle('selected', b===btn));
+}
+
 function openNewGroupChatModal(){
   const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first));
   document.getElementById('ngc-name').value = '';
+  ngcSelectedIcon = GROUP_CHAT_ICONS[0];
+  renderIconPicker_('ngc-icon-picker', ngcSelectedIcon, 'selectNgcIcon');
   document.getElementById('ngc-staff-list').innerHTML = staff.map(s => `
     <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
       <input type="checkbox" class="ngc-staff-cb" value="${s.id}" style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
@@ -9022,6 +9066,7 @@ async function createGroupChat(){
     id: 'grp' + Date.now(),
     name,
     type: 'group',
+    icon: ngcSelectedIcon,
     member_ids: [MGR_ID, ...memberIds],
     created_by: MGR_ID,
     created_at: new Date().toISOString(),
@@ -9053,6 +9098,13 @@ function openGroupMembersModal(chatId){
 
   document.getElementById('gm-title').textContent = 'Members — ' + chatDisplayNameMgr_(chat);
 
+  const iconRow = document.getElementById('gm-icon-row');
+  if(iconRow) iconRow.style.display = isCrew ? 'none' : '';
+  if(!isCrew){
+    gmSelectedIcon = chat.icon || GROUP_CHAT_ICONS[0];
+    renderIconPicker_('gm-icon-picker', gmSelectedIcon, 'selectGmIcon');
+  }
+
   if(isCrew){
     document.getElementById('gm-staff-list').innerHTML = staff.map(s => `
       <div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px">
@@ -9072,6 +9124,8 @@ function openGroupMembersModal(chatId){
   if(hint) hint.textContent = isCrew ? 'Dukasa Crew automatically includes every staff member — nothing to edit here.' : 'Check who should be in this group, then save.';
   const saveBtn = document.getElementById('gm-save-btn');
   if(saveBtn) saveBtn.style.display = isCrew ? 'none' : '';
+  const deleteBtn = document.getElementById('gm-delete-btn');
+  if(deleteBtn) deleteBtn.style.display = isCrew ? 'none' : '';
 
   OM('m-group-members');
 }
@@ -9084,6 +9138,7 @@ async function saveGroupMembers(){
   try {
     const { error } = await supabaseClient.from('chats').update({
       member_ids: [MGR_ID, ...memberIds],
+      icon: gmSelectedIcon,
       updated_at: new Date().toISOString()
     }).eq('id', editingGroupChatId);
     if(error) throw error;
@@ -9094,6 +9149,32 @@ async function saveGroupMembers(){
     if(chatState.activeChatId === editingGroupChatId) await renderChatThreadMgr_();
   } catch(e) {
     alert('Could not update members: ' + e.message);
+  } finally {
+    editingGroupChatId = null;
+  }
+}
+
+async function deleteGroupChat(){
+  if(!editingGroupChatId) return;
+  const chat = chatState.chats.find(c => c.id === editingGroupChatId);
+  const name = chat ? chatDisplayNameMgr_(chat) : 'this group';
+  if(!confirm(`Delete "${name}"? This permanently deletes the group and all its messages for everyone. This cannot be undone.`)) return;
+
+  const chatId = editingGroupChatId;
+  try {
+    await supabaseClient.from('chat_messages').delete().eq('chat_id', chatId);
+    await supabaseClient.from('chat_reads').delete().eq('chat_id', chatId);
+    const { error } = await supabaseClient.from('chats').delete().eq('id', chatId);
+    if(error) throw error;
+
+    CM('m-group-members');
+    if(chatState.activeChatId === chatId) chatState.activeChatId = null;
+    await loadChatDataMgr_();
+    updateChatBadgeMgr_();
+    renderChatListMgr_();
+    document.getElementById('chat-thread').innerHTML = '<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:13px">Select a chat to get started.</div>';
+  } catch(e) {
+    alert('Could not delete group: ' + e.message);
   } finally {
     editingGroupChatId = null;
   }

@@ -88,6 +88,13 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
   transition:background var(--ease),border-color var(--ease),box-shadow var(--ease),transform .08s ease;
   box-shadow:var(--shadow-xs);
 }
+.sort-select{
+  display:inline-flex;width:auto;min-width:0;
+  padding:7px 28px 7px 12px;border-radius:var(--rsm);
+  border:1px solid var(--border2);background-color:var(--surface);
+  color:var(--text);font-size:12.5px;font-weight:500;
+  box-shadow:var(--shadow-xs);cursor:pointer;
+}
 .btn:hover{background:var(--s2);border-color:var(--border2)}
 .btn:active{transform:scale(.98)}
 .btn:focus-visible{outline:2px solid var(--purple);outline-offset:2px}
@@ -995,7 +1002,7 @@ function isPublishedShift(shift){
             Availability
           </label>
           <div style="width:1px;height:18px;background:var(--border2);margin:0 2px"></div>
-          <select onchange="setRosterSort(this.value)" style="font-size:12px;padding:6px 8px;border-radius:var(--rsm);border:1px solid var(--border)">
+          <select class="sort-select" onchange="setRosterSort(this.value)">
             <option value="name">Sort: Name</option>
             <option value="role">Sort: Role</option>
           </select>
@@ -1054,7 +1061,7 @@ function isPublishedShift(shift){
         <h2>Staff</h2>
         <div style="display:flex;gap:6px">
           <input type="text" id="staff-search" placeholder="Search staff..." style="width:160px" oninput="renderStaff()">
-          <select onchange="setStaffSort(this.value)" style="font-size:12px;padding:6px 8px;border-radius:var(--rsm);border:1px solid var(--border)">
+          <select class="sort-select" onchange="setStaffSort(this.value)">
             <option value="name">Sort: Name</option>
             <option value="role">Sort: Role</option>
           </select>
@@ -1187,7 +1194,7 @@ function isPublishedShift(shift){
       </div>
       <div class="settings-s">
         <h3>Roles / positions</h3>
-        <div id="roles-list" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+        <div id="roles-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
         <div style="display:flex;gap:6px">
           <input type="text" id="new-role-input" placeholder="e.g. Senior Pharmacist" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addRole();}">
           <button class="btn btn-primary btn-sm" onclick="addRole()">Add role</button>
@@ -1700,6 +1707,23 @@ const ROLE_BADGE={'Dispensary Technician':'bp','Pharmacist':'bt','Logistics Tech
 function getRoles(){
   const s = DB.get('settings') || {};
   return (Array.isArray(s.roles) && s.roles.length) ? s.roles : ROLES;
+}
+
+// Role badge colours: settings.roleColors[role] = '#hex', editable in Settings.
+// Falls back to the original fixed palette (ROLE_BADGE classes) for roles
+// that haven't been given a custom colour.
+function getRoleColors(){
+  const s = DB.get('settings') || {};
+  return (s.roleColors && typeof s.roleColors === 'object') ? s.roleColors : {};
+}
+
+function roleBadgeHTML(role, extraStyle){
+  if(!role) return `<span class="badge bp" style="${extraStyle||''}">—</span>`;
+  const custom = getRoleColors()[role];
+  if(custom){
+    return `<span class="badge" style="background:${custom}22;color:${custom};${extraStyle||''}">${escHTML(role)}</span>`;
+  }
+  return `<span class="badge ${ROLE_BADGE[role]||'bp'}" style="${extraStyle||''}">${escHTML(role)}</span>`;
 }
 
 function sortByNameOrRole(list, mode){
@@ -3032,7 +3056,7 @@ function renderRoster(){
         <div class="av" style="background:${emp.color}22;color:${emp.color}">${INI(emp)}</div>
         <div>
           <div style="font-weight:500;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:85px">${emp.first} ${emp.last}</div>
-          <span class="badge ${ROLE_BADGE[emp.role]||'bp'}" style="font-size:8px">${emp.role}</span>
+          ${roleBadgeHTML(emp.role, "font-size:8px")}
         </div>
       </div></td>
       ${cells}
@@ -3144,7 +3168,7 @@ function renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today
       <div class="av" style="background:${emp.color}22;color:${emp.color};flex-shrink:0">${INI(emp)}</div>
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:13px">${emp.first} ${emp.last}</div>
-        <span class="badge ${ROLE_BADGE[emp.role]||'bp'}" style="font-size:8px;margin-top:2px;display:inline-block">${emp.role}</span>
+        ${roleBadgeHTML(emp.role, "font-size:8px;margin-top:2px;display:inline-block")}
         <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center">${content}</div>
       </div>
     </div>`;
@@ -4022,7 +4046,7 @@ function openShiftDetail(id){
   const emp=(DB.get('staff')||[]).find(e=>e.id===s.empId);
   document.getElementById('sd-title').textContent=`${emp?emp.first+' '+emp.last:'?'} — ${FDS(s.date)}`;
   document.getElementById('sd-body').innerHTML=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-bottom:10px">
-    <div><span style="color:var(--t2)">Role:</span> <span class="badge ${ROLE_BADGE[s.role]||'bp'}">${s.role||'—'}</span></div>
+    <div><span style="color:var(--t2)">Role:</span> ${roleBadgeHTML(s.role)}</div>
     <div><span style="color:var(--t2)">Hours:</span> <strong>${SH(s).toFixed(1)}</strong></div>
     <div><span style="color:var(--t2)">Start:</span> <strong>${s.start}</strong></div>
     <div><span style="color:var(--t2)">End:</span> <strong>${s.end}</strong></div>
@@ -5345,7 +5369,7 @@ function renderStaff(){
         <div class="av" style="background:${emp.color}22;color:${emp.color};width:36px;height:36px;font-size:11px">${INI(emp)}</div>
         <div style="flex:1">
           <div style="font-weight:600;font-size:13px">${emp.first} ${emp.last}</div>
-          <div style="font-size:10px;color:var(--t2)"><span class="badge ${ROLE_BADGE[emp.role]||'bp'}" style="font-size:8px">${emp.role}</span> · ${emp.email}</div>
+          <div style="font-size:10px;color:var(--t2)">${roleBadgeHTML(emp.role, "font-size:8px")} · ${emp.email}</div>
         </div>
         <div style="display:flex;gap:5px">
           <button class="btn btn-sm" onclick="event.stopPropagation();sendWelcomeEmail('${emp.id}')" title="Send welcome email to staff member" style="background:var(--tl);color:var(--teal);border-color:#9de0ca">Welcome</button>
@@ -5399,8 +5423,8 @@ function staffInfoHTML(emp){
     ?`${emp.contractStart}–${emp.contractEnd} · ${emp.contractBreak||30}m break · ${dailyHrs.toFixed(1)}h/day · ${contractedDays.join(', ')||'no days set'} (${emp.contractedHrsPerWeek||0}h/wk)`
     :'Not configured';
   return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-top:4px">
-  <div><span style="color:var(--t2)">Primary role:</span> <span class="badge ${ROLE_BADGE[emp.role]||'bp'}">${emp.role||'—'}</span></div>
-  <div><span style="color:var(--t2)">Secondary role:</span> ${emp.secondaryRole?`<span class="badge ${ROLE_BADGE[emp.secondaryRole]||'bp'}">${emp.secondaryRole}</span>`:'—'}</div>
+  <div><span style="color:var(--t2)">Primary role:</span> ${roleBadgeHTML(emp.role)}</div>
+  <div><span style="color:var(--t2)">Secondary role:</span> ${emp.secondaryRole?roleBadgeHTML(emp.secondaryRole):'—'}</div>
   <div><span style="color:var(--t2)">Email:</span> ${emp.email||'—'}</div>
   <div><span style="color:var(--t2)">Phone:</span> ${emp.phone||'—'}</div>
   <div><span style="color:var(--t2)">DOB:</span> ${emp.dob?new Date(emp.dob+'T00:00:00').toLocaleDateString('en-AU'):'—'}</div>
@@ -7885,7 +7909,7 @@ function renderTSDayBody(ds){
     return`<tr class="${r.rowCls}${r.otHrs>0?' tr-ot':''}">
       <td style="min-width:130px">
         <div style="font-weight:600;font-size:13px">${r.emp?r.emp.first+' '+r.emp.last:'?'}</div>
-        <span class="badge ${ROLE_BADGE[r.s.role]||'bp'}" style="font-size:9px;margin-top:3px;display:inline-block">${r.s.role||'—'}</span>
+        ${roleBadgeHTML(r.s.role, "font-size:9px;margin-top:3px;display:inline-block")}
       </td>
       <td><span class="badge ${SB[r.status]||'bp'}">${r.status}</span></td>
       <td style="white-space:nowrap">${flagsHTML||'—'}</td>
@@ -8551,13 +8575,35 @@ function loadSettings(){
   renderRolesSettings();
 }
 
+// Rough hex equivalents of the original fixed badge classes, used only as the
+// starting swatch value for a role that hasn't been given a custom colour yet.
+const ROLE_BADGE_DEFAULT_HEX = {bp:'#3C3489',bt:'#085041',ba:'#633806',br:'#791F1F',bg:'#27500A',bb:'#0C447C',bc:'#712B13',bpk:'#72243E'};
+
+function roleSwatchHex(role){
+  const custom = getRoleColors()[role];
+  if(custom) return custom;
+  return ROLE_BADGE_DEFAULT_HEX[ROLE_BADGE[role]] || '#534AB7';
+}
+
 function renderRolesSettings(){
   const el = document.getElementById('roles-list');
   if(!el) return;
   const roles = getRoles();
-  el.innerHTML = roles.map(r => `<span class="badge ${ROLE_BADGE[r]||'bp'}" style="display:inline-flex;align-items:center;gap:5px;padding:4px 8px 4px 10px">${escHTML(r)}
-    <button onclick="removeRole('${r.replace(/'/g,"\\'")}')" title="Remove this role" style="border:none;background:none;color:inherit;cursor:pointer;font-weight:700;padding:0 2px;font-size:12px">×</button>
-  </span>`).join('') || '<span style="font-size:12px;color:var(--t3)">No roles yet.</span>';
+  el.innerHTML = roles.map(r => {
+    const safe = escHTML(r).replace(/"/g, '&quot;');
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rsm);background:var(--surface)">
+      <input type="color" value="${roleSwatchHex(r)}" onchange="setRoleColor('${r.replace(/'/g,"\\'")}', this.value)" title="Badge colour for ${safe}" style="width:32px;height:32px;padding:0;border-radius:6px;border:1px solid var(--border2);cursor:pointer;flex-shrink:0">
+      <div style="flex:1">${roleBadgeHTML(r)}</div>
+      <button onclick="removeRole('${r.replace(/'/g,"\\'")}')" title="Remove this role" class="btn btn-sm btn-ghost" style="color:var(--rd);padding:4px 9px">Remove</button>
+    </div>`;
+  }).join('') || '<span style="font-size:12px;color:var(--t3)">No roles yet.</span>';
+}
+
+async function setRoleColor(role, hex){
+  const s = { ...(DB.get('settings') || {}), roleColors: { ...getRoleColors(), [role]: hex } };
+  const result = await DB.set('settings', s);
+  if(!result.ok){ alert('Could not save that colour. Please try again.'); return; }
+  renderRolesSettings();
 }
 
 async function addRole(){

@@ -995,6 +995,10 @@ function isPublishedShift(shift){
             Availability
           </label>
           <div style="width:1px;height:18px;background:var(--border2);margin:0 2px"></div>
+          <select onchange="setRosterSort(this.value)" style="font-size:12px;padding:6px 8px;border-radius:var(--rsm);border:1px solid var(--border)">
+            <option value="name">Sort: Name</option>
+            <option value="role">Sort: Role</option>
+          </select>
           <button class="btn btn-sm" onclick="openTemplateModal()">Templates</button>
           <button class="btn btn-sm" onclick="toggleBulkShiftMode()">Select</button>
           <button class="btn btn-sm btn-ghost" style="color:var(--rd)" onclick="deleteDuplicateShiftRows()">Clean dupes</button>
@@ -1050,6 +1054,10 @@ function isPublishedShift(shift){
         <h2>Staff</h2>
         <div style="display:flex;gap:6px">
           <input type="text" id="staff-search" placeholder="Search staff..." style="width:160px" oninput="renderStaff()">
+          <select onchange="setStaffSort(this.value)" style="font-size:12px;padding:6px 8px;border-radius:var(--rsm);border:1px solid var(--border)">
+            <option value="name">Sort: Name</option>
+            <option value="role">Sort: Role</option>
+          </select>
           <button class="btn btn-sm" onclick="exportAllStaffPunctualityCSV()">Export punctuality report</button>
           <button class="btn btn-primary btn-sm" onclick="openAddStaffModal()">+ Add staff</button>
         </div>
@@ -1176,6 +1184,15 @@ function isPublishedShift(shift){
       <div class="settings-s">
         <h3>Clock tolerance</h3>
         <div class="nr"><span>Grace period (no reason required)</span><div style="display:flex;align-items:center;gap:6px"><input type="number" id="set-grace" style="width:50px" value="5" min="0" max="30"><span style="font-size:10px;color:var(--t2)">min</span></div></div>
+      </div>
+      <div class="settings-s">
+        <h3>Roles / positions</h3>
+        <div id="roles-list" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+        <div style="display:flex;gap:6px">
+          <input type="text" id="new-role-input" placeholder="e.g. Senior Pharmacist" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addRole();}">
+          <button class="btn btn-primary btn-sm" onclick="addRole()">Add role</button>
+        </div>
+        <span style="font-size:11px;color:var(--t3);display:block;margin-top:6px">These are the roles available when adding/editing staff (as a primary or secondary role) and on announcements.</span>
       </div>
       <div class="settings-s">
         <h3>Dispensary</h3>
@@ -1318,17 +1335,15 @@ function isPublishedShift(shift){
       </div>
       <div class="fg">
         <div class="fr"><label>Date of birth</label><input type="date" id="sf-dob"></div>
-        <div class="fr"><label>Role / position</label>
-          <select id="sf-role">
-            <option>Dispensary Technician</option><option>Pharmacist</option>
-            <option>Logistics Technician</option><option>Lab Technician</option>
-            <option>Admin Assistant</option><option>Stock Technician</option>
-          </select>
+        <div class="fr"><label>Primary role / position</label>
+          <select id="sf-role"></select>
         </div>
       </div>
       <div class="fg">
+        <div class="fr"><label>Secondary role <span style="font-weight:400;color:var(--t3)">(optional — for cross-cover)</span></label>
+          <select id="sf-role2"><option value="">None</option></select>
+        </div>
         <div class="fr"><label>4-digit PIN</label><input type="number" id="sf-pin" maxlength="4" placeholder="1234"></div>
-
       </div>
       <div class="fg">
 
@@ -1679,6 +1694,25 @@ function isPublishedShift(shift){
 // ===== DATA =====
 const ROLES=['Dispensary Technician','Pharmacist','Logistics Technician','Lab Technician','Admin Assistant','Stock Technician'];
 const ROLE_BADGE={'Dispensary Technician':'bp','Pharmacist':'bt','Logistics Technician':'ba','Lab Technician':'bb','Admin Assistant':'bpk','Stock Technician':'bg'};
+
+// Roles/positions are editable in Settings (settings.roles) — this is just the
+// starting list new installs see until someone adds/removes any.
+function getRoles(){
+  const s = DB.get('settings') || {};
+  return (Array.isArray(s.roles) && s.roles.length) ? s.roles : ROLES;
+}
+
+function sortByNameOrRole(list, mode){
+  const roles = getRoles();
+  const roleRank = r => { const i = roles.indexOf(r); return i === -1 ? roles.length : i; };
+  return [...list].sort((a,b) => {
+    if(mode === 'role'){
+      const rd = roleRank(a.role) - roleRank(b.role);
+      if(rd) return rd;
+    }
+    return a.first.localeCompare(b.first) || a.last.localeCompare(b.last);
+  });
+}
 const EMP_COLORS=['#534AB7','#0F6E56','#BA7517','#A32D2D','#185FA5','#3B6D11','#993556','#D85A30','#534AB7','#0F6E56'];
 const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
@@ -1991,7 +2025,8 @@ function mapFromSupabase(key, rows) {
       contractDays: r.contract_days,
       contractPerDay: r.contract_per_day,
       contractedHrsPerWeek: r.contracted_hrs_per_week,
-      autoShift: r.auto_shift
+      autoShift: r.auto_shift,
+      secondaryRole: r.secondary_role ?? r.secondaryRole ?? null
     }));
   }
   
@@ -2139,6 +2174,7 @@ function mapToSupabase(key, arrOrObj) {
       x.contract_per_day = x.contractPerDay;
       x.contracted_hrs_per_week = x.contractedHrsPerWeek;
       x.auto_shift = x.autoShift;
+      x.secondary_role = x.secondaryRole || null;
 
       delete x.availNotes;
       delete x.contractStart;
@@ -2148,6 +2184,7 @@ function mapToSupabase(key, arrOrObj) {
       delete x.contractPerDay;
       delete x.contractedHrsPerWeek;
       delete x.autoShift;
+      delete x.secondaryRole;
     }
 
 if (key === 'shifts') {
@@ -2958,11 +2995,13 @@ function toggleAvail(){showAvail=!showAvail;document.getElementById('toggle-avai
   return [...seen.values()];
 }
   
+let rosterSortMode = 'name';
+function setRosterSort(mode){ rosterSortMode = mode; renderRoster(); }
 function renderRoster(){
   if(!currentWeekStart){initWeek(new Date());}
   const days=getWD();const we=new Date(currentWeekStart);we.setDate(we.getDate()+6);
   document.getElementById('wk-lbl').textContent=`${FDISP(currentWeekStart)} – ${FDISP(we)}`;updateTodayBtn();
-  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const staff=sortByNameOrRole(DB.get('staff')||[], rosterSortMode);
   const shifts = dedupeShifts(DB.get('shifts') || []);
   const leaveReqs=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');
   const sickDays=DB.get('sickDays')||[];
@@ -5294,8 +5333,10 @@ function isShiftWithinAvailability(emp, day, start, end) {
   return MD(start,end)>=0 && MD(entry.start,start)>=0 && MD(end,entry.end)>=0;
 }
 
+let staffSortMode = 'name';
+function setStaffSort(mode){ staffSortMode = mode; renderStaff(); }
 function renderStaff(){
-  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const staff=sortByNameOrRole(DB.get('staff')||[], staffSortMode);
   const q=(document.getElementById('staff-search')?document.getElementById('staff-search').value||'':'').toLowerCase();
   const filtered=q?staff.filter(s=>`${s.first} ${s.last} ${s.role} ${s.email}`.toLowerCase().includes(q)):staff;
   document.getElementById('staff-list').innerHTML=filtered.map(emp=>`
@@ -5358,6 +5399,8 @@ function staffInfoHTML(emp){
     ?`${emp.contractStart}–${emp.contractEnd} · ${emp.contractBreak||30}m break · ${dailyHrs.toFixed(1)}h/day · ${contractedDays.join(', ')||'no days set'} (${emp.contractedHrsPerWeek||0}h/wk)`
     :'Not configured';
   return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-top:4px">
+  <div><span style="color:var(--t2)">Primary role:</span> <span class="badge ${ROLE_BADGE[emp.role]||'bp'}">${emp.role||'—'}</span></div>
+  <div><span style="color:var(--t2)">Secondary role:</span> ${emp.secondaryRole?`<span class="badge ${ROLE_BADGE[emp.secondaryRole]||'bp'}">${emp.secondaryRole}</span>`:'—'}</div>
   <div><span style="color:var(--t2)">Email:</span> ${emp.email||'—'}</div>
   <div><span style="color:var(--t2)">Phone:</span> ${emp.phone||'—'}</div>
   <div><span style="color:var(--t2)">DOB:</span> ${emp.dob?new Date(emp.dob+'T00:00:00').toLocaleDateString('en-AU'):'—'}</div>
@@ -5737,13 +5780,26 @@ async function sendWarningEmail(){
     alert('Could not send warning email: '+e.message);
   }
 }
-function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';document.getElementById('sf-role').value='Dispensary Technician';const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildContractDaysTable(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
+function populateRoleSelects(primaryValue, secondaryValue){
+  const roles = getRoles();
+  const primaryEl = document.getElementById('sf-role');
+  const secondaryEl = document.getElementById('sf-role2');
+  if(primaryEl){
+    primaryEl.innerHTML = roles.map(r => `<option value="${escHTML(r)}">${escHTML(r)}</option>`).join('');
+    primaryEl.value = primaryValue || roles[0] || '';
+  }
+  if(secondaryEl){
+    secondaryEl.innerHTML = '<option value="">None</option>' + roles.map(r => `<option value="${escHTML(r)}">${escHTML(r)}</option>`).join('');
+    secondaryEl.value = secondaryValue || '';
+  }
+}
+function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';populateRoleSelects();const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildContractDaysTable(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
 function editStaff(id){
   editingStaffId=id;const staff=DB.get('staff')||[];const emp=staff.find(s=>s.id===id);if(!emp)return;
   document.getElementById('staff-modal-title').textContent='Edit: '+emp.first+' '+emp.last;
   document.getElementById('sf-first').value=emp.first;document.getElementById('sf-last').value=emp.last;
   document.getElementById('sf-email').value=emp.email||'';document.getElementById('sf-phone').value=emp.phone||'';
-  document.getElementById('sf-dob').value=emp.dob||'';document.getElementById('sf-role').value=emp.role||ROLES[0];
+  document.getElementById('sf-dob').value=emp.dob||'';populateRoleSelects(emp.role, emp.secondaryRole);
   document.getElementById('sf-pin').value=emp.pin||'';
   document.getElementById('sf-avail-notes').value=emp.availNotes||'';
   const tog=document.getElementById('tog-auto-shift');if(tog) tog.classList.toggle('on',!!emp.autoShift);
@@ -5900,6 +5956,7 @@ function saveStaff(){
     phone:document.getElementById('sf-phone').value.trim(),
     dob:document.getElementById('sf-dob').value,
     role:document.getElementById('sf-role').value,
+    secondaryRole:document.getElementById('sf-role2')?.value || null,
     pin:String(document.getElementById('sf-pin').value).trim(),
     availNotes:document.getElementById('sf-avail-notes').value,
     availability:avail,
@@ -8491,6 +8548,42 @@ function loadSettings(){
   if(s.dispensaryName) document.getElementById('set-name').value=s.dispensaryName;
   if(s.managerNotifyPhone) document.getElementById('set-mgr-phone').value=s.managerNotifyPhone;
   if(s.managerEmail) document.getElementById('set-mgr-email').value=s.managerEmail;
+  renderRolesSettings();
+}
+
+function renderRolesSettings(){
+  const el = document.getElementById('roles-list');
+  if(!el) return;
+  const roles = getRoles();
+  el.innerHTML = roles.map(r => `<span class="badge ${ROLE_BADGE[r]||'bp'}" style="display:inline-flex;align-items:center;gap:5px;padding:4px 8px 4px 10px">${escHTML(r)}
+    <button onclick="removeRole('${r.replace(/'/g,"\\'")}')" title="Remove this role" style="border:none;background:none;color:inherit;cursor:pointer;font-weight:700;padding:0 2px;font-size:12px">×</button>
+  </span>`).join('') || '<span style="font-size:12px;color:var(--t3)">No roles yet.</span>';
+}
+
+async function addRole(){
+  const input = document.getElementById('new-role-input');
+  const name = input.value.trim();
+  if(!name) return;
+  const roles = getRoles();
+  if(roles.some(r => r.toLowerCase() === name.toLowerCase())){
+    alert('That role already exists.');
+    return;
+  }
+  const s = { ...(DB.get('settings') || {}), roles: [...roles, name] };
+  const result = await DB.set('settings', s);
+  if(!result.ok){ alert('Could not save the new role. Please try again.'); return; }
+  input.value = '';
+  renderRolesSettings();
+}
+
+async function removeRole(name){
+  const staff = DB.get('staff') || [];
+  const inUse = staff.filter(s => s.role === name || s.secondaryRole === name);
+  if(inUse.length && !confirm(`${inUse.length} staff member${inUse.length>1?'s are':' is'} currently assigned "${name}". Removing it only takes it off the list of options when adding/editing staff — their existing assignment won't change. Continue?`)) return;
+  const s = { ...(DB.get('settings') || {}), roles: getRoles().filter(r => r !== name) };
+  const result = await DB.set('settings', s);
+  if(!result.ok){ alert('Could not remove this role. Please try again.'); return; }
+  renderRolesSettings();
 }
 function togSet(k){
   const s=DB.get('settings')||{};
@@ -8500,6 +8593,7 @@ function togSet(k){
 }
 function saveSettings(){
   const s={
+    ...(DB.get('settings')||{}),
     dailyOT:document.getElementById('tog-dailyOT').classList.contains('on'),
     weeklyOT:document.getElementById('tog-weeklyOT').classList.contains('on'),
     dailyOTHours:parseFloat(document.getElementById('set-doth').value),
@@ -9598,7 +9692,7 @@ DB.preload(ALL_KEYS, function(){
 document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-overlay.open').forEach(m=>m.classList.remove('open'));});
 
 // ── ANNOUNCEMENTS ───────────────────────────────────────────────
-const ANN_ROLES = ['All Staff','Dispensary Technician','Pharmacist','Logistics Technician','Lab Technician','Admin Assistant','Stock Technician'];
+function getAnnRoles(){ return ['All Staff', ...getRoles()]; }
 let editingAnnId = null;
 let annFilter = 'active';
 
@@ -9618,7 +9712,7 @@ function openAnnModal(id) {
 
   // Department role checkboxes
   const existingRoles = ann ? (ann.roles||[]) : ['All Staff'];
-  document.getElementById('ann-id-roles').innerHTML = ANN_ROLES.map(r => `
+  document.getElementById('ann-id-roles').innerHTML = getAnnRoles().map(r => `
     <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
       <input type="checkbox" class="ann-role-cb" value="${r}" ${existingRoles.includes(r)?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
       <span>${r}</span>

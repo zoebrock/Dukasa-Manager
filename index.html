@@ -6486,6 +6486,36 @@ function isFirstRequester(lr,allLeaveReqs,staff){
   return conflicts.every(other=>new Date(other.submitted||other.from).getTime()>=lrTime);
 }
 
+// Live conflict warning inside the Add/Edit leave request modal — checks the
+// dates currently in the form against everyone else's leave, same as the
+// conflict badges shown on the Leave & Sick list.
+function checkLeaveConflictsModal(){
+  const warnEl = document.getElementById('al-conflict-warn');
+  if(!warnEl) return;
+
+  const empId = document.getElementById('al-emp').value;
+  const from = document.getElementById('al-from').value;
+  const to = document.getElementById('al-to').value;
+  if(!empId || !from || !to || to < from){ warnEl.style.display = 'none'; return; }
+
+  const staff = DB.get('staff') || [];
+  const leaveReqs = DB.get('leaveRequests') || [];
+  const draft = { id: editingLeaveId || '__draft__', empId, from, to };
+  const conflicts = getLeaveConflicts(draft, leaveReqs, staff)
+    .filter(c => String(c.id) !== String(editingLeaveId || ''));
+
+  if(!conflicts.length){ warnEl.style.display = 'none'; return; }
+
+  const emp = staff.find(s => s.id === empId);
+  const names = conflicts.map(c => {
+    const e = staff.find(s => s.id === c.empId);
+    return e ? e.first + ' ' + e.last : '?';
+  }).join(', ');
+
+  warnEl.innerHTML = `⚠ Overlaps with <strong>${names}</strong> (same role: ${emp?.role || '?'}). Check availability before approving.`;
+  warnEl.style.display = 'block';
+}
+
 // Leave type badge colours
 const LEAVE_TYPE_BADGE={
   'Annual Leave':    {cls:'bg',   label:'Annual Leave'},

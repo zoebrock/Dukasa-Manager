@@ -1640,6 +1640,17 @@ function isPublishedShift(shift){
   </div>
 </div>
 
+<div class="modal-overlay" id="m-mc-notify">
+  <div class="modal">
+    <div class="mh"><h2>New medical certificate</h2><button class="xbtn" onclick="dismissMCNotify()">×</button></div>
+    <div id="mc-notify-body" style="font-size:13px"></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="dismissMCNotify()">Dismiss</button>
+      <button class="btn btn-primary btn-sm" id="mc-notify-view-btn">View certificate</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="m-photo-view">
   <div class="modal">
     <div class="mh"><h2>Clock photo</h2><button class="xbtn" onclick="CM('m-photo-view')">×</button></div>
@@ -2313,6 +2324,7 @@ const DB = {
 
   async set(k, v) {
     const key = 'rx3_' + k;
+    const previousValue = CACHE[key];
     CACHE[key] = v;
     bumpDataVersion(k);
 
@@ -2348,6 +2360,11 @@ const DB = {
     } catch (error) {
       console.error('Supabase save failed:', k, error);
       _setSyncIndicator('error');
+      // Roll back the optimistic cache write — otherwise this tab keeps showing
+      // the change as if it saved while every other portal/device (and this tab,
+      // after its next refresh) still has the old, unsaved data from the server.
+      CACHE[key] = previousValue;
+      bumpDataVersion(k);
       const msg = 'Could not save ' + k + ': ' + error.message;
       if(typeof toast === 'function') toast(msg, 'error', 6000);
       else alert(msg);
@@ -2727,6 +2744,7 @@ function launchManagerApp(){
     loadSettings();
     renderDashboard();
     updateBadges();
+    checkForNewMCUploads();
   });
 }
 function doLogin(){
@@ -4869,6 +4887,7 @@ async function saveOT(){
 }
   
 async function approveOT(id, opts = {}){
+ try{
   const reqs = DB.get('otRequests') || [];
   const idx = reqs.findIndex(x => x.id === id);
   if (idx < 0) return;
@@ -4886,7 +4905,11 @@ async function approveOT(id, opts = {}){
     ? { username:o.createdBy || 'manager', name:o.createdByName, role:o.createdByRole || '' }
     : null;
   stampManagerDecision(reqs[idx], 'approved', currentManager || fallbackManager);
-  await DB.set('otRequests', reqs);
+  const reqSaveResult = await DB.set('otRequests', reqs);
+  if (!reqSaveResult.ok) {
+    alert('Could not approve this OT request — the change was not saved. Please try again.');
+    return;
+  }
   let shifts = DB.get('shifts') || [];
 
   // Normalise IDs to strings before comparison — Supabase can return numeric IDs
@@ -4949,7 +4972,11 @@ if (shiftIdx >= 0) {
     await deleteSupabaseRow('shifts', duplicate.id);
   }
   shifts = shifts.filter(x => !(x.isOT && String(x.otId ?? '') === String(id)));
-  await DB.set('shifts', shifts);
+  const shiftSaveResult = await DB.set('shifts', shifts);
+  if (!shiftSaveResult.ok) {
+    alert('The OT request was approved, but the roster shift could not be updated to reflect the new start/end time. Please retry the approval — do not assume the roster is correct.');
+    return;
+  }
 
 } else if (!alreadyHasOTShift) {
 
@@ -4976,7 +5003,11 @@ if (shiftIdx >= 0) {
     }]
   });
 
-  await DB.set('shifts', shifts);
+  const standaloneSaveResult = await DB.set('shifts', shifts);
+  if (!standaloneSaveResult.ok) {
+    alert('The OT request was approved, but the roster shift could not be saved. Please retry the approval — do not assume the roster is correct.');
+    return;
+  }
 }
   renderOT();renderRoster();renderDashboard();
 if (opts.fromReconcile) return;
@@ -4990,15 +5021,24 @@ notify('ot_decision', {
   end: o.end,
   notes: o.reason || ''
 });
+ } catch(err){
+  console.error('Approve OT failed:', err);
+  alert('Could not approve this OT request: ' + (err.message || err));
+ }
 }
 async function denyOT(id, opts = {}){
+ try{
   const reqs=DB.get('otRequests')||[];
   const idx=reqs.findIndex(x=>x.id===id);
   if(idx<0)return;
   const wasApproved=reqs[idx].approved===true;
   reqs[idx].approved=false;
   stampManagerDecision(reqs[idx], 'denied');
-  await DB.set('otRequests',reqs);
+  const saveResult = await DB.set('otRequests',reqs);
+  if(!saveResult.ok){
+    alert('Could not deny this OT request — the change was not saved. Please try again.');
+    return;
+  }
   const o=reqs[idx];
   // If it was previously approved, reverse the shift extension
   if(wasApproved) await reverseOTFromShift(id,o.empId,o.date);
@@ -5014,6 +5054,10 @@ async function denyOT(id, opts = {}){
     end: o.end,
     notes: o.reason || ''
   });
+ } catch(err){
+  console.error('Deny OT failed:', err);
+  alert('Could not deny this OT request: ' + (err.message || err));
+ }
 }
 
 
@@ -5927,59 +5971,73 @@ function staffTab(t,el){if(!el)return;el.closest('.tabs').querySelectorAll('.tab
 let editingLeaveId = null;
 
 function openAddLeaveModal(){
-  editingLeaveId = null;
+  try{
+    editingLeaveId = null;
 
-  document.getElementById('add-leave-title').textContent = 'Add leave request';
-  document.getElementById('al-delete-btn').style.display = 'none';
+    document.getElementById('add-leave-title').textContent = 'Add leave request';
+    document.getElementById('al-delete-btn').style.display = 'none';
 
-  const staff = [...(DB.get('staff') || [])]
-    .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
+    const staff = [...(DB.get('staff') || [])]
+      .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
 
-  document.getElementById('al-emp').innerHTML =
-    staff.map(s => `<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
+    document.getElementById('al-emp').innerHTML =
+      staff.map(s => `<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
 
-  document.getElementById('al-type').value = 'Annual Leave';
-  document.getElementById('al-from').value = FD(new Date());
-  document.getElementById('al-to').value = FD(new Date());
-  document.getElementById('al-status').value = 'pending';
-  document.getElementById('al-notes').value = '';
+    document.getElementById('al-type').value = 'Annual Leave';
+    document.getElementById('al-from').value = FD(new Date());
+    document.getElementById('al-to').value = FD(new Date());
+    document.getElementById('al-status').value = 'pending';
+    document.getElementById('al-notes').value = '';
 
-  document.getElementById('al-conflict-warn').style.display = 'none';
+    document.getElementById('al-conflict-warn').style.display = 'none';
 
-  document.getElementById('al-from').onchange = checkLeaveConflictsModal;
-  document.getElementById('al-to').onchange = checkLeaveConflictsModal;
+    document.getElementById('al-from').onchange = checkLeaveConflictsModal;
+    document.getElementById('al-to').onchange = checkLeaveConflictsModal;
 
-  OM('m-add-leave');
+    OM('m-add-leave');
+  } catch(err){
+    console.error('Open add-leave modal failed:', err);
+    alert('Could not open the add leave request form: ' + (err.message || err));
+  }
 }
 
 function openEditLeaveModal(id){
-  const reqs = DB.get('leaveRequests') || [];
-  const lr = reqs.find(l => l.id === id);
-  if(!lr) return;
+  try{
+    const reqs = DB.get('leaveRequests') || [];
+    const lr = reqs.find(l => String(l.id) === String(id));
+    if(!lr){
+      alert('Could not find that leave request — it may have just been deleted or updated. Refreshing the list.');
+      renderLeave(currentLeaveFilter);
+      return;
+    }
 
-  editingLeaveId = id;
+    editingLeaveId = id;
 
-  document.getElementById('add-leave-title').textContent = 'Edit leave request';
-  document.getElementById('al-delete-btn').style.display = 'inline-flex';
+    document.getElementById('add-leave-title').textContent = 'Edit leave request';
+    document.getElementById('al-delete-btn').style.display = 'inline-flex';
 
-  const staff = [...(DB.get('staff') || [])]
-    .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
+    const staff = [...(DB.get('staff') || [])]
+      .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
 
-  document.getElementById('al-emp').innerHTML =
-    staff.map(s => `<option value="${s.id}" ${s.id === lr.empId ? 'selected' : ''}>${s.first} ${s.last}</option>`).join('');
+    document.getElementById('al-emp').innerHTML =
+      staff.map(s => `<option value="${s.id}" ${s.id === lr.empId ? 'selected' : ''}>${s.first} ${s.last}</option>`).join('');
 
-  document.getElementById('al-type').value = lr.type || 'Annual Leave';
-  document.getElementById('al-from').value = lr.from || '';
-  document.getElementById('al-to').value = lr.to || '';
-  document.getElementById('al-status').value = lr.status || 'pending';
-  document.getElementById('al-notes').value = lr.notes || '';
+    document.getElementById('al-type').value = lr.type || 'Annual Leave';
+    document.getElementById('al-from').value = lr.from || '';
+    document.getElementById('al-to').value = lr.to || '';
+    document.getElementById('al-status').value = lr.status || 'pending';
+    document.getElementById('al-notes').value = lr.notes || '';
 
-  document.getElementById('al-conflict-warn').style.display = 'none';
+    document.getElementById('al-conflict-warn').style.display = 'none';
 
-  document.getElementById('al-from').onchange = checkLeaveConflictsModal;
-  document.getElementById('al-to').onchange = checkLeaveConflictsModal;
+    document.getElementById('al-from').onchange = checkLeaveConflictsModal;
+    document.getElementById('al-to').onchange = checkLeaveConflictsModal;
 
-  OM('m-add-leave');
+    OM('m-add-leave');
+  } catch(err){
+    console.error('Open edit-leave modal failed:', err);
+    alert('Could not open the edit leave request form: ' + (err.message || err));
+  }
 }
 
 function normaliseLeaveRequestRow(row){
@@ -6396,7 +6454,8 @@ function filterLeave(f,el){document.querySelectorAll('#pg-leave .tab').forEach(t
 function openLeaveReview(id){
   reviewingLeaveId=id;
   const leaveReqs=(DB.get('leaveRequests')||[]).map(normaliseLeaveRequestRow);const staff=DB.get('staff')||[];const shifts=DB.get('shifts')||[];
-  const lr=leaveReqs.find(l=>l.id===id);if(!lr)return;
+  const lr=leaveReqs.find(l=>String(l.id)===String(id));
+  if(!lr){alert('Could not find that leave request — it may have just been updated. Refreshing the list.');renderLeave(currentLeaveFilter);return;}
   const emp=staff.find(s=>s.id===lr.empId);
   const conflicts=shifts.filter(s=>s.empId===lr.empId&&s.date>=lr.from&&s.date<=lr.to&&(!lr.requestKind||lr.requestKind!=='partial_day'||(s.start<lr.partialEnd&&s.end>lr.partialStart)));
   // Conflict check
@@ -8061,6 +8120,74 @@ for(let i = 0; i < 14; i++){
 }
   
 // MC
+const MC_POPUP_SEEN_KEY = 'rx3_mc_popup_seen';
+let mcPopupSeenIds = null;
+let mcNotifyQueue = [];
+
+function loadMCPopupSeenIds(){
+  if(mcPopupSeenIds) return mcPopupSeenIds;
+  try{
+    mcPopupSeenIds = new Set(JSON.parse(localStorage.getItem(MC_POPUP_SEEN_KEY) || '[]'));
+  } catch(e){
+    mcPopupSeenIds = new Set();
+  }
+  return mcPopupSeenIds;
+}
+
+function saveMCPopupSeenIds(){
+  try{ localStorage.setItem(MC_POPUP_SEEN_KEY, JSON.stringify([...loadMCPopupSeenIds()])); }
+  catch(e){ /* localStorage unavailable — popups will just re-show on next load */ }
+}
+
+// Called after every data refresh (realtime + polling). Seeds the "seen" set on the
+// very first run so historic MCs never pop up, then surfaces a centralised modal for
+// any medical certificate uploaded since — not gated on manager_notified, because the
+// staff portal sets that flag true at upload time (it's used for its own purposes).
+function checkForNewMCUploads(){
+  const mcs = DB.get('medCerts') || [];
+  const seen = loadMCPopupSeenIds();
+
+  if(!mcPopupSeenIdsInitialised){
+    mcs.forEach(mc => seen.add(String(mc.id)));
+    mcPopupSeenIdsInitialised = true;
+    saveMCPopupSeenIds();
+    return;
+  }
+
+  const fresh = mcs.filter(mc => mc.id != null && !seen.has(String(mc.id)));
+  if(!fresh.length) return;
+
+  fresh.forEach(mc => seen.add(String(mc.id)));
+  saveMCPopupSeenIds();
+
+  mcNotifyQueue.push(...fresh.sort((a,b) => (a.uploadedAt||'').localeCompare(b.uploadedAt||'')));
+  if(!document.getElementById('m-mc-notify').classList.contains('open')) showNextMCNotify();
+}
+let mcPopupSeenIdsInitialised = false;
+
+function showNextMCNotify(){
+  const mc = mcNotifyQueue.shift();
+  if(!mc){ CM('m-mc-notify'); return; }
+
+  const staff = DB.get('staff') || [];
+  const emp = staff.find(s => s.id === mc.empId);
+  const empName = emp ? `${emp.first} ${emp.last}` : 'A staff member';
+
+  document.getElementById('mc-notify-body').innerHTML =
+    `<strong>${empName}</strong> uploaded a medical certificate for sick leave on <strong>${FDS(mc.date)}</strong>.` +
+    (mc.fileName ? `<br><span style="color:var(--t2)">File: ${mc.fileName}</span>` : '');
+
+  const viewBtn = document.getElementById('mc-notify-view-btn');
+  viewBtn.onclick = () => { CM('m-mc-notify'); viewMC(mc.id); };
+
+  OM('m-mc-notify');
+}
+
+function dismissMCNotify(){
+  CM('m-mc-notify');
+  if(mcNotifyQueue.length) setTimeout(showNextMCNotify, 300);
+}
+
 function viewMC(mcId){
   const mcs=DB.get('medCerts')||[];
   const mc=mcs.find(m=>m.id===mcId);if(!mc)return;
@@ -8252,6 +8379,7 @@ async function runManagerRefresh({ manual = false } = {}) {
   try {
     const results = await DB.refresh(keys);
     renderActiveManagerPage();
+    if(results && results.medCerts) checkForNewMCUploads();
     return Object.values(results || {}).every(Boolean);
   } catch (e) {
     console.error('Sync failed', e);
@@ -8291,7 +8419,10 @@ function queueRealtimeRefresh(key) {
     managerRefreshInProgress = true;
     try {
       const results = await DB.refresh([key]);
-      if (results && results[key]) renderActiveManagerPage();
+      if (results && results[key]) {
+        renderActiveManagerPage();
+        if (key === 'medCerts') checkForNewMCUploads();
+      }
     } catch (e) {
       console.error('Realtime refresh failed for', key, e);
       // Polling remains active, so a transient realtime failure is not treated as

@@ -7588,7 +7588,7 @@ if (s.entryType === 'leave' || s.entry_type === 'leave') {
     const approvedOT=otReqs.find(o=>o.empId===s.empId&&o.date===ds);
     let actualHrs=null,otHrs=0,status=isSick?'Sick':isLeave?isLeave.type:'Rostered';
     let bActMin=null,flags=[];
-    let autoRoundedIn=null,autoRoundedOut=null;
+    let autoRoundedIn=null,autoRoundedOut=null,ordinaryCapOut=null;
     let rowCls='';if(isSick)rowCls='tr-sick';else if(isLeave)rowCls='tr-leave';
 
     if(isSick){
@@ -7606,24 +7606,32 @@ if (s.entryType === 'leave' || s.entry_type === 'leave') {
     } else if(ci&&!co){
       status='Missing clock out';
       const ciDiff=MD(s.start,ci.time);
-      if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});}
-      else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → capped to ${s.start}`});}
+      if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m — clocked in ${ci.time}, rounded to ${autoRoundedIn}`});}
+      else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m — clocked in ${ci.time}, capped to ${s.start}`});}
       else{autoRoundedIn=ci.time;}
       autoRoundedOut=s.end;flags.push({type:'missing',msg:'No clock out — rostered end applied'});
       bActMin=s.breakMin;actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
     } else if(!ci&&co){
       status='Missing clock in';autoRoundedIn=s.start;flags.push({type:'missing',msg:'No clock in — rostered start applied'});
       const coDiff=MD(s.end,co.time);
-      if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Left ${coDiff}m late → capped to ${s.end}`});}
+      if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Left ${coDiff}m late — clocked out ${co.time}, capped to ${s.end}`});}
       else{autoRoundedOut=co.time;}
+      // Ordinary hours are always capped at the rostered end — a late finish covered by
+      // approved OT is paid out on its own OT line, not counted twice here, even though
+      // autoRoundedOut (above) is left uncapped so the UI doesn't flag an OT-authorised
+      // late finish as an unexplained capping.
+      ordinaryCapOut=coDiff>0?s.end:autoRoundedOut;
       bActMin=s.breakMin;actualHrs=Math.max(0,MD(autoRoundedIn,autoRoundedOut)-bActMin)/60;
     } else if(ci&&co){
       bActMin=breakInfo.totalMin>0?breakInfo.totalMin:s.breakMin;
       actualHrs=Math.max(0,(MD(ci.time,co.time)-bActMin)/60);
       const ciDiff=MD(s.start,ci.time);const coDiff=MD(s.end,co.time);
-      if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m → rounded to ${autoRoundedIn}`});}
-      else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m → capped to ${s.start}`});}
-      if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Late out +${coDiff}m → capped to ${s.end}`});}
+      if(ciDiff>0){autoRoundedIn=roundUpTo30(ci.time);flags.push({type:'late',msg:`Late +${ciDiff}m — clocked in ${ci.time}, rounded to ${autoRoundedIn}`});}
+      else if(ciDiff<0){autoRoundedIn=s.start;flags.push({type:'early',msg:`Early ${Math.abs(ciDiff)}m — clocked in ${ci.time}, capped to ${s.start}`});}
+      if(coDiff>0&&!approvedOT){autoRoundedOut=s.end;flags.push({type:'late-out',msg:`Late out +${coDiff}m — clocked out ${co.time}, capped to ${s.end}`});}
+      // See comment above — ordinary hours cap at rostered end even when OT covers the
+      // overrun, so it isn't paid twice; autoRoundedOut stays uncapped there for the UI.
+      ordinaryCapOut=coDiff>0?s.end:autoRoundedOut;
       const allottedBreak=s.breakMin||30;
       if(breakInfo.totalMin>allottedBreak){
         flags.push({type:'break-over',msg:`Over break limit — used ${breakInfo.totalMin}m of ${allottedBreak}m allotted${breakInfo.sessions.length>1?` across ${breakInfo.sessions.length} breaks`:''}`});
@@ -7653,7 +7661,7 @@ let effectiveHrs=actualHrs;
 
 if(actualHrs!==null&&!isLeave&&!isSick){
   const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
-  const effOut=autoRoundedOut||(co&&co.time)||s.end;
+  const effOut=ordinaryCapOut||autoRoundedOut||(co&&co.time)||s.end;
   effectiveHrs=paidHrsFromTimes(effIn,effOut);
 }
 
@@ -8137,6 +8145,13 @@ for(let i = 0; i < 14; i++){
 
       if(hrs <= 0) return;
 
+      // Surface lateness so the export shows why hours were adjusted, not just the
+      // adjusted total — the raw clock time is baked into the flag message itself.
+      const notes = (r.flags || [])
+        .filter(f => f.type === 'late' || f.type === 'late-out')
+        .map(f => f.msg)
+        .join('; ');
+
       byEmp[empId].push({
         date: ds,
         day: dayLabel(ds),
@@ -8144,7 +8159,8 @@ for(let i = 0; i < 14; i++){
         status: isPartialLeave ? `${type} - Partial Leave` : type,
         start: r.s?.start || '',
         end: r.s?.end || '',
-        hrs
+        hrs,
+        notes
       });
     });
   });
@@ -8164,6 +8180,7 @@ for(let i = 0; i < 14; i++){
       status: 'OT',
       start: o.start || '',
       end: o.end || '',
+      notes: '',
       hrs
     });
   });
@@ -8189,7 +8206,7 @@ for(let i = 0; i < 14; i++){
     aoa.push([empName, emp.role || '', '', '', '', '', '', '', '']);
     rowMeta.push('employee');
 
-    aoa.push(['Date','Day','Type','Status','Start','End','Hours','','']);
+    aoa.push(['Date','Day','Type','Status','Start','End','Hours','Notes','']);
     rowMeta.push('header');
 
     empRows.forEach(r => {
@@ -8201,7 +8218,7 @@ for(let i = 0; i < 14; i++){
         r.start,
         r.end,
         Number(r.hrs || 0),
-        '',
+        r.notes || '',
         ''
       ]);
       rowMeta.push(r.type);
@@ -8255,7 +8272,7 @@ for(let i = 0; i < 14; i++){
     { wch: 10 },
     { wch: 10 },
     { wch: 10 },
-    { wch: 3 },
+    { wch: 40 },
     { wch: 3 }
   ];
 

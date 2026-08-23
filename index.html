@@ -1448,7 +1448,11 @@ function isPublishedShift(shift){
     <div class="mh"><h2 id="ot-modal-title">Add OT request</h2><button class="xbtn" onclick="CM('m-ot')">×</button></div>
     <div class="fg">
       <div class="fr"><label>Staff member</label><select id="ot-emp"></select></div>
-      <div class="fr"><label>Date</label><input type="date" id="ot-date"></div>
+      <div class="fr"><label id="ot-date-label">Date</label><input type="date" id="ot-date"></div>
+    </div>
+    <div class="fr" id="ot-date-to-row" style="display:none">
+      <label>To date <span style="font-weight:400;color:var(--t3)">(creates one OT request per day in this range, same times each day)</span></label>
+      <input type="date" id="ot-date-to">
     </div>
     <div class="fg">
       <div class="fr"><label>OT start</label><input type="time" id="ot-start" value="17:00"></div>
@@ -4792,15 +4796,22 @@ function openAddOTModal(id, prefillEmpId, prefillDate){
   a.first.localeCompare(b.first) || a.last.localeCompare(b.last)
 );
   document.getElementById('ot-emp').innerHTML=staff.map(s=>`<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
+  const dateToRow = document.getElementById('ot-date-to-row');
   if(id){
     const o=(DB.get('otRequests')||[]).find(x=>x.id===id);if(!o)return;
     document.getElementById('ot-modal-title').textContent='Edit OT request';
+    document.getElementById('ot-date-label').textContent='Date';
+    dateToRow.style.display='none';
+    document.getElementById('ot-date-to').value='';
     document.getElementById('ot-emp').value=o.empId;document.getElementById('ot-date').value=o.date;
     document.getElementById('ot-start').value=o.start;document.getElementById('ot-end').value=o.end;
     document.getElementById('ot-reason').value=o.reason||'';document.getElementById('ot-task').value=o.task||'';
     document.getElementById('tog-ot-avail').classList.toggle('on',o.availConfirmed);
   } else {
     document.getElementById('ot-modal-title').textContent='Add OT request';
+    document.getElementById('ot-date-label').textContent='From date';
+    dateToRow.style.display='block';
+    document.getElementById('ot-date-to').value='';
     // Prefill from shift popup if provided
     if(prefillEmpId) document.getElementById('ot-emp').value=prefillEmpId;
     document.getElementById('ot-date').value=prefillDate||FD(new Date());
@@ -4809,80 +4820,124 @@ function openAddOTModal(id, prefillEmpId, prefillDate){
   }
   OM('m-ot');
 }
+function dateRangeInclusive(fromStr, toStr){
+  const dates = [];
+  let d = new Date(fromStr+'T00:00:00');
+  const end = new Date(toStr+'T00:00:00');
+  while(d <= end){
+    dates.push(FD(d));
+    d.setDate(d.getDate()+1);
+  }
+  return dates;
+}
+
 async function saveOT(){
   const reqs = DB.get('otRequests') || [];
   const existing = editingOTId ? (reqs.find(x => x.id === editingOTId) || {}) : {};
   const availConfirmed = document.getElementById('tog-ot-avail').classList.contains('on');
+  const fromDate = document.getElementById('ot-date').value;
+  const toDateRaw = editingOTId ? '' : document.getElementById('ot-date-to').value;
 
-  const no = {
-    id: editingOTId || 'ot' + Date.now(),
-    empId: document.getElementById('ot-emp').value,
-    date: document.getElementById('ot-date').value,
-    start: document.getElementById('ot-start').value,
-    end: document.getElementById('ot-end').value,
-    reason: document.getElementById('ot-reason').value,
-    task: document.getElementById('ot-task').value,
-    availConfirmed,
-    approved: editingOTId ? existing.approved : null,
-    requestedBy: existing.requestedBy || 'manager',
-    staffConfirmed: availConfirmed ? true : (editingOTId ? (existing.staffConfirmed ?? null) : null),
-    submitted: editingOTId ? existing.submitted : new Date().toISOString(),
-    createdBy: existing.createdBy || getCurrentManager().username,
-    createdByName: existing.createdByName || getCurrentManager().name,
-    createdByRole: existing.createdByRole || getCurrentManager().role,
-    updatedBy: getCurrentManager().username,
-    updatedByName: getCurrentManager().name,
-    updatedByRole: getCurrentManager().role
-  };
-
-  const staffInfo = staffPayload(no.empId);
-
-  if (!no.reason.trim()) {
+  const reason = document.getElementById('ot-reason').value;
+  if (!reason.trim()) {
     alert('Reason is required.');
     return;
   }
 
-  if (editingOTId) {
-    const idx = reqs.findIndex(x => x.id === editingOTId);
-    if (idx >= 0) reqs[idx] = no;
-  } else {
-    reqs.push(no);
+  let dates = [fromDate];
+  if (toDateRaw) {
+    if (toDateRaw < fromDate) {
+      alert('The "To date" must be on or after the "From date".');
+      return;
+    }
+    dates = dateRangeInclusive(fromDate, toDateRaw);
   }
 
-  await DB.set('otRequests', reqs);
+  const empId = document.getElementById('ot-emp').value;
+  const start = document.getElementById('ot-start').value;
+  const end = document.getElementById('ot-end').value;
+  const task = document.getElementById('ot-task').value;
+  const mgr = getCurrentManager();
 
-  // If manager has already confirmed availability, this is already approved operationally.
-  // Approve immediately and push the OT to the roster.
-  if (no.requestedBy === 'manager' && no.availConfirmed && no.approved !== true) {
-    CM('m-ot');
-    await approveOT(no.id, { bypassAvailabilityGuard: true });
+  const buildRequest = (id, date, priorExisting) => ({
+    id,
+    empId,
+    date,
+    start,
+    end,
+    reason,
+    task,
+    availConfirmed,
+    approved: priorExisting.approved !== undefined ? priorExisting.approved : null,
+    requestedBy: priorExisting.requestedBy || 'manager',
+    staffConfirmed: availConfirmed ? true : (priorExisting.staffConfirmed ?? null),
+    submitted: priorExisting.submitted || new Date().toISOString(),
+    createdBy: priorExisting.createdBy || mgr.username,
+    createdByName: priorExisting.createdByName || mgr.name,
+    createdByRole: priorExisting.createdByRole || mgr.role,
+    updatedBy: mgr.username,
+    updatedByName: mgr.name,
+    updatedByRole: mgr.role
+  });
+
+  const newRequests = [];
+
+  if (editingOTId) {
+    const idx = reqs.findIndex(x => x.id === editingOTId);
+    const updated = buildRequest(editingOTId, fromDate, existing);
+    if (idx >= 0) reqs[idx] = updated;
+    newRequests.push(updated);
+  } else {
+    dates.forEach((date, i) => {
+      const req = buildRequest('ot' + Date.now() + '-' + i, date, {});
+      reqs.push(req);
+      newRequests.push(req);
+    });
+  }
+
+  const saveResult = await DB.set('otRequests', reqs);
+  if (!saveResult.ok) {
+    alert('Could not save the OT request(s) — the change was not saved. Please try again.');
     return;
   }
 
   CM('m-ot');
+
+  // If manager has already confirmed availability, these are already approved
+  // operationally. Approve each one immediately and push it to the roster.
+  if (newRequests[0].requestedBy === 'manager' && availConfirmed) {
+    for (const req of newRequests) {
+      if (req.approved !== true) await approveOT(req.id, { bypassAvailabilityGuard: true });
+    }
+    return;
+  }
+
   renderOT();
   renderDashboard();
 
-  if (no.requestedBy === 'manager' && !no.availConfirmed) {
-    notify('manager_ot_request', {
-      otId: no.id,
-      empId: no.empId,
-      empEmail: staffInfo.empEmail || '',
-      empPhone: staffInfo.empPhone || '',
-      empFirst: staffInfo.empFirst || '',
-      empLast: staffInfo.empLast || '',
-      empName: staffInfo.empName || '',
-      date: no.date,
-      start: no.start,
-      end: no.end,
-      reason: no.reason || '',
-      task: no.task || '',
-      requestedBy: 'manager',
-      source: 'Manager Portal',
-      sendToStaff: true
-    })
-    .then(r => console.log('OT request email sent', r))
-    .catch(err => alert('OT request saved, but the staff email failed: ' + err.message));
+  if (newRequests[0].requestedBy === 'manager' && !availConfirmed) {
+    newRequests.forEach(req => {
+      const staffInfo = staffPayload(req.empId);
+      notify('manager_ot_request', {
+        otId: req.id,
+        empId: req.empId,
+        empEmail: staffInfo.empEmail || '',
+        empPhone: staffInfo.empPhone || '',
+        empFirst: staffInfo.empFirst || '',
+        empLast: staffInfo.empLast || '',
+        empName: staffInfo.empName || '',
+        date: req.date,
+        start: req.start,
+        end: req.end,
+        reason: req.reason || '',
+        task: req.task || '',
+        requestedBy: 'manager',
+        source: 'Manager Portal',
+        sendToStaff: true
+      })
+      .then(r => console.log('OT request email sent', r))
+      .catch(err => alert('OT request saved, but the staff email failed for ' + req.date + ': ' + err.message));
+    });
   }
 }
   

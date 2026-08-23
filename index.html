@@ -8126,7 +8126,7 @@ for(let i = 0; i < 14; i++){
       if(!empId || !byEmp[empId]) return;
 
       const isPartialLeave = tsIsPartialLeave(r.s);
-      const type = isPartialLeave
+      const baseType = isPartialLeave
         ? cleanType(r.status || r.s.leaveType || r.s.status)
         : r.isSick
           ? 'Sick'
@@ -8135,6 +8135,7 @@ for(let i = 0; i < 14; i++){
             : isWeekendDay(ds)
               ? 'Weekend'
               : 'Ordinary';
+      const type = isPartialLeave ? `${baseType} - Partial Leave` : baseType;
 
       const hrs = ROUND30(Number(
         r.approvedHrs ??
@@ -8156,7 +8157,7 @@ for(let i = 0; i < 14; i++){
         date: ds,
         day: dayLabel(ds),
         type,
-        status: isPartialLeave ? `${type} - Partial Leave` : type,
+        summaryType: baseType,
         start: r.s?.start || '',
         end: r.s?.end || '',
         hrs,
@@ -8177,7 +8178,7 @@ for(let i = 0; i < 14; i++){
       date: o.date,
       day: dayLabel(o.date),
       type: 'OT',
-      status: 'OT',
+      summaryType: 'OT',
       start: o.start || '',
       end: o.end || '',
       notes: '',
@@ -8206,7 +8207,7 @@ for(let i = 0; i < 14; i++){
     aoa.push([empName, emp.role || '', '', '', '', '', '', '', '']);
     rowMeta.push('employee');
 
-    aoa.push(['Date','Day','Type','Status','Start','End','Hours','Notes','']);
+    aoa.push(['Date','Day','Type','Start','End','Hours','Notes','','']);
     rowMeta.push('header');
 
     empRows.forEach(r => {
@@ -8214,30 +8215,30 @@ for(let i = 0; i < 14; i++){
         r.date,
         r.day,
         r.type,
-        r.status,
         r.start,
         r.end,
         Number(r.hrs || 0),
         r.notes || '',
+        '',
         ''
       ]);
-      rowMeta.push(r.type);
+      rowMeta.push(r.summaryType || r.type);
     });
 
-    const ordinary = empRows.filter(r=>r.type === 'Ordinary').reduce((t,r)=>t+Number(r.hrs||0),0);
-    const weekend = empRows.filter(r=>r.type === 'Weekend').reduce((t,r)=>t+Number(r.hrs||0),0);
-    const ot = empRows.filter(r=>r.type === 'OT').reduce((t,r)=>t+Number(r.hrs||0),0);
-    const leave = empRows.filter(r=>['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.type)).reduce((t,r)=>t+Number(r.hrs||0),0);
+    const ordinary = empRows.filter(r=>r.summaryType === 'Ordinary').reduce((t,r)=>t+Number(r.hrs||0),0);
+    const weekend = empRows.filter(r=>r.summaryType === 'Weekend').reduce((t,r)=>t+Number(r.hrs||0),0);
+    const ot = empRows.filter(r=>r.summaryType === 'OT').reduce((t,r)=>t+Number(r.hrs||0),0);
+    const leave = empRows.filter(r=>['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.summaryType)).reduce((t,r)=>t+Number(r.hrs||0),0);
     const total = ordinary + weekend + ot + leave;
 
     aoa.push([
       'TOTAL',
       '',
-      '',
       `Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${ot.toFixed(2)}h | Leave ${leave.toFixed(2)}h`,
       '',
       '',
       ROUND30(total),
+      '',
       '',
       ''
     ]);
@@ -8259,20 +8260,20 @@ for(let i = 0; i < 14; i++){
       wsSheet['!merges'].push({ s:{r:idx,c:0}, e:{r:idx,c:8} });
     }
     if(m === 'total'){
-      wsSheet['!merges'].push({ s:{r:idx,c:0}, e:{r:idx,c:2} });
-      wsSheet['!merges'].push({ s:{r:idx,c:3}, e:{r:idx,c:5} });
+      wsSheet['!merges'].push({ s:{r:idx,c:0}, e:{r:idx,c:1} });
+      wsSheet['!merges'].push({ s:{r:idx,c:2}, e:{r:idx,c:4} });
     }
   });
 
   wsSheet['!cols'] = [
     { wch: 13 },
     { wch: 14 },
-    { wch: 16 },
-    { wch: 42 },
+    { wch: 30 },
     { wch: 10 },
     { wch: 10 },
     { wch: 10 },
     { wch: 40 },
+    { wch: 3 },
     { wch: 3 }
   ];
 
@@ -8306,7 +8307,7 @@ for(let i = 0; i < 14; i++){
         font: { name:'Arial', sz:10, color:{ rgb:'000000' } },
         alignment: {
           vertical:'center',
-          horizontal: C === 6 ? 'right' : 'left',
+          horizontal: C === 5 ? 'right' : 'left',
           wrapText:true
         },
         border: meta === 'blank' ? {} : borderThin
@@ -8360,7 +8361,7 @@ for(let i = 0; i < 14; i++){
           font: { name:'Arial', sz:10, bold:true, color:{ rgb:'000000' } },
           fill: { fgColor:{ rgb:'D9D9D9' } },
           alignment: {
-            horizontal: C === 6 ? 'right' : 'left',
+            horizontal: C === 5 ? 'right' : 'left',
             vertical:'center',
             wrapText:true
           },
@@ -8368,7 +8369,7 @@ for(let i = 0; i < 14; i++){
         };
       }
 
-      if(C === 6 && meta !== 'title' && meta !== 'employee' && meta !== 'header' && meta !== 'blank'){
+      if(C === 5 && meta !== 'title' && meta !== 'employee' && meta !== 'header' && meta !== 'blank'){
         wsSheet[addr].z = '0.00';
       }
     }

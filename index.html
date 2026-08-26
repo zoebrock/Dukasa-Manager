@@ -841,6 +841,10 @@ function isPublishedShift(shift){
         <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
         Roster
       </button>
+      <button class="ni" onclick="SP('templates')" id="nav-templates">
+        <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg>
+        Templates
+      </button>
       <button class="ni" onclick="SP('ot')" id="nav-ot">
         <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 12"/></svg>
         OT Tracker
@@ -1006,8 +1010,8 @@ function isPublishedShift(shift){
             <option value="name">Sort: Name</option>
             <option value="role">Sort: Role</option>
           </select>
-          <button class="btn btn-sm" onclick="openTemplateModal()">Templates</button>
-          <button class="btn btn-sm" onclick="toggleBulkShiftMode()">Select</button>
+          <button class="btn btn-sm" onclick="SP('templates')">Templates</button>
+          <button class="btn btn-sm" id="bulk-select-btn" onclick="toggleBulkShiftMode()">Select</button>
           <button class="btn btn-sm btn-ghost" style="color:var(--rd)" onclick="deleteDuplicateShiftRows()">Clean dupes</button>
           <button class="btn btn-danger btn-sm" id="bulk-delete-btn" onclick="openBulkDeleteShifts()" style="display:none">Delete selected</button>
           <button class="btn btn-sm" onclick="openPartialLeaveModal()">+ Leave</button>
@@ -1031,6 +1035,15 @@ function isPublishedShift(shift){
         <div class="tabs" id="r-mobile-day-tabs" style="margin-bottom:0"></div>
         <div id="r-mobile-list" style="border:1px solid var(--border);border-top:none;border-radius:0 0 var(--r) var(--r);background:var(--surface);box-shadow:var(--shadow-xs)"></div>
       </div>
+    </div>
+
+    <!-- TEMPLATES -->
+    <div class="pg" id="pg-templates">
+      <div class="ph">
+        <h2>Roster templates</h2>
+        <button class="btn btn-primary btn-sm" onclick="openNewTemplateModal()">+ New template</button>
+      </div>
+      <div id="templates-list"></div>
     </div>
 
     <!-- OT TRACKER -->
@@ -1425,42 +1438,36 @@ function isPublishedShift(shift){
 
 <div class="modal-overlay" id="m-template">
   <div class="modal modal-lg">
-    <div class="mh"><h2>Roster templates</h2><button class="xbtn" onclick="CM('m-template')">×</button></div>
-    <div class="tabs">
-      <div class="tab active" onclick="tmplTab('apply',this)">Apply template</div>
-      <div class="tab" onclick="tmplTab('create',this)">Create template</div>
-      <div class="tab" onclick="tmplTab('manage',this)">Manage</div>
+    <div class="mh"><h2 id="tmpl-modal-title">New template</h2><button class="xbtn" onclick="CM('m-template')">×</button></div>
+    <div class="fr"><label>Template name</label><input type="text" id="tmpl-name" placeholder="e.g. Standard week, Weekend crew"></div>
+    <button class="btn btn-sm" style="margin-bottom:10px;background:var(--tl);color:var(--teal);border-color:#9de0ca" onclick="autoGenTemplate()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Generate from all staff's contracted hours</button>
+    <p style="font-size:11px;color:var(--t2);margin-bottom:6px">Add shifts by day of week. Break is in minutes.</p>
+    <div style="display:grid;grid-template-columns:80px 1fr 70px 70px 55px auto;gap:5px;margin-bottom:4px;padding:0 0 4px;border-bottom:1px solid var(--border)">
+      <span style="font-size:10px;font-weight:600;color:var(--t3)">Day</span>
+      <span style="font-size:10px;font-weight:600;color:var(--t3)">Staff member</span>
+      <span style="font-size:10px;font-weight:600;color:var(--t3)">Start</span>
+      <span style="font-size:10px;font-weight:600;color:var(--t3)">End</span>
+      <span style="font-size:10px;font-weight:600;color:var(--t3)">Break</span>
+      <span></span>
     </div>
-    <div id="tmpl-apply">
-      <div class="fr"><label>Select template</label><select id="tmpl-select"></select></div>
-      <div class="fr"><label>Apply to week starting</label><input type="date" id="tmpl-week"></div>
-      <div id="tmpl-preview" style="margin-top:10px"></div>
-      <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
-        <button class="btn" onclick="CM('m-template')">Cancel</button>
-        <button class="btn btn-primary" onclick="applyTemplate()">Apply template</button>
-      </div>
+    <div id="tmpl-shift-list" style="margin-bottom:10px;max-height:340px;overflow-y:auto"></div>
+    <button class="btn btn-sm" onclick="addTemplateShiftRow()">+ Add shift row</button>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="CM('m-template')">Cancel</button>
+      <button class="btn btn-primary" id="tmpl-save-btn" onclick="saveTemplate()">Save template</button>
     </div>
-      <div id="tmpl-create" style="display:none">
-      <div class="fr"><label>Template name</label><input type="text" id="tmpl-name" placeholder="e.g. Standard week, Weekend crew"></div>
-        <button class="btn btn-sm" style="margin-bottom:10px;background:var(--tl);color:var(--teal);border-color:#9de0ca" onclick="autoGenTemplate()"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Auto-generate from contracted hours</button>
-        <p style="font-size:11px;color:var(--t2);margin-bottom:6px">Add shifts by day of week. Break is in minutes.</p>
-        <div style="display:grid;grid-template-columns:80px 1fr 70px 70px 55px auto;gap:5px;margin-bottom:4px;padding:0 0 4px;border-bottom:1px solid var(--border)">
-        <span style="font-size:10px;font-weight:600;color:var(--t3)">Day</span>
-        <span style="font-size:10px;font-weight:600;color:var(--t3)">Staff member</span>
-        <span style="font-size:10px;font-weight:600;color:var(--t3)">Start</span>
-        <span style="font-size:10px;font-weight:600;color:var(--t3)">End</span>
-        <span style="font-size:10px;font-weight:600;color:var(--t3)">Break</span>
-        <span></span>
-      </div>
-      <div id="tmpl-shift-list" style="margin-bottom:10px"></div>
-      <button class="btn btn-sm" onclick="addTemplateShiftRow()">+ Add shift row</button>
-      <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
-        <button class="btn" onclick="CM('m-template')">Cancel</button>
-        <button class="btn btn-primary" id="tmpl-save-btn" onclick="saveTemplate()">Save template</button>
-      </div>
-    </div>
-    <div id="tmpl-manage" style="display:none">
-      <div id="tmpl-list"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="m-template-apply">
+  <div class="modal">
+    <div class="mh"><h2>Apply template</h2><button class="xbtn" onclick="CM('m-template-apply')">×</button></div>
+    <div id="tmpla-name" style="font-weight:600;font-size:13px;margin-bottom:6px"></div>
+    <div class="fr"><label>Apply to week starting</label><input type="date" id="tmpla-week"></div>
+    <div id="tmpla-preview" style="margin-top:6px;max-height:260px;overflow-y:auto"></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="CM('m-template-apply')">Cancel</button>
+      <button class="btn btn-primary" onclick="applyTemplateFromPage()">Apply template</button>
     </div>
   </div>
 </div>
@@ -2874,7 +2881,7 @@ function SP(p){
   const navEl=document.getElementById('nav-'+p);
   if(pgEl) pgEl.classList.add('active');
   if(navEl) navEl.classList.add('active');
-  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',announcements:'Announcements',chat:'Chat',settings:'Settings'}[p]||p;
+  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',templates:'Templates',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',announcements:'Announcements',chat:'Chat',settings:'Settings'}[p]||p;
   if(!currentWeekStart) initWeek(new Date());
   // Refresh from server for data-heavy pages, then render
   if(p==='dashboard'){
@@ -2883,6 +2890,9 @@ function SP(p){
     });
   }
   else if(p==='roster'){renderRoster();setTimeout(renderRosterAlerts,100);}
+  else if(p==='templates'){
+    DB.refresh(['rosterTemplates','staff'],function(){ renderTemplatesPage(); });
+  }
   else if(p==='staff') renderStaff();
   else if(p==='leave'){
     DB.refresh(['leaveRequests','sickDays','medCerts','shifts'],function(){
@@ -3107,16 +3117,21 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs){
     const availabilityConflict=!isShiftWithinAvailability(emp,dname,s.start,s.end);
     const availabilityBadge=availabilityConflict?`<span class="chip chip-unavail chip-small" style="margin-top:2px">Outside availability</span>`:'';
 
-    content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="${isPartialLeave ? `openPartialLeaveModal('${s.empId}','${s.date}','${s.id}')` : `openShiftPopup(event,'${s.id}')`}">
+    const isSelected = bulkShiftMode && selectedShiftIds.has(s.id);
+    const chipClickAction = bulkShiftMode
+      ? `toggleShiftSelected('${s.id}')`
+      : (isPartialLeave ? `openPartialLeaveModal('${s.empId}','${s.date}','${s.id}')` : `openShiftPopup(event,'${s.id}')`);
 
-      <span class="chip ${chipClass}" style="width:100%;justify-content:center;gap:5px" title="${s.published?'Published — click to manage':'Draft (unpublished) — click to manage'}">
+    content+=`<div style="display:flex;flex-direction:column;align-items:center;gap:2px;cursor:pointer" onclick="${chipClickAction}">
+
+      <span class="chip ${chipClass}" style="width:100%;justify-content:center;gap:5px;${isSelected?'outline:2px solid var(--purple);outline-offset:1px;background:var(--pl)':''}" title="${bulkShiftMode ? (isSelected?'Selected — click to deselect':'Click to select') : (s.published?'Published — click to manage':'Draft (unpublished) — click to manage')}">
 
         ${bulkShiftMode ? `
           <input
             type="checkbox"
-            ${selectedShiftIds.has(s.id) ? 'checked' : ''}
-            onclick="event.stopPropagation();toggleShiftSelected('${s.id}', this.checked)"
-            style="width:12px;height:12px">
+            ${isSelected ? 'checked' : ''}
+            onclick="event.stopPropagation();toggleShiftSelected('${s.id}')"
+            style="width:15px;height:15px;accent-color:var(--purple);cursor:pointer">
         ` : ''}
 
         ${chipText}
@@ -4243,14 +4258,24 @@ async function deleteShift() {
   selectedShiftIds.clear();
 
   const btn = document.getElementById('bulk-delete-btn');
-  if(btn) btn.style.display = bulkShiftMode ? 'inline-flex' : 'none';
+  if(btn){ btn.style.display = bulkShiftMode ? 'inline-flex' : 'none'; btn.textContent = 'Delete selected'; }
+
+  const selBtn = document.getElementById('bulk-select-btn');
+  if(selBtn){
+    selBtn.classList.toggle('btn-primary', bulkShiftMode);
+    selBtn.textContent = bulkShiftMode ? '✓ Selecting' : 'Select';
+  }
 
   renderRoster();
 }
 
-function toggleShiftSelected(shiftId, checked){
-  if(checked) selectedShiftIds.add(shiftId);
-  else selectedShiftIds.delete(shiftId);
+// Toggles one shift in/out of the bulk-selection set. Called both from the
+// checkbox itself and from clicking anywhere on the shift chip while in
+// select mode — previously only the tiny 12px checkbox was clickable, so
+// hitting the rest of the chip opened the shift popup instead of (de)selecting it.
+function toggleShiftSelected(shiftId){
+  if(selectedShiftIds.has(shiftId)) selectedShiftIds.delete(shiftId);
+  else selectedShiftIds.add(shiftId);
 
   const btn = document.getElementById('bulk-delete-btn');
   if(btn){
@@ -4258,6 +4283,8 @@ function toggleShiftSelected(shiftId, checked){
       ? `Delete selected (${selectedShiftIds.size})`
       : 'Delete selected';
   }
+
+  renderRoster();
 }
 
 async function openBulkDeleteShifts(){
@@ -4572,22 +4599,90 @@ function confirmSickQuick(){
     .catch(err => console.error('Sick notification failed:', err));
 }
 
-// TEMPLATES
+// TEMPLATES — dedicated page (list/manage) + a modal for the create/edit form
+// and a small modal for applying a template to a specific week.
 let editingTemplateId = null;
+let applyingTemplateId = null;
+
+function renderTemplatesPage(){
+  const el = document.getElementById('templates-list');
+  if(!el) return;
+  const tmpls = DB.get('rosterTemplates') || [];
+  const staff = DB.get('staff') || [];
+
+  el.innerHTML = tmpls.length ? tmpls.map(t => {
+    const dayCounts = [0,0,0,0,0,0,0];
+    (t.shifts||[]).forEach(s => { if(dayCounts[s.dayOfWeek]!==undefined) dayCounts[s.dayOfWeek]++; });
+    const dayChips = DAYS.map((d,i) => dayCounts[i]
+      ? `<span class="badge bp" style="font-size:9px">${d} ${dayCounts[i]}</span>`
+      : `<span class="badge" style="font-size:9px;background:var(--s2);color:var(--t3)">${d}</span>`
+    ).join(' ');
+    return `<div class="card" style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <div>
+          <strong style="font-size:14px">${escHTML(t.name)}</strong>
+          <span style="color:var(--t2);margin-left:8px;font-size:11px">${(t.shifts||[]).length} shift${(t.shifts||[]).length!==1?'s':''}</span>
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">
+          <button class="btn btn-sm btn-primary" onclick="openApplyTemplateModal('${t.id}')">Apply to week</button>
+          <button class="btn btn-sm" onclick="openEditTemplateModal('${t.id}')">Edit</button>
+          <button class="btn btn-sm" onclick="duplicateTemplate('${t.id}')">Duplicate</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteTemplate('${t.id}')">Delete</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">${dayChips}</div>
+      <details>
+        <summary style="cursor:pointer;font-size:11px;color:var(--t2)">Show all shifts</summary>
+        <div style="border-top:1px solid var(--border);padding-top:6px;margin-top:6px">
+          ${(t.shifts||[]).slice().sort((a,b)=>a.dayOfWeek-b.dayOfWeek).map(s=>{
+            const e=staff.find(x=>x.id===s.empId);
+            return `<div style="font-size:11px;color:var(--t2);padding:2px 0">${DAYS[s.dayOfWeek]} · ${e?e.first+' '+e.last:'Unknown staff'} · ${s.start}–${s.end} · ${s.breakMin||30}m break</div>`;
+          }).join('') || '<div style="font-size:11px;color:var(--t3)">No shifts in this template.</div>'}
+        </div>
+      </details>
+    </div>`;
+  }).join('') : `<div class="card" style="text-align:center;padding:30px 20px;color:var(--t2)">
+    <p style="margin-bottom:12px">No templates yet.</p>
+    <button class="btn btn-primary btn-sm" onclick="openNewTemplateModal()">+ New template</button>
+  </div>`;
+}
+
+// ── Create / edit form (modal) ──────────────────────────────────
+function openNewTemplateModal(){
+  editingTemplateId = null;
+  document.getElementById('tmpl-modal-title').textContent = 'New template';
+  document.getElementById('tmpl-name').value = '';
+  document.getElementById('tmpl-shift-list').innerHTML = '';
+  document.getElementById('tmpl-save-btn').textContent = 'Save template';
+  OM('m-template');
+}
+
+function openEditTemplateModal(id){
+  const tmpls = DB.get('rosterTemplates') || [];
+  const t = tmpls.find(x => x.id === id);
+  if(!t) return;
+  editingTemplateId = id;
+  document.getElementById('tmpl-modal-title').textContent = 'Edit template';
+  document.getElementById('tmpl-name').value = t.name;
+  document.getElementById('tmpl-shift-list').innerHTML = '';
+  (t.shifts||[]).forEach(s => addTemplateShiftRow(s.dayOfWeek, s.empId, s.start, s.end, s.breakMin));
+  document.getElementById('tmpl-save-btn').textContent = 'Update template';
+  OM('m-template');
+}
+
+// The main ask: build a full week's template straight from every staff
+// member's contracted hours, instead of adding shift rows one at a time.
 function autoGenTemplate() {
   const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
   const days = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  
-  // Clear existing rows
+
   document.getElementById('tmpl-shift-list').innerHTML = '';
-  
+
   let count = 0;
   days.forEach((day, dayIndex) => {
     staff.forEach(emp => {
-      // Check per-day contract data
       const pd = emp.contractPerDay && emp.contractPerDay[day];
       if (!pd || !pd.on) return; // skip if not contracted this day
-      
       addTemplateShiftRow(dayIndex, emp.id, pd.start||'09:00', pd.end||'17:00', pd.break||30);
       count++;
     });
@@ -4598,52 +4693,99 @@ function autoGenTemplate() {
     return;
   }
 
-  // Set a default name
   if (!document.getElementById('tmpl-name').value) {
     document.getElementById('tmpl-name').value = 'Standard week';
   }
 
   alert(`✓ Generated ${count} shifts from contracted hours. Review and adjust as needed, then save.`);
 }
-function openTemplateModal(){
-  editingTemplateId = null;
-  popTemplateSelect();
-  document.getElementById('tmpl-week').value=FD(currentWeekStart);
-  document.getElementById('tmpl-shift-list').innerHTML='';
-  document.getElementById('tmpl-name').value='';
-  OM('m-template');
+
+function addTemplateShiftRow(dayVal, empVal, startVal, endVal, breakVal){
+  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const div=document.createElement('div');
+  div.style.cssText='display:grid;grid-template-columns:80px 1fr 70px 70px 55px auto;gap:5px;align-items:center;margin-bottom:6px;padding:6px;background:var(--s2);border-radius:var(--rsm)';
+  div.innerHTML=`
+    <select style="font-size:11px">${DAYS.map((d,i)=>`<option value="${i}" ${i===(dayVal||0)?'selected':''}>${d}</option>`).join('')}</select>
+    <select style="font-size:11px">${staff.map(s=>`<option value="${s.id}" ${s.id===empVal?'selected':''}>${s.first} ${s.last}</option>`).join('')}</select>
+    <input type="time" value="${startVal||'09:00'}" style="font-size:11px">
+    <input type="time" value="${endVal||'17:00'}" style="font-size:11px">
+    <input type="number" value="${breakVal||30}" min="0" max="120" placeholder="Brk" style="font-size:11px" title="Break minutes">
+    <button onclick="this.closest('div').remove()" style="color:var(--rd);font-size:16px;cursor:pointer;border:none;background:none;line-height:1;flex-shrink:0">×</button>`;
+  document.getElementById('tmpl-shift-list').appendChild(div);
 }
-function tmplTab(t,el){
-  document.querySelectorAll('#m-template .tab').forEach(x=>x.classList.remove('active'));el.classList.add('active');
-  ['apply','create','manage'].forEach(x=>document.getElementById('tmpl-'+x).style.display=x===t?'block':'none');
-  if(t==='manage') renderTemplateMgmt();
-  if(t==='create'&&!editingTemplateId){
-    // Reset form when switching to create tab fresh
-    document.getElementById('tmpl-name').value='';
-    document.getElementById('tmpl-shift-list').innerHTML='';
-    document.getElementById('tmpl-save-btn').textContent='Save template';
-    editingTemplateId=null;
+
+async function saveTemplate(){
+  const name=document.getElementById('tmpl-name').value.trim();
+  if(!name){alert('Template name required.');return;}
+  const rows=document.getElementById('tmpl-shift-list').querySelectorAll('div');
+  if(!rows.length){alert('Add at least one shift row (or generate from contracted hours).');return;}
+  const shifts=[];
+  rows.forEach(r=>{
+    const sels=r.querySelectorAll('select');
+    const inps=r.querySelectorAll('input');
+    if(sels.length>=2&&inps.length>=2){
+      shifts.push({dayOfWeek:parseInt(sels[0].value),empId:sels[1].value,start:inps[0].value,end:inps[1].value,breakMin:parseInt(inps[2]?.value)||30});
+    }
+  });
+  const tmpls=DB.get('rosterTemplates')||[];
+  const wasEditing=!!editingTemplateId;
+  if(editingTemplateId){
+    const idx=tmpls.findIndex(t=>t.id===editingTemplateId);
+    if(idx>=0) tmpls[idx]={...tmpls[idx],name,shifts};
+  } else {
+    tmpls.push({id:'t'+Date.now(),name,shifts});
   }
+  await DB.set('rosterTemplates',tmpls);
+  CM('m-template');
+  editingTemplateId=null;
+  renderTemplatesPage();
 }
-function popTemplateSelect(){
-  const tmpls=DB.get('rosterTemplates')||[];
-  document.getElementById('tmpl-select').innerHTML=tmpls.length?tmpls.map(t=>`<option value="${t.id}">${t.name}</option>`).join(''):'<option value="">No templates</option>';
-  document.getElementById('tmpl-select').onchange=previewTemplate;previewTemplate();
+
+async function duplicateTemplate(id){
+  const tmpls = DB.get('rosterTemplates') || [];
+  const t = tmpls.find(x => x.id === id);
+  if(!t) return;
+  tmpls.push({ id: 't'+Date.now(), name: t.name + ' (copy)', shifts: (t.shifts||[]).map(s=>({...s})) });
+  await DB.set('rosterTemplates', tmpls);
+  renderTemplatesPage();
 }
-function previewTemplate(){
-  const id=document.getElementById('tmpl-select').value;
-  const tmpls=DB.get('rosterTemplates')||[];const t=tmpls.find(x=>x.id===id);if(!t){document.getElementById('tmpl-preview').innerHTML='';return;}
-  const staff=DB.get('staff')||[];
-  document.getElementById('tmpl-preview').innerHTML=
-    `<p style="font-size:11px;color:var(--t2);margin-bottom:6px">This template contains ${t.shifts.length} shift(s):</p>`+
-    t.shifts.map(s=>{const e=staff.find(x=>x.id===s.empId);return`<div style="font-size:11px;padding:4px 0;border-bottom:1px solid var(--border)">${DAYS[s.dayOfWeek]} · ${e?e.first+' '+e.last:'?'} · ${s.start}–${s.end}${s.breakMin?` · ${s.breakMin}m break`:''}</div>`;}).join('');
+
+async function deleteTemplate(id){
+  const tmpls = DB.get('rosterTemplates') || [];
+  const t = tmpls.find(x => x.id === id);
+  if(!confirm(`Delete "${t?t.name:'this template'}"? This cannot be undone.`)) return;
+  await DB.set('rosterTemplates', tmpls.filter(x => x.id !== id));
+  renderTemplatesPage();
 }
-async function applyTemplate(){
-  const id=document.getElementById('tmpl-select').value;
-  const weekDate=document.getElementById('tmpl-week').value;
-  const tmpls=DB.get('rosterTemplates')||[];
-  const t=tmpls.find(x=>x.id===id);
-  if(!t||!weekDate){alert('Select template and week.');return;}
+
+// ── Apply-to-week (modal) ────────────────────────────────────────
+function openApplyTemplateModal(id){
+  const t = (DB.get('rosterTemplates')||[]).find(x => x.id === id);
+  if(!t) return;
+  applyingTemplateId = id;
+  document.getElementById('tmpla-name').textContent = t.name;
+  document.getElementById('tmpla-week').value = FD(currentWeekStart || new Date());
+  renderApplyTemplatePreview();
+  document.getElementById('tmpla-week').onchange = renderApplyTemplatePreview;
+  OM('m-template-apply');
+}
+
+function renderApplyTemplatePreview(){
+  const t = (DB.get('rosterTemplates')||[]).find(x => x.id === applyingTemplateId);
+  if(!t) return;
+  const staff = DB.get('staff') || [];
+  document.getElementById('tmpla-preview').innerHTML =
+    `<p style="font-size:11px;color:var(--t2);margin-bottom:6px">This will create ${(t.shifts||[]).length} draft shift(s):</p>` +
+    (t.shifts||[]).slice().sort((a,b)=>a.dayOfWeek-b.dayOfWeek).map(s=>{
+      const e=staff.find(x=>x.id===s.empId);
+      return `<div style="font-size:11px;padding:4px 0;border-bottom:1px solid var(--border)">${DAYS[s.dayOfWeek]} · ${e?e.first+' '+e.last:'Unknown staff'} · ${s.start}–${s.end}${s.breakMin?` · ${s.breakMin}m break`:''}</div>`;
+    }).join('');
+}
+
+async function applyTemplateFromPage(){
+  const t = (DB.get('rosterTemplates')||[]).find(x => x.id === applyingTemplateId);
+  const weekDate = document.getElementById('tmpla-week').value;
+  if(!t||!weekDate){alert('Select a week to apply to.');return;}
 
   const wkStart=new Date(weekDate+'T00:00:00');
   const wkStartStr=FD(wkStart);
@@ -4683,7 +4825,7 @@ async function applyTemplate(){
       published:false,
       status:'draft',
       entryType:'shift',
-      templateId:id
+      templateId:t.id
     };
   }).filter(s=>s.empId&&s.date&&s.start&&s.end);
 
@@ -4692,87 +4834,11 @@ async function applyTemplate(){
   shifts.push(...newShifts);
   await DB.set('shifts',shifts);
   CACHE['rx3_shifts']=shifts;
-  CM('m-template');
+  CM('m-template-apply');
+  applyingTemplateId=null;
   renderRoster();
   renderDashboard();
   alert(`Template "${t.name}" applied as ${newShifts.length} draft shift(s).${removedDrafts>0?' Replaced '+removedDrafts+' existing draft shift(s).':''}`);
-}
-
-function addTemplateShiftRow(dayVal, empVal, startVal, endVal, breakVal){
-  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
-  const div=document.createElement('div');
-  div.style.cssText='display:grid;grid-template-columns:80px 1fr 70px 70px 55px auto;gap:5px;align-items:center;margin-bottom:6px;padding:6px;background:var(--s2);border-radius:var(--rsm)';
-  div.innerHTML=`
-    <select style="font-size:11px">${DAYS.map((d,i)=>`<option value="${i}" ${i===(dayVal||0)?'selected':''}>${d}</option>`).join('')}</select>
-    <select style="font-size:11px">${staff.map(s=>`<option value="${s.id}" ${s.id===empVal?'selected':''}>${s.first} ${s.last}</option>`).join('')}</select>
-    <input type="time" value="${startVal||'09:00'}" style="font-size:11px">
-    <input type="time" value="${endVal||'17:00'}" style="font-size:11px">
-    <input type="number" value="${breakVal||30}" min="0" max="120" placeholder="Brk" style="font-size:11px" title="Break minutes">
-    <button onclick="this.closest('div').remove()" style="color:var(--rd);font-size:16px;cursor:pointer;border:none;background:none;line-height:1;flex-shrink:0">×</button>`;
-  document.getElementById('tmpl-shift-list').appendChild(div);
-}
-function saveTemplate(){
-  const name=document.getElementById('tmpl-name').value.trim();
-  if(!name){alert('Template name required.');return;}
-  const rows=document.getElementById('tmpl-shift-list').querySelectorAll('div');
-  if(!rows.length){alert('Add at least one shift row.');return;}
-  const shifts=[];
-  rows.forEach(r=>{
-    const sels=r.querySelectorAll('select');
-    const inps=r.querySelectorAll('input');
-    if(sels.length>=2&&inps.length>=2){
-      shifts.push({dayOfWeek:parseInt(sels[0].value),empId:sels[1].value,start:inps[0].value,end:inps[1].value,breakMin:parseInt(inps[2]?.value)||30});
-    }
-  });
-  const tmpls=DB.get('rosterTemplates')||[];
-  const wasEditing=!!editingTemplateId;
-  if(editingTemplateId){
-    const idx=tmpls.findIndex(t=>t.id===editingTemplateId);
-    if(idx>=0) tmpls[idx]={...tmpls[idx],name,shifts};
-  } else {
-    tmpls.push({id:'t'+Date.now(),name,shifts});
-  }
-  DB.set('rosterTemplates',tmpls);
-  CM('m-template');
-  editingTemplateId=null;
-  alert(`Template "${name}" ${wasEditing?'updated':'saved'}!`);
-}
-function editTemplate(id){
-  const tmpls=DB.get('rosterTemplates')||[];
-  const t=tmpls.find(x=>x.id===id);if(!t)return;
-  editingTemplateId=id;
-  // Switch to create tab
-  const createTab=document.querySelector('#m-template .tab:nth-child(2)');
-  if(createTab) tmplTab('create',createTab);
-  document.getElementById('tmpl-name').value=t.name;
-  document.getElementById('tmpl-shift-list').innerHTML='';
-  t.shifts.forEach(s=>addTemplateShiftRow(s.dayOfWeek,s.empId,s.start,s.end,s.breakMin));
-  document.getElementById('tmpl-save-btn').textContent='Update template';
-}
-function renderTemplateMgmt(){
-  const tmpls=DB.get('rosterTemplates')||[];
-  const staff=DB.get('staff')||[];
-  document.getElementById('tmpl-list').innerHTML=tmpls.length?tmpls.map(t=>`
-    <div style="border:1px solid var(--border);border-radius:var(--rsm);padding:10px;margin-bottom:8px;background:var(--surface)">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div>
-          <strong style="font-size:13px">${t.name}</strong>
-          <span style="color:var(--t2);margin-left:8px;font-size:11px">${t.shifts.length} shift${t.shifts.length!==1?'s':''}</span>
-        </div>
-        <div style="display:flex;gap:5px">
-          <button class="btn btn-sm btn-primary" onclick="editTemplate('${t.id}')">Edit</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteTemplate('${t.id}')">Delete</button>
-        </div>
-      </div>
-      <div style="border-top:1px solid var(--border);padding-top:6px">
-        ${t.shifts.map(s=>{const e=staff.find(x=>x.id===s.empId);return`<div style="font-size:11px;color:var(--t2);padding:2px 0">${DAYS[s.dayOfWeek]} · ${e?e.first+' '+e.last:'?'} · ${s.start}–${s.end} · ${s.breakMin||30}m break</div>`;}).join('')}
-      </div>
-    </div>`).join(''):'<p style="color:var(--t2);font-size:12px">No templates saved yet.</p>';
-}
-function deleteTemplate(id){
-  if(!confirm('Delete this template? This cannot be undone.'))return;
-  DB.set('rosterTemplates',(DB.get('rosterTemplates')||[]).filter(t=>t.id!==id));
-  renderTemplateMgmt();
 }
 
 // OT TRACKER

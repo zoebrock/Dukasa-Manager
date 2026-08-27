@@ -1228,6 +1228,13 @@ function isPublishedShift(shift){
         </div>
       </div>
       <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
+
+      <div class="settings-s" style="margin-top:24px">
+        <h3>Message templates</h3>
+        <p style="font-size:11px;color:var(--t2);margin-bottom:12px">Edit the wording sent by SMS for OT, leave, roster, announcement and chat notifications. Changes apply immediately to new messages — nothing to redeploy. Use the tokens listed under each box; they're replaced automatically when a message is sent. Email wording is set separately (see note below) and isn't covered by this editor yet.</p>
+        <div id="sms-template-list"></div>
+        <button class="btn btn-primary btn-sm" onclick="saveSmsTemplates()">Save message templates</button>
+      </div>
     </div>
   </div>
 </div>
@@ -6489,6 +6496,33 @@ async function saveLeaveRequest(){
     renderDashboard();
     if(typeof renderCalendar === 'function') renderCalendar();
     if(typeof renderTS === 'function' && document.getElementById('pg-timesheets')?.classList.contains('active')) renderTS();
+
+    // Approve/decline made via this direct edit form reuses the same wording
+    // as the Review & Process flow; any other change (dates, type, still
+    // pending) sends the more general "updated" text.
+    if(status === 'approved' || status === 'declined'){
+      notify('leave_decision', {
+        sendToStaff: true,
+        ...staffPayload(empId),
+        decision: status,
+        approved: status === 'approved',
+        type,
+        from,
+        to,
+        notes,
+        denialReason: status === 'declined' ? (row.denialReason || '') : ''
+      });
+    } else {
+      notify('leave_updated', {
+        sendToStaff: true,
+        ...staffPayload(empId),
+        type,
+        from,
+        to,
+        notes,
+        status
+      });
+    }
   } catch(err) {
     console.error('Save leave failed:', err);
     alert('Could not save leave: ' + (err.message || err));
@@ -8657,6 +8691,53 @@ function loadSettings(){
   if(s.managerNotifyPhone) document.getElementById('set-mgr-phone').value=s.managerNotifyPhone;
   if(s.managerEmail) document.getElementById('set-mgr-email').value=s.managerEmail;
   renderRolesSettings();
+  renderSmsTemplateEditor_();
+}
+// SP('settings') calls renderSettings() to refresh the page on nav, but that
+// function was never defined anywhere — loadSettings() is what actually
+// populates the fields, so alias it rather than every Settings-page visit
+// throwing a silent console error.
+function renderSettings(){ loadSettings(); }
+
+function renderSmsTemplateEditor_(){
+  const el = document.getElementById('sms-template-list');
+  if(!el) return;
+  const templates = getSmsTemplates();
+  el.innerHTML = Object.keys(DEFAULT_SMS_TEMPLATES).map(key => `
+    <div style="border:1px solid var(--border);border-radius:var(--rsm);padding:10px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+        <label style="font-size:12px;font-weight:600">${escHTML(SMS_TEMPLATE_LABELS[key]||key)}</label>
+        <button type="button" class="btn btn-xs" onclick="resetSmsTemplate_('${key}')">Reset to default</button>
+      </div>
+      <textarea class="sms-tmpl-input" data-key="${key}" rows="3" style="width:100%;font-family:inherit;font-size:12px;padding:8px;border:1px solid var(--border2);border-radius:var(--rsm);resize:vertical">${escHTML(templates[key])}</textarea>
+      <div style="font-size:10px;color:var(--t3);margin-top:4px">Tokens: ${(SMS_TEMPLATE_TOKENS[key]||[]).map(t=>`{{${t}}}`).join(', ')}</div>
+    </div>
+  `).join('');
+}
+
+function resetSmsTemplate_(key){
+  const ta = document.querySelector(`.sms-tmpl-input[data-key="${key}"]`);
+  if(ta) ta.value = DEFAULT_SMS_TEMPLATES[key];
+}
+
+async function saveSmsTemplates(){
+  const settings = DB.get('settings') || {};
+  const custom = {};
+  document.querySelectorAll('.sms-tmpl-input').forEach(ta => {
+    const key = ta.dataset.key;
+    const val = ta.value;
+    // Only store an override when it actually differs from the default, so
+    // future default-wording improvements still reach anyone who hasn't
+    // customised that particular message.
+    if(val !== DEFAULT_SMS_TEMPLATES[key]) custom[key] = val;
+  });
+  settings.smsTemplates = custom;
+  try {
+    await DB.set('settings', settings);
+    toast('Message templates saved.', 'success');
+  } catch(e) {
+    toast('Could not save templates: ' + e.message, 'error');
+  }
 }
 
 // Rough hex equivalents of the original fixed badge classes, used only as the
@@ -9012,7 +9093,9 @@ const SMS_NOTIFY_TYPES = new Set([
   'manager_ot_request',
   'ot_decision',
   'announcement',
-  'staff_late_warning'
+  'staff_late_warning',
+  'leave_decision',
+  'leave_updated'
 ]);
 
 function normalisePhoneForSMS(phone){
@@ -9035,22 +9118,116 @@ function fmt12h(t){
   return `${h12}${m?':'+String(m).padStart(2,'0'):''}${period}`;
 }
 
+// ── Editable message templates ──────────────────────────────────
+// The wording below is the factory default — Settings > Message templates
+// lets a manager override any of these (stored in settings.smsTemplates,
+// keyed the same as here) without touching code. {{token}} placeholders are
+// substituted at send time; SMS_TEMPLATE_TOKENS lists what's available per
+// message so the Settings UI can show a hint under each box.
+const DEFAULT_SMS_TEMPLATES = {
+  roster_published: `Hi {{first_name}}, your roster for {{week_label}} has been published. Check the Staff Portal for your shifts: {{link}}`,
+  manager_ot_request: `Hey {{first_name}}! There is a new OT request - {{date_time}} - awaiting your approval. Please confirm your availability via the Staff Portal: {{link}} Thanks!`,
+  ot_decision: `Hi {{first_name}}, your overtime request for {{date_time}} was {{decision}}. Check the Staff Portal for details: {{link}}`,
+  announcement: `Announcement: {{title}}{{date_suffix}}{{location_suffix}}. Check the Staff Portal for details: {{link}}`,
+  staff_late_warning: `Hi {{first_name}}, please check your email for a note from management regarding your recent punctuality record. Staff Portal: {{link}}`,
+  leave_decision_approved: `Hey {{first_name}}! Your {{leave_type}} request for {{date_range}} has been approved ✅. View it in the Staff Portal: {{link}}`,
+  leave_decision_declined: `Hey {{first_name}}, your {{leave_type}} request for {{date_range}} was declined.{{reason_suffix}} Please contact your manager if you have questions. {{link}}`,
+  leave_updated: `Hey {{first_name}}, your {{leave_type}} request has been updated by management — now {{date_range}}{{status_suffix}}. View details in the Staff Portal: {{link}}`,
+  chat_message: `Hey {{first_name}}! You have a new Dukasa message. Please make sure you acknowledge and reply ASAP. {{link}}`,
+  chat_manager_notify: `Hey {{manager_first_name}}! New message from {{sender_name}} in {{chat_label}} — Dukasa Manager Portal.`
+};
+
+const SMS_TEMPLATE_LABELS = {
+  roster_published: 'Roster published',
+  manager_ot_request: 'New OT request (needs staff confirmation)',
+  ot_decision: 'OT request approved / declined',
+  announcement: 'New announcement',
+  staff_late_warning: 'Late-punctuality warning',
+  leave_decision_approved: 'Leave request approved',
+  leave_decision_declined: 'Leave request declined',
+  leave_updated: 'Leave request updated (still pending)',
+  chat_message: 'Chat: direct message or @mention',
+  chat_manager_notify: "Chat: notify manager (Zoe) of every message"
+};
+
+const SMS_TEMPLATE_TOKENS = {
+  roster_published: ['first_name','week_label','link'],
+  manager_ot_request: ['first_name','date_time','link'],
+  ot_decision: ['first_name','date_time','decision','link'],
+  announcement: ['title','date_suffix','location_suffix','link'],
+  staff_late_warning: ['first_name','link'],
+  leave_decision_approved: ['first_name','leave_type','date_range','link'],
+  leave_decision_declined: ['first_name','leave_type','date_range','reason_suffix','link'],
+  leave_updated: ['first_name','leave_type','date_range','status_suffix','link'],
+  chat_message: ['first_name','link'],
+  chat_manager_notify: ['manager_first_name','sender_name','chat_label']
+};
+
+function getSmsTemplates(){
+  const custom = (DB.get('settings')||{}).smsTemplates || {};
+  return { ...DEFAULT_SMS_TEMPLATES, ...custom };
+}
+
+function renderSmsTemplate_(str, tokens){
+  return String(str||'').replace(/\{\{(\w+)\}\}/g, (m,key) => (tokens[key]!==undefined && tokens[key]!==null) ? tokens[key] : '');
+}
+
 function smsMessageForType(type, payload){
   const name = payload.empFirst || payload.empName || 'there';
   const dateLabel = payload.date ? FDS(payload.date) : '';
   const timeLabel = payload.start && payload.end ? `${fmt12h(payload.start)} - ${fmt12h(payload.end)}` : '';
   const dateTimeLabel = [dateLabel, timeLabel].filter(Boolean).join(', ');
+  const templates = getSmsTemplates();
+
   switch(type){
     case 'roster_published':
-      return `Hi ${name}, your roster for ${payload.weekLabel || (payload.weekStart+' to '+payload.weekEnd)} has been published. Check the Staff Portal for your shifts: ${STAFF_PORTAL_URL}`;
+      return renderSmsTemplate_(templates.roster_published, {
+        first_name: name,
+        week_label: payload.weekLabel || (payload.weekStart+' to '+payload.weekEnd),
+        link: STAFF_PORTAL_URL
+      });
     case 'manager_ot_request':
-      return `Hey ${name}! There is a new OT request - ${dateTimeLabel} - awaiting your approval. Please confirm your availability via the Staff Portal: ${STAFF_PORTAL_URL} Thanks!`;
+      return renderSmsTemplate_(templates.manager_ot_request, {
+        first_name: name, date_time: dateTimeLabel, link: STAFF_PORTAL_URL
+      });
     case 'ot_decision':
-      return `Hi ${name}, your overtime request for ${dateTimeLabel} was ${payload.decision === 'approved' ? 'approved' : 'declined'}. Check the Staff Portal for details: ${STAFF_PORTAL_URL}`;
+      return renderSmsTemplate_(templates.ot_decision, {
+        first_name: name, date_time: dateTimeLabel,
+        decision: payload.decision === 'approved' ? 'approved' : 'declined',
+        link: STAFF_PORTAL_URL
+      });
     case 'announcement':
-      return `Announcement: ${payload.title}${payload.date ? ' — ' + payload.date : ''}${payload.location ? ' @ ' + payload.location : ''}. Check the Staff Portal for details: ${STAFF_PORTAL_URL}`;
+      return renderSmsTemplate_(templates.announcement, {
+        title: payload.title || '',
+        date_suffix: payload.date ? ' — ' + payload.date : '',
+        location_suffix: payload.location ? ' @ ' + payload.location : '',
+        link: STAFF_PORTAL_URL
+      });
     case 'staff_late_warning':
-      return `Hi ${name}, please check your email for a note from management regarding your recent punctuality record. Staff Portal: ${STAFF_PORTAL_URL}`;
+      return renderSmsTemplate_(templates.staff_late_warning, { first_name: name, link: STAFF_PORTAL_URL });
+    case 'leave_decision': {
+      const leaveLabel = payload.type || 'leave';
+      const rangeLabel = payload.from ? (payload.to && payload.to!==payload.from ? `${FDS(payload.from)}–${FDS(payload.to)}` : FDS(payload.from)) : '';
+      if(payload.decision === 'approved'){
+        return renderSmsTemplate_(templates.leave_decision_approved, {
+          first_name: name, leave_type: leaveLabel, date_range: rangeLabel, link: STAFF_PORTAL_URL
+        });
+      }
+      return renderSmsTemplate_(templates.leave_decision_declined, {
+        first_name: name, leave_type: leaveLabel, date_range: rangeLabel,
+        reason_suffix: payload.denialReason ? ` Reason: ${payload.denialReason}.` : '',
+        link: STAFF_PORTAL_URL
+      });
+    }
+    case 'leave_updated': {
+      const leaveLabel = payload.type || 'leave';
+      const rangeLabel = payload.from ? (payload.to && payload.to!==payload.from ? `${FDS(payload.from)}–${FDS(payload.to)}` : FDS(payload.from)) : '';
+      return renderSmsTemplate_(templates.leave_updated, {
+        first_name: name, leave_type: leaveLabel, date_range: rangeLabel,
+        status_suffix: payload.status ? ` (${payload.status})` : '',
+        link: STAFF_PORTAL_URL
+      });
+    }
     default:
       return payload.message || `You have a new notification in RosterRx — check the Staff Portal: ${STAFF_PORTAL_URL}`;
   }

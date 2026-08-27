@@ -863,10 +863,15 @@ function isPublishedShift(shift){
         <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
         Timesheets
       </button>
+      <div style="padding:12px 12px 3px;font-size:9px;font-weight:700;letter-spacing:.06em;color:var(--t3);text-transform:uppercase">Announcements</div>
       <button class="ni" onclick="SP('announcements')" id="nav-announcements">
         <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 17H2a3 3 0 0 0 3-3V9a7 7 0 0 1 14 0v5a3 3 0 0 0 3 3z"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-        Announcements
+        General
         <span id="ann-badge" class="badge br" style="margin-left:auto;display:none;font-size:10px;padding:1px 6px">0</span>
+      </button>
+      <button class="ni" onclick="SP('teammeetings')" id="nav-teammeetings">
+        <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/><line x1="9" y1="11" x2="15" y2="11"/></svg>
+        Team Meetings
       </button>
       <button class="ni" onclick="SP('chat')" id="nav-chat">
         <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -1170,6 +1175,15 @@ function isPublishedShift(shift){
       </div>
 
       <div id="ann-list"></div>
+    </div>
+
+    <!-- TEAM MEETINGS -->
+    <div class="pg" id="pg-team-meetings">
+      <div class="ph">
+        <h2>Team Meetings</h2>
+        <button class="btn btn-primary btn-sm" onclick="openNewMeetingNoteModal()">+ Upload meeting notes</button>
+      </div>
+      <div id="meeting-notes-list"></div>
     </div>
 
     <!-- CHAT -->
@@ -2888,7 +2902,7 @@ function SP(p){
   const navEl=document.getElementById('nav-'+p);
   if(pgEl) pgEl.classList.add('active');
   if(navEl) navEl.classList.add('active');
-  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',templates:'Templates',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',announcements:'Announcements',chat:'Chat',settings:'Settings'}[p]||p;
+  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',templates:'Templates',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',announcements:'Announcements',teammeetings:'Team Meetings',chat:'Chat',settings:'Settings'}[p]||p;
   if(!currentWeekStart) initWeek(new Date());
   // Refresh from server for data-heavy pages, then render
   if(p==='dashboard'){
@@ -2917,6 +2931,9 @@ else if(p==='timesheets'){
 }
 else if(p==='announcements'){
   renderAnnouncements();
+}
+else if(p==='teammeetings'){
+  renderMeetingNotesPage();
 }
 else if(p==='chat'){
   renderChat();
@@ -9998,6 +10015,163 @@ DB.preload(ALL_KEYS, function(){
 });
 document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-overlay.open').forEach(m=>m.classList.remove('open'));});
 
+// ── TEAM MEETINGS ─────────────────────────────────────────────
+// PDFs live in the Supabase Storage "meeting-notes" bucket; metadata (title,
+// summary, who uploaded it, link back to the file) lives in the meeting_notes
+// table. Both need to exist in Supabase before this works — see setup notes.
+async function renderMeetingNotesPage(){
+  const el = document.getElementById('meeting-notes-list');
+  if(!el) return;
+  el.innerHTML = '<p style="color:var(--t2);font-size:12px">Loading…</p>';
+
+  const { data, error } = await supabaseClient
+    .from('meeting_notes')
+    .select('*')
+    .order('meeting_date', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  if(error){
+    el.innerHTML = `<div class="alert ad" style="font-size:12px">Could not load meeting notes: ${escHTML(error.message)}</div>`;
+    return;
+  }
+
+  const notes = data || [];
+  el.innerHTML = notes.length ? notes.map(n => `
+    <div class="card" style="margin-bottom:12px;display:flex;gap:14px;align-items:flex-start">
+      <div style="width:44px;height:44px;border-radius:10px;background:var(--pl);color:var(--purple);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">📄</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <strong style="font-size:14px">${escHTML(n.title)}</strong>
+          <div style="display:flex;gap:6px;flex-shrink:0">
+            <a class="btn btn-sm btn-primary" href="${n.file_url}" target="_blank" rel="noopener">View PDF</a>
+            <button class="btn btn-sm btn-danger" onclick="deleteMeetingNote('${n.id}','${String(n.file_path||'').replace(/'/g,"\\'")}')">Delete</button>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--t3);margin:3px 0 8px">${n.meeting_date?FDS(n.meeting_date):''}${n.meeting_date&&n.uploaded_by?' · ':''}${n.uploaded_by?'Uploaded by '+escHTML(n.uploaded_by):''}</div>
+        ${n.summary ? `<p style="font-size:13px;color:var(--t2);line-height:1.5;white-space:pre-wrap;margin:0">${escHTML(n.summary)}</p>` : ''}
+      </div>
+    </div>`).join('') : `<div class="card" style="text-align:center;padding:34px 20px;color:var(--t2)">
+      <div style="font-size:28px;margin-bottom:8px">📋</div>
+      <p style="margin-bottom:14px">No meeting notes uploaded yet.</p>
+      <button class="btn btn-primary btn-sm" onclick="openNewMeetingNoteModal()">+ Upload meeting notes</button>
+    </div>`;
+}
+
+function openNewMeetingNoteModal(){
+  document.getElementById('mn-title').value = '';
+  document.getElementById('mn-date').value = FD(new Date());
+  document.getElementById('mn-summary').value = '';
+  document.getElementById('mn-file').value = '';
+  document.getElementById('tog-mn-announce').classList.add('on');
+  OM('m-meeting-note');
+}
+
+async function saveMeetingNote(){
+  const title = document.getElementById('mn-title').value.trim();
+  const date = document.getElementById('mn-date').value;
+  const summary = document.getElementById('mn-summary').value.trim();
+  const fileInput = document.getElementById('mn-file');
+  const file = fileInput.files[0];
+  const alsoAnnounce = document.getElementById('tog-mn-announce').classList.contains('on');
+
+  if(!title){ alert('Title is required.'); return; }
+  if(!file){ alert('Please choose a PDF file.'); return; }
+  if(file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')){
+    alert('Please choose a PDF file.'); return;
+  }
+
+  const btn = document.getElementById('mn-save-btn');
+  const progress = document.getElementById('mn-progress');
+  if(btn){ btn.disabled = true; btn.textContent = 'Uploading…'; }
+  if(progress){ progress.style.display = 'block'; progress.textContent = 'Uploading PDF…'; }
+
+  try {
+    const id = 'mn' + Date.now();
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const path = `${id}-${safeName}`;
+
+    const { error: upErr } = await supabaseClient.storage
+      .from('meeting-notes')
+      .upload(path, file, { contentType: 'application/pdf', upsert: false });
+    if(upErr) throw upErr;
+
+    const { data: urlData } = supabaseClient.storage.from('meeting-notes').getPublicUrl(path);
+    const fileUrl = urlData.publicUrl;
+
+    const mgr = getCurrentManager();
+    const row = {
+      id, title,
+      meeting_date: date || null,
+      summary,
+      file_name: file.name,
+      file_url: fileUrl,
+      file_path: path,
+      uploaded_by: mgr.name || 'Manager',
+      created_at: new Date().toISOString()
+    };
+
+    const { error: insErr } = await supabaseClient.from('meeting_notes').insert(row);
+    if(insErr) throw insErr;
+
+    const annTitle = `📋 Meeting notes: ${title}`;
+
+    if(alsoAnnounce){
+      if(progress) progress.textContent = 'Posting announcement…';
+      const anns = DB.get('announcements') || [];
+      anns.push({
+        id: 'ann' + Date.now(),
+        title: annTitle,
+        desc: summary || 'New team meeting notes have been uploaded — check the Team Meetings tab to view.',
+        date: date || FD(new Date()),
+        time: '',
+        location: '',
+        roles: ['All Staff'],
+        staffIds: [],
+        meetingNoteId: id,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      });
+      await DB.set('announcements', anns);
+      if(typeof updateAnnBadge === 'function') updateAnnBadge();
+
+      const staffAll = DB.get('staff') || [];
+      Promise.all(staffAll.map(emp => notify('announcement', {
+        sendToStaff: true,
+        ...staffPayload(emp.id),
+        title: annTitle,
+        message: summary || 'New team meeting notes have been uploaded.',
+        date: date || '',
+        time: '',
+        location: ''
+      }))).catch(err => console.error('Meeting note announcement notify failed:', err));
+    }
+
+    CM('m-meeting-note');
+    renderMeetingNotesPage();
+    if(typeof renderAnnouncements === 'function') renderAnnouncements();
+    toast('Meeting notes uploaded.', 'success');
+  } catch(e) {
+    console.error('Meeting note upload failed:', e);
+    alert('Could not upload meeting notes: ' + (e.message || e));
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = 'Upload'; }
+    if(progress){ progress.style.display = 'none'; }
+  }
+}
+
+async function deleteMeetingNote(id, filePath){
+  if(!confirm('Delete these meeting notes? This removes the PDF and cannot be undone.')) return;
+  try {
+    if(filePath) await supabaseClient.storage.from('meeting-notes').remove([filePath]);
+    const { error } = await supabaseClient.from('meeting_notes').delete().eq('id', id);
+    if(error) throw error;
+    renderMeetingNotesPage();
+    toast('Meeting notes deleted.', 'success');
+  } catch(e) {
+    alert('Could not delete meeting notes: ' + e.message);
+  }
+}
+
 // ── ANNOUNCEMENTS ───────────────────────────────────────────────
 function getAnnRoles(){ return ['All Staff', ...getRoles()]; }
 let editingAnnId = null;
@@ -10195,6 +10369,22 @@ function updateAnnBadge() {
 </script>
 
 <!-- ANNOUNCEMENT MODAL -->
+<div class="modal-overlay" id="m-meeting-note">
+  <div class="modal" style="max-width:480px">
+    <div class="mh"><h2>Upload meeting notes</h2><button class="xbtn" onclick="CM('m-meeting-note')">×</button></div>
+    <div class="fr"><label>Title <span style="color:var(--rd)">*</span></label><input type="text" id="mn-title" placeholder="e.g. Weekly team meeting" maxlength="80"></div>
+    <div class="fr"><label>Meeting date</label><input type="date" id="mn-date"></div>
+    <div class="fr"><label>Short summary / breakdown</label><textarea id="mn-summary" rows="4" placeholder="Key points from the meeting — this shows on the card and, if posted as an announcement, in the announcement itself."></textarea></div>
+    <div class="fr"><label>PDF file <span style="color:var(--rd)">*</span></label><input type="file" id="mn-file" accept="application/pdf"></div>
+    <div class="nr"><span style="font-size:12px">Also post as an announcement</span><button class="toggle on" id="tog-mn-announce" onclick="this.classList.toggle('on')"></button></div>
+    <div id="mn-progress" style="display:none;font-size:12px;color:var(--t2);margin-top:8px"></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="CM('m-meeting-note')">Cancel</button>
+      <button class="btn btn-primary" id="mn-save-btn" onclick="saveMeetingNote()">Upload</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="m-announcement">
   <div class="modal" style="max-width:480px">
     <div class="mh"><h2 id="ann-modal-title">New announcement</h2><button class="xbtn" onclick="CM('m-announcement')">×</button></div>

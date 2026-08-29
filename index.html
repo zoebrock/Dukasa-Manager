@@ -5068,6 +5068,16 @@ async function saveOT(){
 
   CM('m-ot');
 
+  // Editing the time/date on an already-approved OT request needs to resync the
+  // linked roster shift — approveOT() is what merges OT times into `shifts`, and
+  // it's idempotent to call again here (it just re-derives the merged start/end).
+  const wasApproved = editingOTId && existing.approved === true;
+  const timesOrDateChanged = wasApproved && (existing.start !== start || existing.end !== end || existing.date !== fromDate);
+  if (wasApproved && timesOrDateChanged) {
+    await approveOT(editingOTId, { bypassAvailabilityGuard: true });
+    return;
+  }
+
   // If manager has already confirmed availability, these are already approved
   // operationally. Approve each one immediately and push it to the roster.
   if (newRequests[0].requestedBy === 'manager' && availConfirmed) {
@@ -5158,21 +5168,20 @@ if (shiftIdx >= 0) {
   const origStart = s.otOriginalStart || s.start;
   const origEnd = s.otOriginalEnd || s.end;
 
-  const newStart = o.start < origStart ? o.start : origStart;
-  const newEnd = o.end > origEnd ? o.end : origEnd;
-
   const annotations = Array.isArray(s.otAnnotations)
     ? [...s.otAnnotations]
     : [];
 
-  if (!annotations.find(a => a.otId === id)) {
-    annotations.push({
-      otId: id,
-      start: o.start,
-      end: o.end,
-      reason: o.reason || ''
-    });
-  }
+  const newAnnotation = { otId: id, start: o.start, end: o.end, reason: o.reason || '' };
+  const annIdx = annotations.findIndex(a => a.otId === id);
+  if (annIdx >= 0) annotations[annIdx] = newAnnotation;
+  else annotations.push(newAnnotation);
+
+  // Recompute the merged window across the base shift plus every current
+  // annotation (not just this one), so editing an OT's time — including
+  // shrinking it — is correctly reflected even when other OT annotations exist.
+  const newStart = annotations.reduce((min, a) => a.start < min ? a.start : min, origStart);
+  const newEnd = annotations.reduce((max, a) => a.end > max ? a.end : max, origEnd);
 
   shifts[shiftIdx] = {
     ...s,
@@ -5198,7 +5207,28 @@ if (shiftIdx >= 0) {
     return;
   }
 
-} else if (!alreadyHasOTShift) {
+} else if (alreadyHasOTShift) {
+
+  // A standalone OT shift for this otId already exists — this is a resync after
+  // editing an already-approved request's time, not a fresh approval. Update it
+  // in place rather than skipping (which previously left the old time displayed).
+  const standaloneIdx = shifts.findIndex(x => x.isOT && String(x.otId ?? '') === String(id));
+  shifts[standaloneIdx] = {
+    ...shifts[standaloneIdx],
+    date: o.date,
+    start: o.start,
+    end: o.end,
+    notes: 'OT: ' + o.reason,
+    otAnnotations: [{ otId: id, start: o.start, end: o.end, reason: o.reason || '' }]
+  };
+
+  const standaloneSaveResult = await DB.set('shifts', shifts);
+  if (!standaloneSaveResult.ok) {
+    alert('The OT request was updated, but the roster shift could not be updated to reflect the new start/end time. Please retry. Do not assume the roster is correct.');
+    return;
+  }
+
+} else {
 
   const emp = (DB.get('staff') || []).find(s => String(s.id) === oEmpId);
 

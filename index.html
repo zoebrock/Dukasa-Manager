@@ -3288,7 +3288,7 @@ function openShiftPopup(event, shiftId) {
           ?`<button class="shift-popup-btn" onclick="closeShiftPopup();openLeaveFromShift('${s.empId}','${s.date}')">Record as leave</button>`
           :`<button class="shift-popup-btn" onclick="closeShiftPopup();removeLeaveFromShift('${activeLeave.id}')">Remove leave record</button>`
         }
-        ${isPublishedShift(s)?`<button class="shift-popup-btn full" onclick="closeShiftPopup();openAddOTModal(null,'${s.empId}','${s.date}')">Add or manage overtime</button>`:''}
+        ${isPublishedShift(s)?`<button class="shift-popup-btn full" onclick="closeShiftPopup();manageOvertimeForShift('${s.empId}','${s.date}')">Add or manage overtime</button>`:''}
         <button class="shift-popup-btn danger full" onclick="closeShiftPopup();deleteShiftConfirm('${shiftId}')">Delete shift</button>
       </div>
     </div>`;
@@ -4955,6 +4955,17 @@ function renderOT(filter){
   document.getElementById('d-ot-list')&&renderDashboard();
 }
 function filterOT(f,el){document.querySelectorAll('#pg-ot .btn').forEach(b=>b.classList.remove('active-filter'));if(el)el.classList.add('active-filter');renderOT(f);}
+// "Add or manage overtime" on a shift popup needs to open the EXISTING OT
+// request for that employee/date in edit mode when one already exists —
+// otherwise every click creates a brand-new OT request instead of editing
+// the one already merged into the shift, and the shown time never changes.
+function manageOvertimeForShift(empId, date){
+  const existing = (DB.get('otRequests') || [])
+    .filter(o => String(o.empId) === String(empId) && String(o.date) === String(date))
+    .sort((a,b) => (b.approved===true) - (a.approved===true) || (b.submitted||'').localeCompare(a.submitted||''))[0];
+  openAddOTModal(existing ? existing.id : null, empId, date);
+}
+
 function openAddOTModal(id, prefillEmpId, prefillDate){
   editingOTId=id;
   const staff = [...(DB.get('staff') || [])].sort((a,b) =>

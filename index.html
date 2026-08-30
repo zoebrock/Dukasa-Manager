@@ -10146,17 +10146,47 @@ async function renderMeetingNotesPage(){
     return;
   }
 
-  const notes = notesRes.data || [];
+  // Drafts surface first regardless of date — sorted client-side so this still
+  // works before the `status` column migration has been run (an ORDER BY on a
+  // not-yet-existing column would fail the whole query).
+  const notes = (notesRes.data || []).slice().sort((a,b) => (a.status === 'draft' ? 0 : 1) - (b.status === 'draft' ? 0 : 1));
   const acks = acksRes.data || [];
   const comments = commentsRes.data || [];
   const staffAll = DB.get('staff') || [];
 
   el.innerHTML = notes.length ? notes.map(n => {
+    const isDraft = n.status === 'draft';
     const noteRoles = n.roles || ['All Staff'];
     const noteStaffIds = n.staff_ids || [];
     const audience = noteStaffIds.length > 0
       ? staffAll.filter(s => noteStaffIds.includes(s.id))
       : staffAll.filter(s => noteRoles.includes('All Staff') || noteRoles.includes(s.role));
+    const audienceLabel = noteStaffIds.length > 0
+      ? `${audience.length} selected staff member${audience.length===1?'':'s'}`
+      : (noteRoles.includes('All Staff') ? 'All staff' : noteRoles.join(', '));
+
+    if(isDraft){
+      return `
+      <div class="card" style="margin-bottom:12px;display:flex;gap:14px;align-items:flex-start;border:1px dashed var(--border);background:var(--s2)">
+        <div style="width:44px;height:44px;border-radius:10px;background:var(--al);color:var(--ad);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">📝</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:8px">
+              <strong style="font-size:14px">${escHTML(n.title)}</strong>
+              <span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;background:var(--al);color:var(--ad)">DRAFT</span>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0">
+              ${n.file_url ? `<a class="btn btn-sm" href="${n.file_url}" target="_blank" rel="noopener">View PDF</a>` : ''}
+              <button class="btn btn-sm" onclick="openEditMeetingNoteModal('${n.id}')">Edit</button>
+              <button class="btn btn-sm btn-primary" onclick="publishMeetingNote('${n.id}')">Publish now</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteMeetingNote('${n.id}','${String(n.file_path||'').replace(/'/g,"\\'")}')">Delete</button>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--t3);margin:3px 0 8px">${n.meeting_date?FDS(n.meeting_date):''}${n.meeting_date&&n.uploaded_by?' · ':''}${n.uploaded_by?'Saved by '+escHTML(n.uploaded_by):''} · Will notify ${escHTML(audienceLabel)} on publish</div>
+          ${n.summary ? `<p style="font-size:13px;color:var(--t2);line-height:1.5;white-space:pre-wrap;margin:0">${escHTML(n.summary)}</p>` : ''}
+        </div>
+      </div>`;
+    }
 
     const noteAcks = acks.filter(a => String(a.note_id) === String(n.id));
     const ackedIds = new Set(noteAcks.map(a => String(a.staff_id)));
@@ -10167,9 +10197,6 @@ async function renderMeetingNotesPage(){
     const ackListId = 'mn-acklist-' + n.id;
     const commentListId = 'mn-commentlist-' + n.id;
     const noteComments = comments.filter(c => String(c.note_id) === String(n.id));
-    const audienceLabel = noteStaffIds.length > 0
-      ? `${total} selected staff member${total===1?'':'s'}`
-      : (noteRoles.includes('All Staff') ? 'All staff' : noteRoles.join(', '));
 
     return `
     <div class="card" style="margin-bottom:12px;display:flex;gap:14px;align-items:flex-start">
@@ -10179,6 +10206,7 @@ async function renderMeetingNotesPage(){
           <strong style="font-size:14px">${escHTML(n.title)}</strong>
           <div style="display:flex;gap:6px;flex-shrink:0">
             <a class="btn btn-sm btn-primary" href="${n.file_url}" target="_blank" rel="noopener">View PDF</a>
+            <button class="btn btn-sm" onclick="openEditMeetingNoteModal('${n.id}')">Edit</button>
             <button class="btn btn-sm btn-danger" onclick="deleteMeetingNote('${n.id}','${String(n.file_path||'').replace(/'/g,"\\'")}')">Delete</button>
           </div>
         </div>
@@ -10204,29 +10232,64 @@ async function renderMeetingNotesPage(){
     </div>`;
 }
 
+let editingMeetingNoteId = null;
+
+function populateMnAudiencePickers_(existingRoles, existingStaffIds){
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const roles = existingRoles && existingRoles.length ? existingRoles : ['All Staff'];
+  const staffIds = existingStaffIds || [];
+
+  document.getElementById('mn-id-roles').innerHTML = getAnnRoles().map(r => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="mn-role-cb" value="${r}" ${roles.includes(r)?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <span>${r}</span>
+    </label>`).join('');
+
+  const hasStaffIds = staffIds.length > 0;
+  document.getElementById('mn-select-staff-toggle').checked = hasStaffIds;
+  document.getElementById('mn-staff-list').style.display = hasStaffIds ? 'block' : 'none';
+  document.getElementById('mn-staff-list').innerHTML = staff.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="mn-staff-cb" value="${s.id}" ${staffIds.includes(s.id)?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
+    </label>`).join('');
+}
+
 function openNewMeetingNoteModal(){
+  editingMeetingNoteId = null;
+  document.getElementById('mn-modal-title').textContent = 'Upload meeting notes';
   document.getElementById('mn-title').value = '';
   document.getElementById('mn-date').value = FD(new Date());
   document.getElementById('mn-summary').value = '';
   document.getElementById('mn-file').value = '';
+  document.getElementById('mn-file-required').style.display = 'inline';
+  document.getElementById('mn-existing-file-note').style.display = 'none';
+  document.getElementById('mn-draft-btn').style.display = 'inline-flex';
+  document.getElementById('mn-save-btn').textContent = 'Upload & notify';
 
-  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  populateMnAudiencePickers_(['All Staff'], []);
+  OM('m-meeting-note');
+}
 
-  document.getElementById('mn-id-roles').innerHTML = getAnnRoles().map(r => `
-    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
-      <input type="checkbox" class="mn-role-cb" value="${r}" ${r==='All Staff'?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
-      <span>${r}</span>
-    </label>`).join('');
+async function openEditMeetingNoteModal(id){
+  const { data: n, error } = await supabaseClient.from('meeting_notes').select('*').eq('id', id).single();
+  if(error || !n){ alert('Could not load this draft.'); return; }
 
-  document.getElementById('mn-select-staff-toggle').checked = false;
-  document.getElementById('mn-staff-list').style.display = 'none';
-  document.getElementById('mn-staff-list').innerHTML = staff.map(s => `
-    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
-      <input type="checkbox" class="mn-staff-cb" value="${s.id}" style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
-      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
-      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
-    </label>`).join('');
+  editingMeetingNoteId = id;
+  document.getElementById('mn-modal-title').textContent = n.status === 'draft' ? 'Edit draft' : 'Edit meeting notes';
+  document.getElementById('mn-title').value = n.title || '';
+  document.getElementById('mn-date').value = n.meeting_date || '';
+  document.getElementById('mn-summary').value = n.summary || '';
+  document.getElementById('mn-file').value = '';
+  document.getElementById('mn-file-required').style.display = 'none';
+  document.getElementById('mn-existing-file-note').style.display = 'block';
+  // Already-published notes shouldn't be re-notified from the generic save button —
+  // editing one just updates its details. Drafts keep both draft/publish options.
+  document.getElementById('mn-draft-btn').style.display = n.status === 'draft' ? 'inline-flex' : 'none';
+  document.getElementById('mn-save-btn').textContent = n.status === 'draft' ? 'Save draft changes' : 'Save changes';
 
+  populateMnAudiencePickers_(n.roles || ['All Staff'], n.staff_ids || []);
   OM('m-meeting-note');
 }
 
@@ -10238,109 +10301,157 @@ function toggleMnStaffList(cb) {
   }
 }
 
-async function saveMeetingNote(){
+// Shared by "Upload & notify" and "Publish now" (for an existing draft) — posts
+// the linked announcement and notifies the selected audience by email + SMS.
+async function notifyMeetingNoteAudience_(note){
+  const { id, title, summary, date, roles, staffIds } = note;
+  const annTitle = `📋 Meeting notes: ${title}`;
+
+  const anns = DB.get('announcements') || [];
+  anns.push({
+    id: 'ann' + Date.now(),
+    title: annTitle,
+    desc: summary || 'New team meeting notes have been uploaded — check the Team Meetings tab to view.',
+    date: date || FD(new Date()),
+    time: '',
+    location: '',
+    roles,
+    staffIds,
+    meetingNoteId: id,
+    updatedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString()
+  });
+  await DB.set('announcements', anns);
+  if(typeof updateAnnBadge === 'function') updateAnnBadge();
+
+  const staffAll = DB.get('staff') || [];
+  const empIdsToNotify = staffIds.length > 0
+    ? staffIds
+    : staffAll.filter(s => roles.includes('All Staff') || roles.includes(s.role)).map(s => s.id);
+  const recipients = staffAll.filter(emp => empIdsToNotify.includes(emp.id));
+
+  return Promise.all(recipients.map(emp => notify('announcement', {
+    sendToStaff: true,
+    ...staffPayload(emp.id),
+    title: annTitle,
+    message: (summary ? summary + ' ' : '') + 'Please open the Team Meetings tab in the Staff Portal and acknowledge you\'ve read it.',
+    date: date || '',
+    time: '',
+    location: ''
+  }))).catch(err => console.error('Meeting note announcement notify failed:', err));
+}
+
+async function publishMeetingNote(id){
+  const { data: n, error } = await supabaseClient.from('meeting_notes').select('*').eq('id', id).single();
+  if(error || !n){ alert('Could not load this draft.'); return; }
+  if(!confirm(`Publish "${n.title}" now? This notifies the selected audience by email and SMS immediately.`)) return;
+
+  const { error: updErr } = await supabaseClient.from('meeting_notes').update({ status: 'published' }).eq('id', id);
+  if(updErr){ alert('Could not publish: ' + updErr.message); return; }
+
+  await notifyMeetingNoteAudience_({
+    id: n.id, title: n.title, summary: n.summary, date: n.meeting_date,
+    roles: n.roles || ['All Staff'], staffIds: n.staff_ids || []
+  });
+
+  renderMeetingNotesPage();
+  toast('Meeting notes published and staff notified.', 'success');
+}
+
+async function saveMeetingNote(asDraft){
   const title = document.getElementById('mn-title').value.trim();
   const date = document.getElementById('mn-date').value;
   const summary = document.getElementById('mn-summary').value.trim();
   const fileInput = document.getElementById('mn-file');
   const file = fileInput.files[0];
+  const isEdit = !!editingMeetingNoteId;
 
   const roles    = [...document.querySelectorAll('.mn-role-cb:checked')].map(cb => cb.value);
   const useStaff = document.getElementById('mn-select-staff-toggle').checked;
   const staffIds = useStaff ? [...document.querySelectorAll('.mn-staff-cb:checked')].map(cb => cb.value) : [];
 
   if(!title){ alert('Title is required.'); return; }
-  if(!file){ alert('Please choose a PDF file.'); return; }
-  if(file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')){
+  if(!file && !isEdit){ alert('Please choose a PDF file.'); return; }
+  if(file && file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')){
     alert('Please choose a PDF file.'); return;
   }
   if(!roles.length && !staffIds.length){ alert('Select at least one department or staff member.'); return; }
   if(useStaff && !staffIds.length){ alert('Please select at least one staff member, or untick "Notify specific staff members".'); return; }
 
-  const staffAll = DB.get('staff') || [];
-  const empIdsToNotify = staffIds.length > 0
-    ? staffIds
-    : staffAll.filter(s => roles.includes('All Staff') || roles.includes(s.role)).map(s => s.id);
-
   const btn = document.getElementById('mn-save-btn');
+  const draftBtn = document.getElementById('mn-draft-btn');
   const progress = document.getElementById('mn-progress');
-  if(btn){ btn.disabled = true; btn.textContent = 'Uploading…'; }
-  if(progress){ progress.style.display = 'block'; progress.textContent = 'Uploading PDF…'; }
+  if(btn){ btn.disabled = true; }
+  if(draftBtn){ draftBtn.disabled = true; }
+  if(progress){ progress.style.display = 'block'; progress.textContent = file ? 'Uploading PDF…' : 'Saving…'; }
 
   try {
-    const id = 'mn' + Date.now();
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const path = `${id}-${safeName}`;
+    const id = editingMeetingNoteId || ('mn' + Date.now());
+    let fileFields = {};
 
-    const { error: upErr } = await supabaseClient.storage
-      .from('meeting-notes')
-      .upload(path, file, { contentType: 'application/pdf', upsert: false });
-    if(upErr) throw upErr;
-
-    const { data: urlData } = supabaseClient.storage.from('meeting-notes').getPublicUrl(path);
-    const fileUrl = urlData.publicUrl;
+    if(file){
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `${id}-${safeName}`;
+      const { error: upErr } = await supabaseClient.storage
+        .from('meeting-notes')
+        .upload(path, file, { contentType: 'application/pdf', upsert: false });
+      if(upErr) throw upErr;
+      const { data: urlData } = supabaseClient.storage.from('meeting-notes').getPublicUrl(path);
+      fileFields = { file_name: file.name, file_url: urlData.publicUrl, file_path: path };
+    }
 
     const mgr = getCurrentManager();
+
+    if(isEdit){
+      const updateRow = {
+        title, meeting_date: date || null, summary, roles, staff_ids: staffIds, ...fileFields
+      };
+      if(asDraft){
+        // Explicit "Save draft changes" — stays a draft.
+        updateRow.status = 'draft';
+      }
+      const { error: updErr } = await supabaseClient.from('meeting_notes').update(updateRow).eq('id', id);
+      if(updErr) throw updErr;
+
+      CM('m-meeting-note');
+      renderMeetingNotesPage();
+      toast(asDraft ? 'Draft updated.' : 'Meeting notes updated.', 'success');
+      return;
+    }
+
     const row = {
       id, title,
       meeting_date: date || null,
       summary,
-      file_name: file.name,
-      file_url: fileUrl,
-      file_path: path,
+      ...fileFields,
       uploaded_by: mgr.name || 'Manager',
       roles,
       staff_ids: staffIds,
+      status: asDraft ? 'draft' : 'published',
       created_at: new Date().toISOString()
     };
 
     const { error: insErr } = await supabaseClient.from('meeting_notes').insert(row);
     if(insErr) throw insErr;
 
-    const annTitle = `📋 Meeting notes: ${title}`;
-
-    // Every upload posts a linked announcement and notifies the selected audience
-    // by both email and SMS — unconditional for whoever's selected, since the
-    // whole point of the feature is that they can't miss it. Ticking just
-    // yourself under "Notify specific staff members" is how to send a test.
-    if(progress) progress.textContent = 'Notifying staff…';
-    const anns = DB.get('announcements') || [];
-    anns.push({
-      id: 'ann' + Date.now(),
-      title: annTitle,
-      desc: summary || 'New team meeting notes have been uploaded — check the Team Meetings tab to view.',
-      date: date || FD(new Date()),
-      time: '',
-      location: '',
-      roles,
-      staffIds,
-      meetingNoteId: id,
-      updatedAt: new Date().toISOString(),
-      createdAt: new Date().toISOString()
-    });
-    await DB.set('announcements', anns);
-    if(typeof updateAnnBadge === 'function') updateAnnBadge();
-
-    const recipients = staffAll.filter(emp => empIdsToNotify.includes(emp.id));
-    Promise.all(recipients.map(emp => notify('announcement', {
-      sendToStaff: true,
-      ...staffPayload(emp.id),
-      title: annTitle,
-      message: (summary ? summary + ' ' : '') + 'Please open the Team Meetings tab in the Staff Portal and acknowledge you\'ve read it.',
-      date: date || '',
-      time: '',
-      location: ''
-    }))).catch(err => console.error('Meeting note announcement notify failed:', err));
+    if(!asDraft){
+      // Every non-draft upload posts a linked announcement and notifies the
+      // selected audience by both email and SMS immediately. Ticking just
+      // yourself under "Notify specific staff members" is how to send a test.
+      if(progress) progress.textContent = 'Notifying staff…';
+      await notifyMeetingNoteAudience_({ id, title, summary, date, roles, staffIds });
+    }
 
     CM('m-meeting-note');
     renderMeetingNotesPage();
     if(typeof renderAnnouncements === 'function') renderAnnouncements();
-    toast('Meeting notes uploaded.', 'success');
+    toast(asDraft ? 'Saved as draft — publish it whenever you\'re ready.' : 'Meeting notes uploaded.', 'success');
   } catch(e) {
-    console.error('Meeting note upload failed:', e);
-    alert('Could not upload meeting notes: ' + (e.message || e));
+    console.error('Meeting note save failed:', e);
+    alert('Could not save meeting notes: ' + (e.message || e));
   } finally {
-    if(btn){ btn.disabled = false; btn.textContent = 'Upload'; }
+    if(btn){ btn.disabled = false; }
+    if(draftBtn){ draftBtn.disabled = false; }
     if(progress){ progress.style.display = 'none'; }
   }
 }
@@ -10557,11 +10668,11 @@ function updateAnnBadge() {
 <!-- ANNOUNCEMENT MODAL -->
 <div class="modal-overlay" id="m-meeting-note">
   <div class="modal" style="max-width:480px">
-    <div class="mh"><h2>Upload meeting notes</h2><button class="xbtn" onclick="CM('m-meeting-note')">×</button></div>
+    <div class="mh"><h2 id="mn-modal-title">Upload meeting notes</h2><button class="xbtn" onclick="CM('m-meeting-note')">×</button></div>
     <div class="fr"><label>Title <span style="color:var(--rd)">*</span></label><input type="text" id="mn-title" placeholder="e.g. Weekly team meeting" maxlength="80"></div>
     <div class="fr"><label>Meeting date</label><input type="date" id="mn-date"></div>
     <div class="fr"><label>Short summary / breakdown</label><textarea id="mn-summary" rows="4" placeholder="Key points from the meeting — this shows on the card and, if posted as an announcement, in the announcement itself."></textarea></div>
-    <div class="fr"><label>PDF file <span style="color:var(--rd)">*</span></label><input type="file" id="mn-file" accept="application/pdf"></div>
+    <div class="fr"><label>PDF file <span style="color:var(--rd)" id="mn-file-required">*</span></label><input type="file" id="mn-file" accept="application/pdf"><div id="mn-existing-file-note" style="display:none;font-size:11px;color:var(--t3);margin-top:3px">Leave empty to keep the existing PDF.</div></div>
 
     <!-- Audience section — mirrors the General Announcements audience picker -->
     <div style="margin-top:4px">
@@ -10584,11 +10695,12 @@ function updateAnnBadge() {
       </div>
     </div>
 
-    <div style="font-size:11px;color:var(--t3);background:var(--s2);border-radius:8px;padding:8px 10px;margin-top:8px">📣 Selected staff will be notified by email and SMS as soon as you upload, and asked to acknowledge they've read it.</div>
+    <div id="mn-notify-note" style="font-size:11px;color:var(--t3);background:var(--s2);border-radius:8px;padding:8px 10px;margin-top:8px">📣 Selected staff will be notified by email and SMS as soon as you upload, and asked to acknowledge they've read it.</div>
     <div id="mn-progress" style="display:none;font-size:12px;color:var(--t2);margin-top:8px"></div>
-    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap">
       <button class="btn" onclick="CM('m-meeting-note')">Cancel</button>
-      <button class="btn btn-primary" id="mn-save-btn" onclick="saveMeetingNote()">Upload</button>
+      <button class="btn" id="mn-draft-btn" onclick="saveMeetingNote(true)" title="Save now, notify staff later whenever you're ready">Save as draft</button>
+      <button class="btn btn-primary" id="mn-save-btn" onclick="saveMeetingNote(false)">Upload &amp; notify</button>
     </div>
   </div>
 </div>

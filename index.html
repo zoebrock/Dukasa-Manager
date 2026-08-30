@@ -10107,19 +10107,34 @@ async function renderMeetingNotesPage(){
   if(!el) return;
   el.innerHTML = '<p style="color:var(--t2);font-size:12px">Loading…</p>';
 
-  const { data, error } = await supabaseClient
-    .from('meeting_notes')
-    .select('*')
-    .order('meeting_date', { ascending: false })
-    .order('created_at', { ascending: false });
+  const [notesRes, acksRes] = await Promise.all([
+    supabaseClient
+      .from('meeting_notes')
+      .select('*')
+      .order('meeting_date', { ascending: false })
+      .order('created_at', { ascending: false }),
+    supabaseClient.from('meeting_note_acks').select('*')
+  ]);
 
-  if(error){
-    el.innerHTML = `<div class="alert ad" style="font-size:12px">Could not load meeting notes: ${escHTML(error.message)}</div>`;
+  if(notesRes.error){
+    el.innerHTML = `<div class="alert ad" style="font-size:12px">Could not load meeting notes: ${escHTML(notesRes.error.message)}</div>`;
     return;
   }
 
-  const notes = data || [];
-  el.innerHTML = notes.length ? notes.map(n => `
+  const notes = notesRes.data || [];
+  const acks = acksRes.data || [];
+  const staffAll = DB.get('staff') || [];
+
+  el.innerHTML = notes.length ? notes.map(n => {
+    const noteAcks = acks.filter(a => String(a.note_id) === String(n.id));
+    const ackedIds = new Set(noteAcks.map(a => String(a.staff_id)));
+    const notAcked = staffAll.filter(s => !ackedIds.has(String(s.id)));
+    const total = staffAll.length;
+    const ackedCount = total - notAcked.length;
+    const allRead = total > 0 && notAcked.length === 0;
+    const ackListId = 'mn-acklist-' + n.id;
+
+    return `
     <div class="card" style="margin-bottom:12px;display:flex;gap:14px;align-items:flex-start">
       <div style="width:44px;height:44px;border-radius:10px;background:var(--pl);color:var(--purple);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">📄</div>
       <div style="flex:1;min-width:0">
@@ -10131,9 +10146,15 @@ async function renderMeetingNotesPage(){
           </div>
         </div>
         <div style="font-size:11px;color:var(--t3);margin:3px 0 8px">${n.meeting_date?FDS(n.meeting_date):''}${n.meeting_date&&n.uploaded_by?' · ':''}${n.uploaded_by?'Uploaded by '+escHTML(n.uploaded_by):''}</div>
-        ${n.summary ? `<p style="font-size:13px;color:var(--t2);line-height:1.5;white-space:pre-wrap;margin:0">${escHTML(n.summary)}</p>` : ''}
+        ${n.summary ? `<p style="font-size:13px;color:var(--t2);line-height:1.5;white-space:pre-wrap;margin:0 0 10px">${escHTML(n.summary)}</p>` : ''}
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:${allRead?'var(--gl)':'var(--al)'};color:${allRead?'var(--gd)':'var(--ad)'}">${allRead?'✓':'👁'} ${ackedCount}/${total} acknowledged</span>
+          ${notAcked.length ? `<button class="btn btn-sm" style="font-size:11px" onclick="document.getElementById('${ackListId}').style.display=document.getElementById('${ackListId}').style.display==='block'?'none':'block'">Who hasn't read it?</button>` : ''}
+        </div>
+        ${notAcked.length ? `<div id="${ackListId}" style="display:none;margin-top:8px;font-size:12px;color:var(--t2);background:var(--s2);border-radius:8px;padding:8px 10px">${notAcked.map(s=>escHTML(s.first+' '+s.last)).join(', ')}</div>` : ''}
       </div>
-    </div>`).join('') : `<div class="card" style="text-align:center;padding:34px 20px;color:var(--t2)">
+    </div>`;
+  }).join('') : `<div class="card" style="text-align:center;padding:34px 20px;color:var(--t2)">
       <div style="font-size:28px;margin-bottom:8px">📋</div>
       <p style="margin-bottom:14px">No meeting notes uploaded yet.</p>
       <button class="btn btn-primary btn-sm" onclick="openNewMeetingNoteModal()">+ Upload meeting notes</button>
@@ -10145,7 +10166,6 @@ function openNewMeetingNoteModal(){
   document.getElementById('mn-date').value = FD(new Date());
   document.getElementById('mn-summary').value = '';
   document.getElementById('mn-file').value = '';
-  document.getElementById('tog-mn-announce').classList.add('on');
   OM('m-meeting-note');
 }
 
@@ -10155,7 +10175,6 @@ async function saveMeetingNote(){
   const summary = document.getElementById('mn-summary').value.trim();
   const fileInput = document.getElementById('mn-file');
   const file = fileInput.files[0];
-  const alsoAnnounce = document.getElementById('tog-mn-announce').classList.contains('on');
 
   if(!title){ alert('Title is required.'); return; }
   if(!file){ alert('Please choose a PDF file.'); return; }
@@ -10198,36 +10217,37 @@ async function saveMeetingNote(){
 
     const annTitle = `📋 Meeting notes: ${title}`;
 
-    if(alsoAnnounce){
-      if(progress) progress.textContent = 'Posting announcement…';
-      const anns = DB.get('announcements') || [];
-      anns.push({
-        id: 'ann' + Date.now(),
-        title: annTitle,
-        desc: summary || 'New team meeting notes have been uploaded — check the Team Meetings tab to view.',
-        date: date || FD(new Date()),
-        time: '',
-        location: '',
-        roles: ['All Staff'],
-        staffIds: [],
-        meetingNoteId: id,
-        updatedAt: new Date().toISOString(),
-        createdAt: new Date().toISOString()
-      });
-      await DB.set('announcements', anns);
-      if(typeof updateAnnBadge === 'function') updateAnnBadge();
+    // Every upload posts a linked announcement and notifies all staff by both
+    // email and SMS — this is unconditional, not an opt-in toggle, since the
+    // whole point of the feature is that staff can't miss it.
+    if(progress) progress.textContent = 'Notifying staff…';
+    const anns = DB.get('announcements') || [];
+    anns.push({
+      id: 'ann' + Date.now(),
+      title: annTitle,
+      desc: summary || 'New team meeting notes have been uploaded — check the Team Meetings tab to view.',
+      date: date || FD(new Date()),
+      time: '',
+      location: '',
+      roles: ['All Staff'],
+      staffIds: [],
+      meetingNoteId: id,
+      updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    });
+    await DB.set('announcements', anns);
+    if(typeof updateAnnBadge === 'function') updateAnnBadge();
 
-      const staffAll = DB.get('staff') || [];
-      Promise.all(staffAll.map(emp => notify('announcement', {
-        sendToStaff: true,
-        ...staffPayload(emp.id),
-        title: annTitle,
-        message: summary || 'New team meeting notes have been uploaded.',
-        date: date || '',
-        time: '',
-        location: ''
-      }))).catch(err => console.error('Meeting note announcement notify failed:', err));
-    }
+    const staffAll = DB.get('staff') || [];
+    Promise.all(staffAll.map(emp => notify('announcement', {
+      sendToStaff: true,
+      ...staffPayload(emp.id),
+      title: annTitle,
+      message: (summary ? summary + ' ' : '') + 'Please open the Team Meetings tab in the Staff Portal and acknowledge you\'ve read it.',
+      date: date || '',
+      time: '',
+      location: ''
+    }))).catch(err => console.error('Meeting note announcement notify failed:', err));
 
     CM('m-meeting-note');
     renderMeetingNotesPage();
@@ -10459,7 +10479,7 @@ function updateAnnBadge() {
     <div class="fr"><label>Meeting date</label><input type="date" id="mn-date"></div>
     <div class="fr"><label>Short summary / breakdown</label><textarea id="mn-summary" rows="4" placeholder="Key points from the meeting — this shows on the card and, if posted as an announcement, in the announcement itself."></textarea></div>
     <div class="fr"><label>PDF file <span style="color:var(--rd)">*</span></label><input type="file" id="mn-file" accept="application/pdf"></div>
-    <div class="nr"><span style="font-size:12px">Also post as an announcement</span><button class="toggle on" id="tog-mn-announce" onclick="this.classList.toggle('on')"></button></div>
+    <div style="font-size:11px;color:var(--t3);background:var(--s2);border-radius:8px;padding:8px 10px;margin-top:4px">📣 All staff will be notified by email and SMS as soon as you upload, and asked to acknowledge they've read it.</div>
     <div id="mn-progress" style="display:none;font-size:12px;color:var(--t2);margin-top:8px"></div>
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="btn" onclick="CM('m-meeting-note')">Cancel</button>

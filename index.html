@@ -4160,7 +4160,38 @@ async function deleteSupabaseRow(k, id) {
     alert('Could not delete ' + k + ': ' + error.message);
   }
 }
-  
+
+// Upserts ONE row instead of DB.set()'s whole-array re-upload — for tables like
+// `shifts` (thousands of rows), re-uploading everything just to persist a single
+// changed row risks hitting payload limits and failing the entire batch (this is
+// exactly what caused "the roster shift could not be updated" on OT approval).
+// Caller is responsible for having already applied the change to the local array
+// (e.g. shifts[idx] = {...}) before calling this, since it only updates CACHE
+// bookkeeping (version bump, sync indicator) — not the array contents itself.
+async function upsertSupabaseRow(k, item) {
+  const table = TABLE_MAP[k];
+  if (!table || !item) return { ok: false, error: new Error('Missing table or item') };
+
+  _setSyncIndicator('saving');
+  beginKeySave(k);
+
+  try {
+    const row = mapToSupabase(k, [item])[0];
+    const { error } = await supabaseClient.from(table).upsert([row], { onConflict: 'id' });
+    if (error) throw error;
+
+    bumpDataVersion(k);
+    _setSyncIndicator('saved');
+    return { ok: true };
+  } catch (error) {
+    console.error('Supabase row upsert failed:', k, item && item.id, error);
+    _setSyncIndicator('error');
+    return { ok: false, error };
+  } finally {
+    endKeySave(k);
+  }
+}
+
   async function deleteDuplicateShiftRows(){
   const shifts = DB.get('shifts') || [];
   const seen = new Map();
@@ -5207,6 +5238,7 @@ if (shiftIdx >= 0) {
     otOriginalEnd: origEnd,
     otAnnotations: annotations
   };
+  const updatedShift = shifts[shiftIdx];
 
   // Remove any legacy standalone row for this OT now that it is represented on
   // the canonical ordinary shift. Otherwise the clock can see two shifts.
@@ -5215,9 +5247,13 @@ if (shiftIdx >= 0) {
     await deleteSupabaseRow('shifts', duplicate.id);
   }
   shifts = shifts.filter(x => !(x.isOT && String(x.otId ?? '') === String(id)));
-  const shiftSaveResult = await DB.set('shifts', shifts);
+  CACHE['rx3_shifts'] = shifts;
+
+  // Persist just the one changed row instead of re-uploading the entire shifts
+  // table (thousands of rows) — that whole-array upsert is what was failing here.
+  const shiftSaveResult = await upsertSupabaseRow('shifts', updatedShift);
   if (!shiftSaveResult.ok) {
-    alert('The OT request was approved, but the roster shift could not be updated to reflect the new start/end time. Please retry the approval — do not assume the roster is correct.');
+    alert('The OT request was approved, but the roster shift could not be updated to reflect the new start/end time: ' + (shiftSaveResult.error?.message || 'unknown error') + '. Please retry the approval — do not assume the roster is correct.');
     return;
   }
 
@@ -5235,10 +5271,11 @@ if (shiftIdx >= 0) {
     notes: 'OT: ' + o.reason,
     otAnnotations: [{ otId: id, start: o.start, end: o.end, reason: o.reason || '' }]
   };
+  CACHE['rx3_shifts'] = shifts;
 
-  const standaloneSaveResult = await DB.set('shifts', shifts);
+  const standaloneSaveResult = await upsertSupabaseRow('shifts', shifts[standaloneIdx]);
   if (!standaloneSaveResult.ok) {
-    alert('The OT request was updated, but the roster shift could not be updated to reflect the new start/end time. Please retry. Do not assume the roster is correct.');
+    alert('The OT request was updated, but the roster shift could not be updated to reflect the new start/end time: ' + (standaloneSaveResult.error?.message || 'unknown error') + '. Please retry. Do not assume the roster is correct.');
     return;
   }
 
@@ -5246,7 +5283,7 @@ if (shiftIdx >= 0) {
 
   const emp = (DB.get('staff') || []).find(s => String(s.id) === oEmpId);
 
-  shifts.push({
+  const newShift = {
     id:'sh-ot-'+Date.now(),
     empId:o.empId,
     date:o.date,
@@ -5265,11 +5302,13 @@ if (shiftIdx >= 0) {
       end:o.end,
       reason:o.reason || ''
     }]
-  });
+  };
+  shifts.push(newShift);
+  CACHE['rx3_shifts'] = shifts;
 
-  const standaloneSaveResult = await DB.set('shifts', shifts);
+  const standaloneSaveResult = await upsertSupabaseRow('shifts', newShift);
   if (!standaloneSaveResult.ok) {
-    alert('The OT request was approved, but the roster shift could not be saved. Please retry the approval — do not assume the roster is correct.');
+    alert('The OT request was approved, but the roster shift could not be saved: ' + (standaloneSaveResult.error?.message || 'unknown error') + '. Please retry the approval — do not assume the roster is correct.');
     return;
   }
 }

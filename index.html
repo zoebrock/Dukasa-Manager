@@ -283,7 +283,9 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
 .ts-tbl td{padding:8px 9px;border-bottom:1px solid var(--border);font-size:12px;white-space:nowrap}
 .ts-tbl tr:hover td{background:rgba(83,74,183,.03)}
 .ts-tbl tr.tr-sick td{background:#fff5f5}.ts-tbl tr.tr-leave td{background:#fffdf0}.ts-tbl tr.tr-ot td{background:#f0fdf5}
+.ts-tbl tr.tr-discrepancy td{background:#fff3e0;box-shadow:inset 3px 0 0 var(--red)}
 .ot-val{color:var(--rd);font-weight:600}
+.review-badge{background:var(--rl);color:var(--rd);padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:normal;display:inline-block;line-height:1.4}
 .ts-day-tab{
   padding:9px 15px;font-size:12px;font-weight:500;
   color:var(--t2);cursor:pointer;border-bottom:2px solid transparent;
@@ -1154,6 +1156,7 @@ function isPublishedShift(shift){
             <th title="Clock-out capped to rostered end if no approved OT">Auto out</th>
             <th>Custom start</th><th>Custom end</th><th>Custom hrs</th>
             <th>OT hrs</th><th>Approved hrs</th><th>Approved</th><th>Edit</th><th>Photo</th><th>Reason</th>
+            <th title="Flags any day where rostered hours don't match worked hours, so it can't be missed">Review</th>
           </tr></thead>
           <tbody id="ts-body"></tbody>
         </table>
@@ -7838,12 +7841,25 @@ const custom=getOrCreateCustom(
 
 const approvedHrs=custom.approved ? custom.customHrs : null;
 
+// Flag any day where rostered hours don't match what the system actually computed
+// as worked — e.g. a late clock-in (tech issue, forgot to tap on) quietly shrinks
+// effectiveHrs below sHrs with no visible highlight today; it only shows as a small
+// "late" badge that's easy to miss when scanning a full timesheet or the export.
+// Sick/leave days are excluded — their hours are set equal to rostered by design.
+const DISCREPANCY_TOLERANCE_HRS = 0.1; // ~6min — avoids flagging rounding noise
+const hasHoursDiscrepancy = !isSick && !isLeave && effectiveHrs !== null &&
+  Math.abs(sHrs - effectiveHrs) > DISCREPANCY_TOLERANCE_HRS;
+const discrepancyReason = hasHoursDiscrepancy
+  ? (flags.filter(f => ['late','early','late-out','missing','break-over'].includes(f.type)).map(f=>f.msg).join('; ')
+     || `Rostered ${sHrs.toFixed(2)}h vs worked ${effectiveHrs.toFixed(2)}h — reason not captured by clock events, please check manually`)
+  : '';
+
 rows.push({
   s, emp, sHrs,
   actualHrs: effectiveHrs,
   otHrs,
   status,
-  rowCls,
+  rowCls: hasHoursDiscrepancy ? (rowCls ? rowCls + ' tr-discrepancy' : 'tr-discrepancy') : rowCls,
   ci, co, breakInfo, bActMin,
   flags,
   isSick,
@@ -7853,7 +7869,9 @@ rows.push({
   approvedHrs,
   autoRoundedIn,
   autoRoundedOut,
-  contractedHrs
+  contractedHrs,
+  hasHoursDiscrepancy,
+  discrepancyReason
 });
 });
 
@@ -8051,7 +8069,7 @@ function renderTSDayBody(ds){
   const rows=buildTSRows(ds);
   const SB={Rostered:'bp',Completed:'bg','In progress':'ba',Sick:'br','Annual Leave':'ba','No clock events':'br','Missing clock out':'ba','Missing clock in':'ba'};
   const body=document.getElementById('ts-body');
-  if(!rows.length){body.innerHTML=`<tr><td colspan="20" style="text-align:center;color:var(--t2);padding:20px;font-size:12px">No shifts on ${FDL(ds)}</td></tr>`;return;}
+  if(!rows.length){body.innerHTML=`<tr><td colspan="22" style="text-align:center;color:var(--t2);padding:20px;font-size:12px">No shifts on ${FDL(ds)}</td></tr>`;return;}
   body.innerHTML=rows.map(r=>{
     const empKey=r.s.empId;const dateKey=r.s.date;
     // Flags
@@ -8107,6 +8125,7 @@ function renderTSDayBody(ds){
       <td><button class="btn btn-sm" onclick="openEditHoursModal('${empKey}','${dateKey}','${r.s.id}')">Edit</button></td>
       <td>${r.ci?.photo?`<img class="img-thumb" src="${r.ci.photo}" onclick="viewPhoto('${r.ci.photo}','${r.co?.photo||''}')" title="View clock photos">`:'—'}</td>
       <td style="font-size:10px;color:var(--t2);max-width:100px;white-space:normal">${r.ci?.reason||r.co?.reason||'—'}</td>
+      <td style="max-width:180px">${r.hasHoursDiscrepancy?`<span class="review-badge" title="${escHTML(r.discrepancyReason)}">⚠ ${Math.abs(r.sHrs-r.actualHrs).toFixed(2)}h diff — ${escHTML(r.discrepancyReason)}</span>`:'—'}</td>
     </tr>`;
   }).join('');
 }
@@ -8319,7 +8338,10 @@ for(let i = 0; i < 14; i++){
         start: r.s?.start || '',
         end: r.s?.end || '',
         hrs,
-        notes
+        rosteredHrs: ROUND30(Number(r.sHrs || 0)),
+        notes,
+        hasHoursDiscrepancy: !!r.hasHoursDiscrepancy,
+        discrepancyReason: r.discrepancyReason || ''
       });
     });
   });
@@ -8346,12 +8368,15 @@ for(let i = 0; i < 14; i++){
 
   const aoa = [];
   const rowMeta = [];
+  const discrepancyRowFlags = [];
 
   aoa.push([fileLabel, '', '', '', '', '', '', '', '']);
   rowMeta.push('title');
+  discrepancyRowFlags.push(false);
 
   aoa.push(['', '', '', '', '', '', '', '', '']);
   rowMeta.push('blank');
+  discrepancyRowFlags.push(false);
 
   staffAll.forEach(emp => {
     const empId = String(emp.id);
@@ -8364,9 +8389,11 @@ for(let i = 0; i < 14; i++){
 
     aoa.push([empName, emp.role || '', '', '', '', '', '', '', '']);
     rowMeta.push('employee');
+    discrepancyRowFlags.push(false);
 
-    aoa.push(['Date','Day','Type','Start','End','Hours','Notes','','']);
+    aoa.push(['Date','Day','Type','Start','End','Rostered Hrs','Hours','Notes','Review']);
     rowMeta.push('header');
+    discrepancyRowFlags.push(false);
 
     empRows.forEach(r => {
       aoa.push([
@@ -8375,12 +8402,13 @@ for(let i = 0; i < 14; i++){
         r.type,
         r.start,
         r.end,
+        r.rosteredHrs !== undefined ? Number(r.rosteredHrs) : '',
         Number(r.hrs || 0),
         r.notes || '',
-        '',
-        ''
+        r.hasHoursDiscrepancy ? `⚠ ${r.discrepancyReason}` : ''
       ]);
       rowMeta.push(r.summaryType || r.type);
+      discrepancyRowFlags.push(!!r.hasHoursDiscrepancy);
     });
 
     const ordinary = empRows.filter(r=>r.summaryType === 'Ordinary').reduce((t,r)=>t+Number(r.hrs||0),0);
@@ -8389,21 +8417,25 @@ for(let i = 0; i < 14; i++){
     const leave = empRows.filter(r=>['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.summaryType)).reduce((t,r)=>t+Number(r.hrs||0),0);
     const total = ordinary + weekend + ot + leave;
 
+    const discrepancyCount = empRows.filter(r => r.hasHoursDiscrepancy).length;
+
     aoa.push([
       'TOTAL',
       '',
       `Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${ot.toFixed(2)}h | Leave ${leave.toFixed(2)}h`,
       '',
       '',
+      '',
       ROUND30(total),
       '',
-      '',
-      ''
+      discrepancyCount ? `⚠ ${discrepancyCount} day${discrepancyCount>1?'s':''} to review` : ''
     ]);
     rowMeta.push('total');
+    discrepancyRowFlags.push(false);
 
     aoa.push(['', '', '', '', '', '', '', '', '']);
     rowMeta.push('blank');
+    discrepancyRowFlags.push(false);
   });
 
   const wsSheet = XLSX.utils.aoa_to_sheet(aoa);
@@ -8426,13 +8458,13 @@ for(let i = 0; i < 14; i++){
   wsSheet['!cols'] = [
     { wch: 13 },
     { wch: 14 },
+    { wch: 26 },
+    { wch: 9 },
+    { wch: 9 },
+    { wch: 12 },
+    { wch: 9 },
     { wch: 30 },
-    { wch: 10 },
-    { wch: 10 },
-    { wch: 10 },
-    { wch: 40 },
-    { wch: 3 },
-    { wch: 3 }
+    { wch: 36 }
   ];
 
   wsSheet['!rows'] = rowMeta.map(m => ({
@@ -8465,7 +8497,7 @@ for(let i = 0; i < 14; i++){
         font: { name:'Arial', sz:10, color:{ rgb:'000000' } },
         alignment: {
           vertical:'center',
-          horizontal: C === 5 ? 'right' : 'left',
+          horizontal: (C === 5 || C === 6) ? 'right' : 'left',
           wrapText:true
         },
         border: meta === 'blank' ? {} : borderThin
@@ -8519,7 +8551,7 @@ for(let i = 0; i < 14; i++){
           font: { name:'Arial', sz:10, bold:true, color:{ rgb:'000000' } },
           fill: { fgColor:{ rgb:'D9D9D9' } },
           alignment: {
-            horizontal: C === 5 ? 'right' : 'left',
+            horizontal: (C === 5 || C === 6) ? 'right' : 'left',
             vertical:'center',
             wrapText:true
           },
@@ -8527,8 +8559,18 @@ for(let i = 0; i < 14; i++){
         };
       }
 
-      if(C === 5 && meta !== 'title' && meta !== 'employee' && meta !== 'header' && meta !== 'blank'){
+      if((C === 5 || C === 6) && meta !== 'title' && meta !== 'employee' && meta !== 'header' && meta !== 'blank'){
         wsSheet[addr].z = '0.00';
+      }
+
+      // Discrepancy rows get a distinct warning fill + bold red text on the Review
+      // column, so a rostered-vs-worked mismatch can't blend in with the rest of
+      // the export the way it did before — this overrides any type-based fill above.
+      if(discrepancyRowFlags[R]){
+        wsSheet[addr].s.fill = { fgColor:{ rgb:'FDE0C8' } };
+        if(C === 8){
+          wsSheet[addr].s.font = { name:'Arial', sz:10, bold:true, color:{ rgb:'A32D2D' } };
+        }
       }
     }
   }

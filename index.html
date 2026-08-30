@@ -9348,6 +9348,19 @@ async function _smsPost(toPhone, message){
   return json;
 }
 
+// The GAS backend has no generic "sendNotification" action (confirmed live —
+// it returns "Unknown action: sendNotification"). Each notification type has
+// its own dedicated sendEmail fn instead. Confirmed live and working:
+// sendAnnouncementEmail, sendLeaveDecisionEmail, sendOTDecisionEmail. The rest
+// are not yet confirmed to exist in the GAS project — notify() will log a
+// warning and skip the email (SMS still sends independently) rather than
+// guess at names against a backend we can't inspect.
+const EMAIL_FN_FOR_TYPE = {
+  announcement: 'sendAnnouncementEmail',
+  leave_decision: 'sendLeaveDecisionEmail',
+  ot_decision: 'sendOTDecisionEmail'
+};
+
 async function notify(type, payload = {}){
   const finalPayload = isRunningLateType(type) ? enrichRunningLatePayload(payload) : payload;
 
@@ -9367,15 +9380,21 @@ async function notify(type, payload = {}){
       .catch(err => console.error('SMS failed:', type, err));
   }
 
+  const fn = EMAIL_FN_FOR_TYPE[type];
+  if(!fn){
+    console.warn('notify(): no confirmed GAS email function for type', type, '— email skipped, SMS unaffected.');
+    return;
+  }
+
   return _gasPost({
-    action: 'sendNotification',
-    type,
+    action: 'sendEmail',
+    fn,
     payload: finalPayload
   }).then(r => {
-    console.log('Notification sent:', type, r);
+    console.log('Notification email sent:', type, r);
     return r;
   }).catch(err => {
-    console.error('Notification failed:', type, err);
+    console.error('Notification email failed:', type, err);
   });
 }
 
@@ -10107,13 +10126,14 @@ async function renderMeetingNotesPage(){
   if(!el) return;
   el.innerHTML = '<p style="color:var(--t2);font-size:12px">Loading…</p>';
 
-  const [notesRes, acksRes] = await Promise.all([
+  const [notesRes, acksRes, commentsRes] = await Promise.all([
     supabaseClient
       .from('meeting_notes')
       .select('*')
       .order('meeting_date', { ascending: false })
       .order('created_at', { ascending: false }),
-    supabaseClient.from('meeting_note_acks').select('*')
+    supabaseClient.from('meeting_note_acks').select('*'),
+    supabaseClient.from('meeting_note_comments').select('*').order('created_at', { ascending: true })
   ]);
 
   if(notesRes.error){
@@ -10123,6 +10143,7 @@ async function renderMeetingNotesPage(){
 
   const notes = notesRes.data || [];
   const acks = acksRes.data || [];
+  const comments = commentsRes.data || [];
   const staffAll = DB.get('staff') || [];
 
   el.innerHTML = notes.length ? notes.map(n => {
@@ -10139,6 +10160,8 @@ async function renderMeetingNotesPage(){
     const ackedCount = total - notAcked.length;
     const allRead = total > 0 && notAcked.length === 0;
     const ackListId = 'mn-acklist-' + n.id;
+    const commentListId = 'mn-commentlist-' + n.id;
+    const noteComments = comments.filter(c => String(c.note_id) === String(n.id));
     const audienceLabel = noteStaffIds.length > 0
       ? `${total} selected staff member${total===1?'':'s'}`
       : (noteRoles.includes('All Staff') ? 'All staff' : noteRoles.join(', '));
@@ -10159,8 +10182,14 @@ async function renderMeetingNotesPage(){
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:${allRead?'var(--gl)':'var(--al)'};color:${allRead?'var(--gd)':'var(--ad)'}">${allRead?'✓':'👁'} ${ackedCount}/${total} acknowledged</span>
           ${notAcked.length ? `<button class="btn btn-sm" style="font-size:11px" onclick="document.getElementById('${ackListId}').style.display=document.getElementById('${ackListId}').style.display==='block'?'none':'block'">Who hasn't read it?</button>` : ''}
+          ${noteComments.length ? `<button class="btn btn-sm" style="font-size:11px" onclick="document.getElementById('${commentListId}').style.display=document.getElementById('${commentListId}').style.display==='flex'?'none':'flex'">💬 ${noteComments.length} comment${noteComments.length===1?'':'s'}</button>` : ''}
         </div>
         ${notAcked.length ? `<div id="${ackListId}" style="display:none;margin-top:8px;font-size:12px;color:var(--t2);background:var(--s2);border-radius:8px;padding:8px 10px">${notAcked.map(s=>escHTML(s.first+' '+s.last)).join(', ')}</div>` : ''}
+        ${noteComments.length ? `<div id="${commentListId}" style="display:none;margin-top:8px;flex-direction:column;gap:6px">${noteComments.map(c=>`
+          <div style="background:var(--s2);border-radius:8px;padding:7px 10px">
+            <div style="font-size:11px;font-weight:700">${escHTML(c.staff_name||'Staff')} <span style="font-weight:400;color:var(--t3)">${escHTML(new Date(c.created_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'}))}</span></div>
+            <div style="font-size:12px;color:var(--t2);margin-top:2px;white-space:pre-wrap">${escHTML(c.comment)}</div>
+          </div>`).join('')}</div>` : ''}
       </div>
     </div>`;
   }).join('') : `<div class="card" style="text-align:center;padding:34px 20px;color:var(--t2)">

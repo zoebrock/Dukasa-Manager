@@ -10126,13 +10126,22 @@ async function renderMeetingNotesPage(){
   const staffAll = DB.get('staff') || [];
 
   el.innerHTML = notes.length ? notes.map(n => {
+    const noteRoles = n.roles || ['All Staff'];
+    const noteStaffIds = n.staff_ids || [];
+    const audience = noteStaffIds.length > 0
+      ? staffAll.filter(s => noteStaffIds.includes(s.id))
+      : staffAll.filter(s => noteRoles.includes('All Staff') || noteRoles.includes(s.role));
+
     const noteAcks = acks.filter(a => String(a.note_id) === String(n.id));
     const ackedIds = new Set(noteAcks.map(a => String(a.staff_id)));
-    const notAcked = staffAll.filter(s => !ackedIds.has(String(s.id)));
-    const total = staffAll.length;
+    const notAcked = audience.filter(s => !ackedIds.has(String(s.id)));
+    const total = audience.length;
     const ackedCount = total - notAcked.length;
     const allRead = total > 0 && notAcked.length === 0;
     const ackListId = 'mn-acklist-' + n.id;
+    const audienceLabel = noteStaffIds.length > 0
+      ? `${total} selected staff member${total===1?'':'s'}`
+      : (noteRoles.includes('All Staff') ? 'All staff' : noteRoles.join(', '));
 
     return `
     <div class="card" style="margin-bottom:12px;display:flex;gap:14px;align-items:flex-start">
@@ -10145,7 +10154,7 @@ async function renderMeetingNotesPage(){
             <button class="btn btn-sm btn-danger" onclick="deleteMeetingNote('${n.id}','${String(n.file_path||'').replace(/'/g,"\\'")}')">Delete</button>
           </div>
         </div>
-        <div style="font-size:11px;color:var(--t3);margin:3px 0 8px">${n.meeting_date?FDS(n.meeting_date):''}${n.meeting_date&&n.uploaded_by?' · ':''}${n.uploaded_by?'Uploaded by '+escHTML(n.uploaded_by):''}</div>
+        <div style="font-size:11px;color:var(--t3);margin:3px 0 8px">${n.meeting_date?FDS(n.meeting_date):''}${n.meeting_date&&n.uploaded_by?' · ':''}${n.uploaded_by?'Uploaded by '+escHTML(n.uploaded_by):''} · Sent to ${escHTML(audienceLabel)}</div>
         ${n.summary ? `<p style="font-size:13px;color:var(--t2);line-height:1.5;white-space:pre-wrap;margin:0 0 10px">${escHTML(n.summary)}</p>` : ''}
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:${allRead?'var(--gl)':'var(--al)'};color:${allRead?'var(--gd)':'var(--ad)'}">${allRead?'✓':'👁'} ${ackedCount}/${total} acknowledged</span>
@@ -10166,7 +10175,33 @@ function openNewMeetingNoteModal(){
   document.getElementById('mn-date').value = FD(new Date());
   document.getElementById('mn-summary').value = '';
   document.getElementById('mn-file').value = '';
+
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+
+  document.getElementById('mn-id-roles').innerHTML = getAnnRoles().map(r => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="mn-role-cb" value="${r}" ${r==='All Staff'?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <span>${r}</span>
+    </label>`).join('');
+
+  document.getElementById('mn-select-staff-toggle').checked = false;
+  document.getElementById('mn-staff-list').style.display = 'none';
+  document.getElementById('mn-staff-list').innerHTML = staff.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="mn-staff-cb" value="${s.id}" style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
+    </label>`).join('');
+
   OM('m-meeting-note');
+}
+
+function toggleMnStaffList(cb) {
+  const list = document.getElementById('mn-staff-list');
+  list.style.display = cb.checked ? 'block' : 'none';
+  if (!cb.checked) {
+    document.querySelectorAll('.mn-staff-cb').forEach(c => c.checked = false);
+  }
 }
 
 async function saveMeetingNote(){
@@ -10176,11 +10211,22 @@ async function saveMeetingNote(){
   const fileInput = document.getElementById('mn-file');
   const file = fileInput.files[0];
 
+  const roles    = [...document.querySelectorAll('.mn-role-cb:checked')].map(cb => cb.value);
+  const useStaff = document.getElementById('mn-select-staff-toggle').checked;
+  const staffIds = useStaff ? [...document.querySelectorAll('.mn-staff-cb:checked')].map(cb => cb.value) : [];
+
   if(!title){ alert('Title is required.'); return; }
   if(!file){ alert('Please choose a PDF file.'); return; }
   if(file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')){
     alert('Please choose a PDF file.'); return;
   }
+  if(!roles.length && !staffIds.length){ alert('Select at least one department or staff member.'); return; }
+  if(useStaff && !staffIds.length){ alert('Please select at least one staff member, or untick "Notify specific staff members".'); return; }
+
+  const staffAll = DB.get('staff') || [];
+  const empIdsToNotify = staffIds.length > 0
+    ? staffIds
+    : staffAll.filter(s => roles.includes('All Staff') || roles.includes(s.role)).map(s => s.id);
 
   const btn = document.getElementById('mn-save-btn');
   const progress = document.getElementById('mn-progress');
@@ -10209,6 +10255,8 @@ async function saveMeetingNote(){
       file_url: fileUrl,
       file_path: path,
       uploaded_by: mgr.name || 'Manager',
+      roles,
+      staff_ids: staffIds,
       created_at: new Date().toISOString()
     };
 
@@ -10217,9 +10265,10 @@ async function saveMeetingNote(){
 
     const annTitle = `📋 Meeting notes: ${title}`;
 
-    // Every upload posts a linked announcement and notifies all staff by both
-    // email and SMS — this is unconditional, not an opt-in toggle, since the
-    // whole point of the feature is that staff can't miss it.
+    // Every upload posts a linked announcement and notifies the selected audience
+    // by both email and SMS — unconditional for whoever's selected, since the
+    // whole point of the feature is that they can't miss it. Ticking just
+    // yourself under "Notify specific staff members" is how to send a test.
     if(progress) progress.textContent = 'Notifying staff…';
     const anns = DB.get('announcements') || [];
     anns.push({
@@ -10229,8 +10278,8 @@ async function saveMeetingNote(){
       date: date || FD(new Date()),
       time: '',
       location: '',
-      roles: ['All Staff'],
-      staffIds: [],
+      roles,
+      staffIds,
       meetingNoteId: id,
       updatedAt: new Date().toISOString(),
       createdAt: new Date().toISOString()
@@ -10238,8 +10287,8 @@ async function saveMeetingNote(){
     await DB.set('announcements', anns);
     if(typeof updateAnnBadge === 'function') updateAnnBadge();
 
-    const staffAll = DB.get('staff') || [];
-    Promise.all(staffAll.map(emp => notify('announcement', {
+    const recipients = staffAll.filter(emp => empIdsToNotify.includes(emp.id));
+    Promise.all(recipients.map(emp => notify('announcement', {
       sendToStaff: true,
       ...staffPayload(emp.id),
       title: annTitle,
@@ -10479,7 +10528,29 @@ function updateAnnBadge() {
     <div class="fr"><label>Meeting date</label><input type="date" id="mn-date"></div>
     <div class="fr"><label>Short summary / breakdown</label><textarea id="mn-summary" rows="4" placeholder="Key points from the meeting — this shows on the card and, if posted as an announcement, in the announcement itself."></textarea></div>
     <div class="fr"><label>PDF file <span style="color:var(--rd)">*</span></label><input type="file" id="mn-file" accept="application/pdf"></div>
-    <div style="font-size:11px;color:var(--t3);background:var(--s2);border-radius:8px;padding:8px 10px;margin-top:4px">📣 All staff will be notified by email and SMS as soon as you upload, and asked to acknowledge they've read it.</div>
+
+    <!-- Audience section — mirrors the General Announcements audience picker -->
+    <div style="margin-top:4px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t2);margin-bottom:8px">Who can see this & gets notified <span style="color:var(--rd)">*</span></div>
+
+      <div style="border:1px solid var(--border);border-radius:var(--rsm);overflow:hidden;margin-bottom:8px">
+        <div style="padding:6px 10px;background:var(--s2);font-size:10px;font-weight:700;color:var(--t3);letter-spacing:.05em;text-transform:uppercase">By department</div>
+        <div style="padding:8px 10px;display:flex;flex-direction:column;gap:2px" id="mn-id-roles"></div>
+      </div>
+
+      <div style="border:1px solid var(--border);border-radius:var(--rsm);overflow:hidden">
+        <label style="display:flex;align-items:center;gap:10px;padding:10px;cursor:pointer;background:var(--s2);user-select:none">
+          <input type="checkbox" id="mn-select-staff-toggle" style="accent-color:var(--purple);width:16px;height:16px" onchange="toggleMnStaffList(this)">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Notify specific staff members</div>
+            <div style="font-size:11px;color:var(--t3);margin-top:1px">Overrides department selection — tick just yourself to send a test</div>
+          </div>
+        </label>
+        <div id="mn-staff-list" style="display:none;padding:8px 10px;max-height:180px;overflow-y:auto;border-top:1px solid var(--border)"></div>
+      </div>
+    </div>
+
+    <div style="font-size:11px;color:var(--t3);background:var(--s2);border-radius:8px;padding:8px 10px;margin-top:8px">📣 Selected staff will be notified by email and SMS as soon as you upload, and asked to acknowledge they've read it.</div>
     <div id="mn-progress" style="display:none;font-size:12px;color:var(--t2);margin-top:8px"></div>
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="btn" onclick="CM('m-meeting-note')">Cancel</button>

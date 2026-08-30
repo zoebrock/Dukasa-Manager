@@ -10131,14 +10131,15 @@ async function renderMeetingNotesPage(){
   if(!el) return;
   el.innerHTML = '<p style="color:var(--t2);font-size:12px">Loading…</p>';
 
-  const [notesRes, acksRes, commentsRes] = await Promise.all([
+  const [notesRes, acksRes, commentsRes, pdfViewsRes] = await Promise.all([
     supabaseClient
       .from('meeting_notes')
       .select('*')
       .order('meeting_date', { ascending: false })
       .order('created_at', { ascending: false }),
     supabaseClient.from('meeting_note_acks').select('*'),
-    supabaseClient.from('meeting_note_comments').select('*').order('created_at', { ascending: true })
+    supabaseClient.from('meeting_note_comments').select('*').order('created_at', { ascending: true }),
+    supabaseClient.from('meeting_note_pdf_views').select('*')
   ]);
 
   if(notesRes.error){
@@ -10152,6 +10153,7 @@ async function renderMeetingNotesPage(){
   const notes = (notesRes.data || []).slice().sort((a,b) => (a.status === 'draft' ? 0 : 1) - (b.status === 'draft' ? 0 : 1));
   const acks = acksRes.data || [];
   const comments = commentsRes.data || [];
+  const pdfViews = pdfViewsRes.data || [];
   const staffAll = DB.get('staff') || [];
 
   el.innerHTML = notes.length ? notes.map(n => {
@@ -10189,14 +10191,32 @@ async function renderMeetingNotesPage(){
     }
 
     const noteAcks = acks.filter(a => String(a.note_id) === String(n.id));
-    const ackedIds = new Set(noteAcks.map(a => String(a.staff_id)));
-    const notAcked = audience.filter(s => !ackedIds.has(String(s.id)));
+    const ackByStaffId = new Map(noteAcks.map(a => [String(a.staff_id), a]));
+    const notePdfViews = pdfViews.filter(v => String(v.note_id) === String(n.id));
+    // Earliest view per person — that's when they first opened it.
+    const pdfViewByStaffId = new Map();
+    notePdfViews.forEach(v => {
+      const key = String(v.staff_id);
+      const existing = pdfViewByStaffId.get(key);
+      if (!existing || v.viewed_at < existing.viewed_at) pdfViewByStaffId.set(key, v);
+    });
+
     const total = audience.length;
-    const ackedCount = total - notAcked.length;
-    const allRead = total > 0 && notAcked.length === 0;
-    const ackListId = 'mn-acklist-' + n.id;
+    const ackedCount = audience.filter(s => ackByStaffId.has(String(s.id))).length;
+    const allRead = total > 0 && ackedCount === total;
+    const detailListId = 'mn-detail-' + n.id;
     const commentListId = 'mn-commentlist-' + n.id;
     const noteComments = comments.filter(c => String(c.note_id) === String(n.id));
+
+    const fmtDate = iso => escHTML(new Date(iso).toLocaleDateString('en-AU',{day:'numeric',month:'short'}));
+    // Sorted so acknowledged staff appear first, then PDF-viewed-only, then untouched.
+    const audienceStatus = audience
+      .map(s => {
+        const ack = ackByStaffId.get(String(s.id));
+        const view = pdfViewByStaffId.get(String(s.id));
+        return { s, ack, view, rank: ack ? 0 : view ? 1 : 2 };
+      })
+      .sort((a,b) => a.rank - b.rank || a.s.first.localeCompare(b.s.first));
 
     return `
     <div class="card" style="margin-bottom:12px;display:flex;gap:14px;align-items:flex-start">
@@ -10214,10 +10234,19 @@ async function renderMeetingNotesPage(){
         ${n.summary ? `<p style="font-size:13px;color:var(--t2);line-height:1.5;white-space:pre-wrap;margin:0 0 10px">${escHTML(n.summary)}</p>` : ''}
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:${allRead?'var(--gl)':'var(--al)'};color:${allRead?'var(--gd)':'var(--ad)'}">${allRead?'✓':'👁'} ${ackedCount}/${total} acknowledged</span>
-          ${notAcked.length ? `<button class="btn btn-sm" style="font-size:11px" onclick="document.getElementById('${ackListId}').style.display=document.getElementById('${ackListId}').style.display==='block'?'none':'block'">Who hasn't read it?</button>` : ''}
+          ${total ? `<button class="btn btn-sm" style="font-size:11px" onclick="document.getElementById('${detailListId}').style.display=document.getElementById('${detailListId}').style.display==='flex'?'none':'flex'">See who's read it</button>` : ''}
           ${noteComments.length ? `<button class="btn btn-sm" style="font-size:11px" onclick="document.getElementById('${commentListId}').style.display=document.getElementById('${commentListId}').style.display==='flex'?'none':'flex'">💬 ${noteComments.length} comment${noteComments.length===1?'':'s'}</button>` : ''}
         </div>
-        ${notAcked.length ? `<div id="${ackListId}" style="display:none;margin-top:8px;font-size:12px;color:var(--t2);background:var(--s2);border-radius:8px;padding:8px 10px">${notAcked.map(s=>escHTML(s.first+' '+s.last)).join(', ')}</div>` : ''}
+        ${total ? `<div id="${detailListId}" style="display:none;margin-top:8px;flex-direction:column;gap:4px;background:var(--s2);border-radius:8px;padding:4px 10px">${audienceStatus.map(({s, ack, view}) => {
+          const label = ack
+            ? `<span style="color:var(--gd);font-weight:600">✓ Acknowledged ${fmtDate(ack.acked_at)}</span>`
+            : view
+              ? `<span style="color:var(--ad);font-weight:600">👁 Opened PDF ${fmtDate(view.viewed_at)}, not yet acknowledged</span>`
+              : `<span style="color:var(--t3)">— Not opened yet</span>`;
+          return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;font-size:12px;border-bottom:1px solid var(--border)">
+            <span style="color:var(--t2)">${escHTML(s.first+' '+s.last)}</span>${label}
+          </div>`;
+        }).join('')}</div>` : ''}
         ${noteComments.length ? `<div id="${commentListId}" style="display:none;margin-top:8px;flex-direction:column;gap:6px">${noteComments.map(c=>`
           <div style="background:var(--s2);border-radius:8px;padding:7px 10px">
             <div style="font-size:11px;font-weight:700">${escHTML(c.staff_name||'Staff')} <span style="font-weight:400;color:var(--t3)">${escHTML(new Date(c.created_at).toLocaleDateString('en-AU',{day:'numeric',month:'short'}))}</span></div>

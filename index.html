@@ -9349,16 +9349,21 @@ async function _smsPost(toPhone, message){
 }
 
 // The GAS backend has no generic "sendNotification" action (confirmed live —
-// it returns "Unknown action: sendNotification"). Each notification type has
-// its own dedicated sendEmail fn instead. Confirmed live and working:
-// sendAnnouncementEmail, sendLeaveDecisionEmail, sendOTDecisionEmail. The rest
-// are not yet confirmed to exist in the GAS project — notify() will log a
-// warning and skip the email (SMS still sends independently) rather than
-// guess at names against a backend we can't inspect.
+// it returns "Unknown action: sendNotification"). doPost() only reaches
+// sendNotification(type, p) indirectly, via action:'sendEmail' + a legacy fn
+// name that sendLegacyEmail() maps back to a type. Mapping taken directly from
+// that map in the GAS source. Two notify() types used in this app —
+// roster_published and staff_late_warning — have no entry in that legacy map
+// (leave_updated has no case in sendNotification() at all), so email can't
+// reach them through this API surface; they're left unmapped rather than
+// guessed. SMS still sends independently for whichever types are in
+// SMS_NOTIFY_TYPES, regardless of this mapping.
 const EMAIL_FN_FOR_TYPE = {
   announcement: 'sendAnnouncementEmail',
   leave_decision: 'sendLeaveDecisionEmail',
-  ot_decision: 'sendOTDecisionEmail'
+  ot_decision: 'sendOTDecisionEmail',
+  manager_ot_request: 'sendManagerOTRequestToStaff',
+  shift_updated: 'sendShiftUpdateEmail'
 };
 
 async function notify(type, payload = {}){

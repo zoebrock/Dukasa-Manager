@@ -1882,7 +1882,8 @@ function retryRowsWithoutDecisionAudit(rows){
     [
       'processedAt','processedBy','processedByName','processedByRole','decisionAt','decisionBy','decisionByName','decisionByRole',
       'approvedAt','approvedBy','approvedByName','approvedByRole','deniedAt','deniedBy','deniedByName','deniedByRole',
-      'createdBy','createdByName','createdByRole','updatedBy','updatedByName','updatedByRole'
+      'createdBy','createdByName','createdByRole','updatedBy','updatedByName','updatedByRole',
+      'calendar_event_id' // Team Calendar migration not yet run on this project — drop rather than fail the whole save.
     ].forEach(k => delete x[k]);
     return x;
   });
@@ -1892,7 +1893,8 @@ function looksLikeMissingAuditColumn(error){
   const msg = String(error?.message || '').toLowerCase();
   return msg.includes('column') && (
     msg.includes('processed') || msg.includes('approvedby') || msg.includes('approved_by') ||
-    msg.includes('deniedby') || msg.includes('denied_by') || msg.includes('decision') || msg.includes('createdby')
+    msg.includes('deniedby') || msg.includes('denied_by') || msg.includes('decision') || msg.includes('createdby') ||
+    msg.includes('calendar_event_id')
   );
 }
 // ═══════════════════════════════════════════════════════
@@ -2126,7 +2128,8 @@ if (key === 'shifts') {
   if (key === 'announcements') {
     return rows.map(r => ({
       ...r,
-      desc: r.description
+      desc: r.description,
+      calendarEventId: r.calendar_event_id
     }));
   }
 
@@ -2300,6 +2303,8 @@ if (key === 'shifts') {
     if (key === 'announcements') {
       x.description = x.desc;
       delete x.desc;
+      x.calendar_event_id = x.calendarEventId ?? null;
+      delete x.calendarEventId;
     }
 
 if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
@@ -10611,9 +10616,14 @@ async function renderCalendarPage(){
     const dayEvents = eventsForDate(ds);
     const isToday = ds === todayStr;
     const isSelected = ds === calSelectedDate;
-    html += `<div onclick="selectCalDay('${ds}')" style="aspect-ratio:1;border-radius:8px;padding:4px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;background:${isSelected?'var(--purple)':isToday?'var(--pl)':'transparent'};border:1px solid ${isSelected?'var(--purple)':'var(--border)'}">
-      <span style="font-size:11px;font-weight:${isToday?'700':'500'};color:${isSelected?'#fff':isToday?'var(--purple)':'var(--text)'}">${d}</span>
-      ${dayEvents.length ? `<div style="display:flex;gap:2px;margin-top:2px;flex-wrap:wrap;justify-content:center">${dayEvents.slice(0,3).map(()=>`<span style="width:5px;height:5px;border-radius:50%;background:${isSelected?'#fff':'var(--purple)'}"></span>`).join('')}</div>` : ''}
+    const shown = dayEvents.slice(0,3);
+    const extra = dayEvents.length - shown.length;
+    html += `<div onclick="selectCalDay('${ds}')" style="min-height:82px;border-radius:8px;padding:5px;cursor:pointer;display:flex;flex-direction:column;align-items:stretch;background:${isSelected?'var(--pl)':isToday?'#fdfaf0':'var(--surface)'};border:1.5px solid ${isSelected?'var(--purple)':'var(--border)'}">
+      <span style="font-size:11px;font-weight:${isToday?'800':'600'};color:${isToday?'var(--purple)':'var(--text)'};align-self:flex-start;${isToday?'background:var(--pl);border-radius:50%;width:18px;height:18px;display:flex;align-items:center;justify-content:center':''}">${d}</span>
+      <div style="display:flex;flex-direction:column;gap:2px;margin-top:3px;overflow:hidden">
+        ${shown.map(e => `<div style="font-size:9px;font-weight:600;color:#fff;background:var(--purple);border-radius:4px;padding:1px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.recurrence_group_id?'🔁 ':''}${escHTML(e.title)}</div>`).join('')}
+        ${extra > 0 ? `<div style="font-size:9px;color:var(--t3);padding-left:2px">+${extra} more</div>` : ''}
+      </div>
     </div>`;
   }
 
@@ -10646,7 +10656,7 @@ function renderCalDayList(){
         <div style="width:38px;height:38px;border-radius:9px;background:var(--pl);color:var(--purple);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">📅</div>
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-            <strong style="font-size:14px">${escHTML(e.title)}</strong>
+            <strong style="font-size:14px">${e.recurrence_group_id?'🔁 ':''}${escHTML(e.title)}</strong>
             <div style="display:flex;gap:6px">
               <button class="btn btn-sm" onclick="openEditCalendarEventModal('${e.id}')">Edit</button>
               <button class="btn btn-sm btn-danger" onclick="deleteCalendarEvent('${e.id}')">Delete</button>
@@ -10666,6 +10676,37 @@ function toggleCalStaffList(cb){
   if(!cb.checked){ document.querySelectorAll('.cal-staff-cb').forEach(c => c.checked = false); }
 }
 
+function toggleCalRepeat(cb){
+  document.getElementById('cal-repeat-body').style.display = cb.checked ? 'block' : 'none';
+}
+
+// Computes every date matching "nth weekday of month" (nth: 1-4, or -1 for last)
+// between fromDate (inclusive) and untilDate (inclusive), across as many months
+// as needed.
+function computeMonthlyRecurrenceDates_(fromDate, untilDate, weekday, nths){
+  const dates = [];
+  const start = new Date(fromDate + 'T00:00:00');
+  const end = new Date(untilDate + 'T00:00:00');
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+
+  while(cursor <= end){
+    const year = cursor.getFullYear(), month = cursor.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const matchingDays = [];
+    for(let d = 1; d <= daysInMonth; d++){
+      if(new Date(year, month, d).getDay() === (weekday + 1) % 7) matchingDays.push(d);
+    }
+    nths.forEach(nth => {
+      const day = nth === -1 ? matchingDays[matchingDays.length - 1] : matchingDays[nth - 1];
+      if(day == null) return;
+      const ds = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      if(ds >= fromDate && ds <= untilDate) dates.push(ds);
+    });
+    cursor = new Date(year, month + 1, 1);
+  }
+  return dates.sort();
+}
+
 function openNewCalendarEventModal(){
   editingCalEventId = null;
   document.getElementById('cal-modal-title').textContent = 'Add event';
@@ -10676,6 +10717,14 @@ function openNewCalendarEventModal(){
   document.getElementById('cal-location').value = '';
   document.getElementById('cal-description').value = '';
   document.getElementById('cal-delete-btn').style.display = 'none';
+
+  document.getElementById('cal-repeat-section').style.display = 'block';
+  document.getElementById('cal-repeat-toggle').checked = false;
+  document.getElementById('cal-repeat-body').style.display = 'none';
+  document.querySelectorAll('.cal-repeat-nth-cb').forEach(c => c.checked = false);
+  document.getElementById('cal-repeat-weekday').value = '2';
+  const untilDefault = new Date(); untilDefault.setFullYear(untilDefault.getFullYear() + 1);
+  document.getElementById('cal-repeat-until').value = FD(untilDefault);
 
   const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
   document.getElementById('cal-id-roles').innerHTML = getAnnRoles().map(r => `
@@ -10707,6 +10756,12 @@ function openEditCalendarEventModal(id){
   document.getElementById('cal-location').value = e.location || '';
   document.getElementById('cal-description').value = e.description || '';
   document.getElementById('cal-delete-btn').style.display = 'inline-flex';
+
+  // Editing an existing occurrence just edits that one row — offering to set up
+  // a NEW recurrence here would be confusing since it'd create a second series.
+  document.getElementById('cal-repeat-section').style.display = 'none';
+  document.getElementById('cal-repeat-toggle').checked = false;
+  document.getElementById('cal-repeat-body').style.display = 'none';
 
   const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
   const existingRoles = e.roles && e.roles.length ? e.roles : ['All Staff'];
@@ -10746,9 +10801,22 @@ async function saveCalendarEvent(){
   if(!roles.length && !staffIds.length){ alert('Select at least one department or staff member.'); return; }
   if(useStaff && !staffIds.length){ alert('Please select at least one staff member, or untick "Notify specific staff members".'); return; }
 
+  const repeats = !editingCalEventId && document.getElementById('cal-repeat-toggle').checked;
+  let repeatDates = null;
+  if(repeats){
+    const nths = [...document.querySelectorAll('.cal-repeat-nth-cb:checked')].map(cb => Number(cb.value));
+    const weekday = Number(document.getElementById('cal-repeat-weekday').value);
+    const until = document.getElementById('cal-repeat-until').value;
+    if(!nths.length){ alert('Select at least one week (e.g. 2nd, Last) for the recurring event.'); return; }
+    if(!until){ alert('Set a "Repeat until" date for the recurring event.'); return; }
+    if(until < date){ alert('"Repeat until" must be on or after the start date.'); return; }
+    repeatDates = computeMonthlyRecurrenceDates_(date, until, weekday, nths);
+    if(!repeatDates.length){ alert('No occurrences found in that date range — check your weekday/week selection.'); return; }
+  }
+
   const mgr = getCurrentManager();
-  const row = {
-    title, date, end_date: endDate, time, location, description,
+  const baseRow = {
+    title, end_date: endDate, time, location, description,
     roles, staff_ids: staffIds,
     created_by: mgr.name || 'Manager',
     updated_at: new Date().toISOString()
@@ -10756,24 +10824,70 @@ async function saveCalendarEvent(){
 
   try {
     if(editingCalEventId){
-      const { error } = await supabaseClient.from('calendar_events').update(row).eq('id', editingCalEventId);
+      const { error } = await supabaseClient.from('calendar_events').update({ ...baseRow, date }).eq('id', editingCalEventId);
+      if(error) throw error;
+    } else if(repeats){
+      const groupId = 'calrec' + Date.now();
+      const rows = repeatDates.map((ds, i) => ({
+        ...baseRow,
+        id: `cal${Date.now()}-${i}`,
+        date: ds,
+        // A multi-day span doesn't make sense repeated monthly against a fixed
+        // end_date — each occurrence keeps the same offset instead.
+        end_date: endDate ? shiftDateByDays_(ds, dateDiffDays_(date, endDate)) : null,
+        recurrence_group_id: groupId,
+        created_at: new Date().toISOString()
+      }));
+      const { error } = await supabaseClient.from('calendar_events').insert(rows);
       if(error) throw error;
     } else {
-      row.id = 'cal' + Date.now();
-      row.created_at = new Date().toISOString();
-      const { error } = await supabaseClient.from('calendar_events').insert(row);
+      const { error } = await supabaseClient.from('calendar_events').insert({
+        ...baseRow, id: 'cal' + Date.now(), date, created_at: new Date().toISOString()
+      });
       if(error) throw error;
     }
     CM('m-calendar-event');
     calSelectedDate = date;
     renderCalendarPage();
-    toast(editingCalEventId ? 'Event updated.' : 'Event added.', 'success');
+    toast(editingCalEventId ? 'Event updated.' : (repeats ? `${repeatDates.length} occurrences added.` : 'Event added.'), 'success');
   } catch(e){
     alert('Could not save this event: ' + (e.message || e));
   }
 }
 
+function dateDiffDays_(a, b){
+  return Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00')) / 86400000);
+}
+function shiftDateByDays_(ds, days){
+  const d = new Date(ds+'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return FD(d);
+}
+
 async function deleteCalendarEvent(id){
+  const e = calEventsCache.find(x => x.id === id);
+  if(!e) return;
+
+  if(e.recurrence_group_id){
+    const deleteAll = confirm('This event repeats. Press OK to delete the ENTIRE series (all occurrences), or Cancel to choose deleting just this one.');
+    try {
+      if(deleteAll){
+        const { error } = await supabaseClient.from('calendar_events').delete().eq('recurrence_group_id', e.recurrence_group_id);
+        if(error) throw error;
+        renderCalendarPage();
+        toast('Series deleted.', 'success');
+      } else if(confirm('Delete just this occurrence (' + FDS(e.date) + ')?')){
+        const { error } = await supabaseClient.from('calendar_events').delete().eq('id', id);
+        if(error) throw error;
+        renderCalendarPage();
+        toast('Occurrence deleted.', 'success');
+      }
+    } catch(err){
+      alert('Could not delete: ' + (err.message || err));
+    }
+    return;
+  }
+
   if(!confirm('Delete this event?')) return;
   try {
     const { error } = await supabaseClient.from('calendar_events').delete().eq('id', id);
@@ -10803,6 +10917,7 @@ function openAnnModal(id) {
   document.getElementById('ann-id-time').value     = ann ? ann.time     : '';
   document.getElementById('ann-id-location').value = ann ? ann.location : '';
   document.getElementById('ann-delete-btn').style.display = ann ? 'inline-flex' : 'none';
+  document.getElementById('ann-add-to-cal').checked = !!(ann && ann.calendarEventId);
 
   // Department role checkboxes
   const existingRoles = ann ? (ann.roles||[]) : ['All Staff'];
@@ -10836,7 +10951,7 @@ function toggleAnnStaffList(cb) {
   }
 }
 
-function saveAnnouncement() {
+async function saveAnnouncement() {
   const title    = document.getElementById('ann-id-title').value.trim();
   const desc     = document.getElementById('ann-id-desc').value.trim();
   const date     = document.getElementById('ann-id-date').value;
@@ -10853,7 +10968,37 @@ function saveAnnouncement() {
 
   const anns = DB.get('announcements') || [];
   const now  = new Date().toISOString();
-  const payload = { title, desc, date, time, location, roles, staffIds, updatedAt: now };
+
+  // Keep the linked Team Calendar event (if any) in sync — create, update, or
+  // remove it depending on whether "Also add to Team Calendar" is checked.
+  const addToCal = document.getElementById('ann-add-to-cal').checked;
+  const existingAnn = editingAnnId ? anns.find(a => a.id === editingAnnId) : null;
+  let calendarEventId = existingAnn ? existingAnn.calendarEventId : null;
+  try {
+    if (addToCal) {
+      const calRow = {
+        title, date, end_date: null, time, location, description: desc,
+        roles, staff_ids: staffIds,
+        created_by: getCurrentManager().name || 'Manager',
+        updated_at: now
+      };
+      if (calendarEventId) {
+        const { error } = await supabaseClient.from('calendar_events').update(calRow).eq('id', calendarEventId);
+        if (error) throw error;
+      } else {
+        calendarEventId = 'ann-cal' + Date.now();
+        const { error } = await supabaseClient.from('calendar_events').insert({ ...calRow, id: calendarEventId, created_at: now });
+        if (error) throw error;
+      }
+    } else if (calendarEventId) {
+      await supabaseClient.from('calendar_events').delete().eq('id', calendarEventId);
+      calendarEventId = null;
+    }
+  } catch(e) {
+    alert('The announcement will still be saved, but the linked calendar event failed to sync: ' + (e.message || e));
+  }
+
+  const payload = { title, desc, date, time, location, roles, staffIds, calendarEventId, updatedAt: now };
   if (editingAnnId) {
     const idx = anns.findIndex(a => a.id === editingAnnId);
     if (idx >= 0) anns[idx] = {...anns[idx], ...payload};
@@ -10906,10 +11051,16 @@ Promise.all(
   }
 }
 
-function deleteAnnouncement() {
+async function deleteAnnouncement() {
   if (!editingAnnId) return;
   if (!confirm('Delete this announcement?')) return;
-  DB.set('announcements', (DB.get('announcements')||[]).filter(a => a.id !== editingAnnId));
+  const anns = DB.get('announcements') || [];
+  const ann = anns.find(a => a.id === editingAnnId);
+  if (ann && ann.calendarEventId) {
+    try { await supabaseClient.from('calendar_events').delete().eq('id', ann.calendarEventId); }
+    catch(e) { console.error('Could not remove linked calendar event:', e); }
+  }
+  DB.set('announcements', anns.filter(a => a.id !== editingAnnId));
   CM('m-announcement');
   editingAnnId = null;
   renderAnnouncements(annFilter);
@@ -11032,6 +11183,32 @@ function updateAnnBadge() {
     </div>
     <div style="font-size:11px;color:var(--t3);margin-top:-6px">Leave end date empty for a single-day event, or set it for a multi-day event.</div>
 
+    <div id="cal-repeat-section" style="border:1px solid var(--border);border-radius:var(--rsm);overflow:hidden;margin-top:4px">
+      <label style="display:flex;align-items:center;gap:10px;padding:10px;cursor:pointer;background:var(--s2);user-select:none">
+        <input type="checkbox" id="cal-repeat-toggle" style="accent-color:var(--purple);width:16px;height:16px" onchange="toggleCalRepeat(this)">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:var(--text)">Repeats monthly</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:1px">e.g. the 2nd and last Wednesday of every month</div>
+        </div>
+      </label>
+      <div id="cal-repeat-body" style="display:none;padding:10px;border-top:1px solid var(--border)">
+        <div style="font-size:11px;font-weight:600;color:var(--t2);margin-bottom:6px">Which week(s)?</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">
+          ${['1st','2nd','3rd','4th','Last'].map((label,i)=>`
+            <label style="display:flex;align-items:center;gap:4px;font-size:11px;border:1px solid var(--border);border-radius:20px;padding:4px 9px;cursor:pointer">
+              <input type="checkbox" class="cal-repeat-nth-cb" value="${i===4?-1:i+1}" style="accent-color:var(--purple);width:13px;height:13px">${label}
+            </label>`).join('')}
+        </div>
+        <div class="fr" style="margin-bottom:0"><label style="font-size:11px">Weekday</label>
+          <select id="cal-repeat-weekday">
+            <option value="0">Monday</option><option value="1">Tuesday</option><option value="2" selected>Wednesday</option>
+            <option value="3">Thursday</option><option value="4">Friday</option><option value="5">Saturday</option><option value="6">Sunday</option>
+          </select>
+        </div>
+        <div class="fr" style="margin-top:8px;margin-bottom:0"><label style="font-size:11px">Repeat until <span style="color:var(--rd)">*</span></label><input type="date" id="cal-repeat-until"></div>
+      </div>
+    </div>
+
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <div class="fr"><label>Time <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="time" id="cal-time"></div>
       <div class="fr"><label>Location <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="text" id="cal-location" placeholder="e.g. Break room"></div>
@@ -11094,6 +11271,15 @@ function updateAnnBadge() {
     <div class="fr"><label>Description <span style="color:var(--t3);font-weight:400">(optional)</span></label>
       <textarea id="ann-id-desc" rows="3" placeholder="Any additional details..."></textarea>
     </div>
+
+    <!-- Also add to calendar -->
+    <label style="display:flex;align-items:center;gap:10px;padding:10px;cursor:pointer;background:var(--s2);border:1px solid var(--border);border-radius:var(--rsm);user-select:none;margin-bottom:4px">
+      <input type="checkbox" id="ann-add-to-cal" style="accent-color:var(--purple);width:16px;height:16px">
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--text)">Also add to Team Calendar</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:1px">Only if this announcement is actually an event — not every announcement needs to be.</div>
+      </div>
+    </label>
 
     <!-- Audience section -->
     <div style="margin-top:4px">

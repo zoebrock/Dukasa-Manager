@@ -865,6 +865,10 @@ function isPublishedShift(shift){
         <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
         Timesheets
       </button>
+      <button class="ni" onclick="SP('calendar')" id="nav-calendar">
+        <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        Team Calendar
+      </button>
       <div style="padding:12px 12px 3px;font-size:9px;font-weight:700;letter-spacing:.06em;color:var(--t3);text-transform:uppercase">Announcements</div>
       <button class="ni" onclick="SP('announcements')" id="nav-announcements">
         <svg class="nic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 17H2a3 3 0 0 0 3-3V9a7 7 0 0 1 14 0v5a3 3 0 0 0 3 3z"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
@@ -1161,6 +1165,22 @@ function isPublishedShift(shift){
           <tbody id="ts-body"></tbody>
         </table>
       </div>
+    </div>
+
+    <!-- TEAM CALENDAR -->
+    <div class="pg" id="pg-calendar">
+      <div class="ph">
+        <h2>Team Calendar</h2>
+        <button class="btn btn-primary btn-sm" onclick="openNewCalendarEventModal()">+ Add event</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+        <button class="btn btn-sm" onclick="shiftCalMonth(-1)">‹</button>
+        <div id="cal-month-label" style="font-weight:700;font-size:15px;min-width:140px;text-align:center"></div>
+        <button class="btn btn-sm" onclick="shiftCalMonth(1)">›</button>
+        <button class="btn btn-sm" onclick="goToCalToday()" style="margin-left:6px">Today</button>
+      </div>
+      <div id="cal-grid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px"></div>
+      <div id="cal-day-list" style="margin-top:18px"></div>
     </div>
 
     <!-- ANNOUNCEMENTS -->
@@ -2905,7 +2925,7 @@ function SP(p){
   const navEl=document.getElementById('nav-'+p);
   if(pgEl) pgEl.classList.add('active');
   if(navEl) navEl.classList.add('active');
-  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',templates:'Templates',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',announcements:'Announcements',teammeetings:'Team Meetings',chat:'Chat',settings:'Settings'}[p]||p;
+  document.getElementById('page-title').textContent={dashboard:'Dashboard',roster:'Roster',templates:'Templates',ot:'OT Tracker',staff:'Staff',leave:'Leave & Sick',timesheets:'Timesheets',announcements:'Announcements',teammeetings:'Team Meetings',calendar:'Team Calendar',chat:'Chat',settings:'Settings'}[p]||p;
   if(!currentWeekStart) initWeek(new Date());
   // Refresh from server for data-heavy pages, then render
   if(p==='dashboard'){
@@ -2937,6 +2957,9 @@ else if(p==='announcements'){
 }
 else if(p==='teammeetings'){
   renderMeetingNotesPage();
+}
+else if(p==='calendar'){
+  renderCalendarPage();
 }
 else if(p==='chat'){
   renderChat();
@@ -10537,6 +10560,231 @@ async function deleteMeetingNote(id, filePath){
   }
 }
 
+// ── TEAM CALENDAR ─────────────────────────────────────────────
+let calMonthCursor = new Date(); calMonthCursor.setDate(1);
+let editingCalEventId = null;
+let calEventsCache = [];
+let calSelectedDate = null;
+
+function shiftCalMonth(delta){
+  calMonthCursor.setMonth(calMonthCursor.getMonth() + delta);
+  renderCalendarPage();
+}
+function goToCalToday(){
+  calMonthCursor = new Date(); calMonthCursor.setDate(1);
+  calSelectedDate = FD(new Date());
+  renderCalendarPage();
+}
+
+async function renderCalendarPage(){
+  const grid = document.getElementById('cal-grid');
+  const label = document.getElementById('cal-month-label');
+  if(!grid || !label) return;
+
+  label.textContent = calMonthCursor.toLocaleDateString('en-AU', { month:'long', year:'numeric' });
+
+  const { data, error } = await supabaseClient.from('calendar_events').select('*').order('date', { ascending: true });
+  if(error){
+    grid.innerHTML = `<div class="alert ad" style="font-size:12px;grid-column:1/-1">Could not load calendar events: ${escHTML(error.message)}</div>`;
+    return;
+  }
+  calEventsCache = data || [];
+
+  const year = calMonthCursor.getFullYear(), month = calMonthCursor.getMonth();
+  const firstOfMonth = new Date(year, month, 1);
+  const startOffset = (firstOfMonth.getDay() + 6) % 7; // Monday-first grid
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayStr = FD(new Date());
+
+  const eventsForDate = ds => calEventsCache.filter(e => {
+    const start = e.date, end = e.end_date || e.date;
+    return ds >= start && ds <= end;
+  });
+
+  const dow = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  let html = dow.map(d => `<div style="text-align:center;font-size:10px;font-weight:700;color:var(--t3);padding:4px 0">${d}</div>`).join('');
+
+  for(let i = 0; i < startOffset; i++) html += `<div></div>`;
+
+  for(let d = 1; d <= daysInMonth; d++){
+    const ds = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const dayEvents = eventsForDate(ds);
+    const isToday = ds === todayStr;
+    const isSelected = ds === calSelectedDate;
+    html += `<div onclick="selectCalDay('${ds}')" style="aspect-ratio:1;border-radius:8px;padding:4px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;background:${isSelected?'var(--purple)':isToday?'var(--pl)':'transparent'};border:1px solid ${isSelected?'var(--purple)':'var(--border)'}">
+      <span style="font-size:11px;font-weight:${isToday?'700':'500'};color:${isSelected?'#fff':isToday?'var(--purple)':'var(--text)'}">${d}</span>
+      ${dayEvents.length ? `<div style="display:flex;gap:2px;margin-top:2px;flex-wrap:wrap;justify-content:center">${dayEvents.slice(0,3).map(()=>`<span style="width:5px;height:5px;border-radius:50%;background:${isSelected?'#fff':'var(--purple)'}"></span>`).join('')}</div>` : ''}
+    </div>`;
+  }
+
+  grid.innerHTML = html;
+
+  if(!calSelectedDate) calSelectedDate = todayStr;
+  renderCalDayList();
+}
+
+function selectCalDay(ds){
+  calSelectedDate = ds;
+  renderCalendarPage();
+}
+
+function renderCalDayList(){
+  const el = document.getElementById('cal-day-list');
+  if(!el) return;
+  const ds = calSelectedDate;
+  const dateLabel = ds ? new Date(ds+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'}) : '';
+  const dayEvents = calEventsCache.filter(e => {
+    const start = e.date, end = e.end_date || e.date;
+    return ds >= start && ds <= end;
+  });
+
+  el.innerHTML = `
+    <div style="font-size:13px;font-weight:700;margin-bottom:10px">${escHTML(dateLabel)}</div>
+    ${dayEvents.length ? dayEvents.map(e => {
+      const audienceLabel = (e.staff_ids||[]).length ? `${e.staff_ids.length} selected staff` : ((e.roles||['All Staff']).includes('All Staff') ? 'All staff' : (e.roles||[]).join(', '));
+      return `<div class="card" style="margin-bottom:10px;display:flex;gap:12px;align-items:flex-start">
+        <div style="width:38px;height:38px;border-radius:9px;background:var(--pl);color:var(--purple);display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">📅</div>
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <strong style="font-size:14px">${escHTML(e.title)}</strong>
+            <div style="display:flex;gap:6px">
+              <button class="btn btn-sm" onclick="openEditCalendarEventModal('${e.id}')">Edit</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteCalendarEvent('${e.id}')">Delete</button>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--t3);margin:3px 0 6px">${e.end_date && e.end_date!==e.date ? `${FDS(e.date)} – ${FDS(e.end_date)}` : ''}${e.time?` · 🕐 ${escHTML(e.time)}`:''}${e.location?` · 📍 ${escHTML(e.location)}`:''} · ${escHTML(audienceLabel)}</div>
+          ${e.description ? `<p style="font-size:13px;color:var(--t2);line-height:1.5;white-space:pre-wrap;margin:0">${escHTML(e.description)}</p>` : ''}
+        </div>
+      </div>`;
+    }).join('') : `<div class="card" style="text-align:center;padding:24px 20px;color:var(--t2)"><p>No events on this day.</p></div>`}
+  `;
+}
+
+function toggleCalStaffList(cb){
+  const list = document.getElementById('cal-staff-list');
+  list.style.display = cb.checked ? 'block' : 'none';
+  if(!cb.checked){ document.querySelectorAll('.cal-staff-cb').forEach(c => c.checked = false); }
+}
+
+function openNewCalendarEventModal(){
+  editingCalEventId = null;
+  document.getElementById('cal-modal-title').textContent = 'Add event';
+  document.getElementById('cal-title').value = '';
+  document.getElementById('cal-start-date').value = calSelectedDate || FD(new Date());
+  document.getElementById('cal-end-date').value = '';
+  document.getElementById('cal-time').value = '';
+  document.getElementById('cal-location').value = '';
+  document.getElementById('cal-description').value = '';
+  document.getElementById('cal-delete-btn').style.display = 'none';
+
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  document.getElementById('cal-id-roles').innerHTML = getAnnRoles().map(r => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="cal-role-cb" value="${r}" ${r==='All Staff'?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <span>${r}</span>
+    </label>`).join('');
+  document.getElementById('cal-select-staff-toggle').checked = false;
+  document.getElementById('cal-staff-list').style.display = 'none';
+  document.getElementById('cal-staff-list').innerHTML = staff.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="cal-staff-cb" value="${s.id}" style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
+    </label>`).join('');
+
+  OM('m-calendar-event');
+}
+
+function openEditCalendarEventModal(id){
+  const e = calEventsCache.find(x => x.id === id);
+  if(!e) return;
+  editingCalEventId = id;
+  document.getElementById('cal-modal-title').textContent = 'Edit event';
+  document.getElementById('cal-title').value = e.title || '';
+  document.getElementById('cal-start-date').value = e.date || '';
+  document.getElementById('cal-end-date').value = e.end_date || '';
+  document.getElementById('cal-time').value = e.time || '';
+  document.getElementById('cal-location').value = e.location || '';
+  document.getElementById('cal-description').value = e.description || '';
+  document.getElementById('cal-delete-btn').style.display = 'inline-flex';
+
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const existingRoles = e.roles && e.roles.length ? e.roles : ['All Staff'];
+  document.getElementById('cal-id-roles').innerHTML = getAnnRoles().map(r => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="cal-role-cb" value="${r}" ${existingRoles.includes(r)?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <span>${r}</span>
+    </label>`).join('');
+  const existingStaffIds = e.staff_ids || [];
+  const hasStaffIds = existingStaffIds.length > 0;
+  document.getElementById('cal-select-staff-toggle').checked = hasStaffIds;
+  document.getElementById('cal-staff-list').style.display = hasStaffIds ? 'block' : 'none';
+  document.getElementById('cal-staff-list').innerHTML = staff.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="cal-staff-cb" value="${s.id}" ${existingStaffIds.includes(s.id)?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}</span></span>
+    </label>`).join('');
+
+  OM('m-calendar-event');
+}
+
+async function saveCalendarEvent(){
+  const title = document.getElementById('cal-title').value.trim();
+  const date = document.getElementById('cal-start-date').value;
+  const endDate = document.getElementById('cal-end-date').value || null;
+  const time = document.getElementById('cal-time').value;
+  const location = document.getElementById('cal-location').value.trim();
+  const description = document.getElementById('cal-description').value.trim();
+  const roles = [...document.querySelectorAll('.cal-role-cb:checked')].map(cb => cb.value);
+  const useStaff = document.getElementById('cal-select-staff-toggle').checked;
+  const staffIds = useStaff ? [...document.querySelectorAll('.cal-staff-cb:checked')].map(cb => cb.value) : [];
+
+  if(!title){ alert('Title is required.'); return; }
+  if(!date){ alert('Start date is required.'); return; }
+  if(endDate && endDate < date){ alert('End date must be on or after the start date.'); return; }
+  if(!roles.length && !staffIds.length){ alert('Select at least one department or staff member.'); return; }
+  if(useStaff && !staffIds.length){ alert('Please select at least one staff member, or untick "Notify specific staff members".'); return; }
+
+  const mgr = getCurrentManager();
+  const row = {
+    title, date, end_date: endDate, time, location, description,
+    roles, staff_ids: staffIds,
+    created_by: mgr.name || 'Manager',
+    updated_at: new Date().toISOString()
+  };
+
+  try {
+    if(editingCalEventId){
+      const { error } = await supabaseClient.from('calendar_events').update(row).eq('id', editingCalEventId);
+      if(error) throw error;
+    } else {
+      row.id = 'cal' + Date.now();
+      row.created_at = new Date().toISOString();
+      const { error } = await supabaseClient.from('calendar_events').insert(row);
+      if(error) throw error;
+    }
+    CM('m-calendar-event');
+    calSelectedDate = date;
+    renderCalendarPage();
+    toast(editingCalEventId ? 'Event updated.' : 'Event added.', 'success');
+  } catch(e){
+    alert('Could not save this event: ' + (e.message || e));
+  }
+}
+
+async function deleteCalendarEvent(id){
+  if(!confirm('Delete this event?')) return;
+  try {
+    const { error } = await supabaseClient.from('calendar_events').delete().eq('id', id);
+    if(error) throw error;
+    renderCalendarPage();
+    toast('Event deleted.', 'success');
+  } catch(e){
+    alert('Could not delete this event: ' + (e.message || e));
+  }
+}
+
 // ── ANNOUNCEMENTS ───────────────────────────────────────────────
 function getAnnRoles(){ return ['All Staff', ...getRoles()]; }
 let editingAnnId = null;
@@ -10769,6 +11017,54 @@ function updateAnnBadge() {
       <button class="btn" onclick="CM('m-meeting-note')">Cancel</button>
       <button class="btn" id="mn-draft-btn" onclick="saveMeetingNote(true)" title="Save now, notify staff later whenever you're ready">Save as draft</button>
       <button class="btn btn-primary" id="mn-save-btn" onclick="saveMeetingNote(false)">Upload &amp; notify</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="m-calendar-event">
+  <div class="modal" style="max-width:480px">
+    <div class="mh"><h2 id="cal-modal-title">Add event</h2><button class="xbtn" onclick="CM('m-calendar-event')">×</button></div>
+    <div class="fr"><label>Title <span style="color:var(--rd)">*</span></label><input type="text" id="cal-title" placeholder="e.g. Dukasa Finals Fever" maxlength="80"></div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fr"><label>Start date <span style="color:var(--rd)">*</span></label><input type="date" id="cal-start-date"></div>
+      <div class="fr"><label>End date <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="date" id="cal-end-date"></div>
+    </div>
+    <div style="font-size:11px;color:var(--t3);margin-top:-6px">Leave end date empty for a single-day event, or set it for a multi-day event.</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="fr"><label>Time <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="time" id="cal-time"></div>
+      <div class="fr"><label>Location <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="text" id="cal-location" placeholder="e.g. Break room"></div>
+    </div>
+
+    <div class="fr"><label>Description <span style="color:var(--t3);font-weight:400">(optional)</span></label>
+      <textarea id="cal-description" rows="3" placeholder="Any additional details..."></textarea>
+    </div>
+
+    <div style="margin-top:4px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t2);margin-bottom:8px">Who can see this <span style="color:var(--rd)">*</span></div>
+      <div style="border:1px solid var(--border);border-radius:var(--rsm);overflow:hidden;margin-bottom:8px">
+        <div style="padding:6px 10px;background:var(--s2);font-size:10px;font-weight:700;color:var(--t3);letter-spacing:.05em;text-transform:uppercase">By department</div>
+        <div style="padding:8px 10px;display:flex;flex-direction:column;gap:2px" id="cal-id-roles"></div>
+      </div>
+      <div style="border:1px solid var(--border);border-radius:var(--rsm);overflow:hidden">
+        <label style="display:flex;align-items:center;gap:10px;padding:10px;cursor:pointer;background:var(--s2);user-select:none">
+          <input type="checkbox" id="cal-select-staff-toggle" style="accent-color:var(--purple);width:16px;height:16px" onchange="toggleCalStaffList(this)">
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text)">Specific staff members</div>
+            <div style="font-size:11px;color:var(--t3);margin-top:1px">Overrides department selection for chosen individuals</div>
+          </div>
+        </label>
+        <div id="cal-staff-list" style="display:none;padding:8px 10px;max-height:180px;overflow-y:auto;border-top:1px solid var(--border)"></div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:6px;justify-content:space-between;margin-top:16px;align-items:center">
+      <button class="btn btn-sm btn-danger" id="cal-delete-btn" onclick="deleteCalendarEvent(editingCalEventId); CM('m-calendar-event')" style="display:none">Delete</button>
+      <div style="display:flex;gap:6px;margin-left:auto">
+        <button class="btn" onclick="CM('m-calendar-event')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveCalendarEvent()">Save event</button>
+      </div>
     </div>
   </div>
 </div>

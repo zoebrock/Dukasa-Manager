@@ -1175,12 +1175,12 @@ function isPublishedShift(shift){
       </div>
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
         <button class="btn btn-sm" onclick="shiftCalMonth(-1)">‹</button>
-        <div id="cal-month-label" style="font-weight:700;font-size:15px;min-width:140px;text-align:center"></div>
+        <div id="tcal-month-label" style="font-weight:700;font-size:15px;min-width:140px;text-align:center"></div>
         <button class="btn btn-sm" onclick="shiftCalMonth(1)">›</button>
         <button class="btn btn-sm" onclick="goToCalToday()" style="margin-left:6px">Today</button>
       </div>
-      <div id="cal-grid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px"></div>
-      <div id="cal-day-list" style="margin-top:18px"></div>
+      <div id="tcal-grid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px"></div>
+      <div id="tcal-day-list" style="margin-top:18px"></div>
     </div>
 
     <!-- ANNOUNCEMENTS -->
@@ -10582,8 +10582,8 @@ function goToCalToday(){
 }
 
 async function renderCalendarPage(){
-  const grid = document.getElementById('cal-grid');
-  const label = document.getElementById('cal-month-label');
+  const grid = document.getElementById('tcal-grid');
+  const label = document.getElementById('tcal-month-label');
   if(!grid || !label) return;
 
   label.textContent = calMonthCursor.toLocaleDateString('en-AU', { month:'long', year:'numeric' });
@@ -10639,7 +10639,7 @@ function selectCalDay(ds){
 }
 
 function renderCalDayList(){
-  const el = document.getElementById('cal-day-list');
+  const el = document.getElementById('tcal-day-list');
   if(!el) return;
   const ds = calSelectedDate;
   const dateLabel = ds ? new Date(ds+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'}) : '';

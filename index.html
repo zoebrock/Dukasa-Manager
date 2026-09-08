@@ -1237,6 +1237,8 @@ function isPublishedShift(shift){
         <div class="nr"><span>Daily OT threshold</span><div style="display:flex;align-items:center;gap:6px"><button class="toggle on" id="tog-dailyOT" onclick="togSet('dailyOT')"></button><input type="number" id="set-doth" style="width:50px" value="8" min="1" max="24"><span style="font-size:10px;color:var(--t2)">hrs</span></div></div>
         <div class="nr"><span>Weekly OT threshold</span><div style="display:flex;align-items:center;gap:6px"><button class="toggle on" id="tog-weeklyOT" onclick="togSet('weeklyOT')"></button><input type="number" id="set-woth" style="width:50px" value="38" min="1" max="80"><span style="font-size:10px;color:var(--t2)">hrs</span></div></div>
         <div class="nr"><span>OT multiplier</span><div style="display:flex;align-items:center;gap:6px"><input type="number" id="set-otm" style="width:50px" value="1.5" step="0.25" min="1" max="3"><span style="font-size:10px;color:var(--t2)">× rate</span></div></div>
+        <div class="nr"><span>Ordinary hours per day (payroll export)</span><div style="display:flex;align-items:center;gap:6px"><input type="number" id="set-ordinary-hrs" style="width:50px" value="7.5" step="0.25" min="1" max="24"><span style="font-size:10px;color:var(--t2)">hrs</span></div></div>
+        <span style="font-size:11px;color:var(--t3);display:block;margin-top:-4px">Used by the Timesheet export: any saved hours above this on an ordinary day are broken out onto their own OT line, and Annual/Sick Leave hours are capped at this on a day, regardless of what the staff member is rostered for.</span>
       </div>
       <div class="settings-s">
         <h3>Clock tolerance</h3>
@@ -8325,6 +8327,17 @@ wkE.setDate(wkE.getDate() + 13);
 
   const fileLabel = `Dukasa Timesheet_${shortDate(wkS)} - ${shortDate(wkE)}`;
 
+  const exportSettings = DB.get('settings') || {};
+  const ordinaryHoursPerDay = parseFloat(exportSettings.ordinaryHoursPerDay) || 7.5;
+
+  // Adds minutes to a "HH:MM" string, wrapping within a 24h day.
+  const addMinutesToTimeStr = (t, mins) => {
+    if(!t) return '';
+    const [h, m] = t.split(':').map(Number);
+    const total = ((h * 60 + m + Math.round(mins)) % 1440 + 1440) % 1440;
+    return String(Math.floor(total / 60)).padStart(2,'0') + ':' + String(total % 60).padStart(2,'0');
+  };
+
   const staffAll = (DB.get('staff') || [])
     .slice()
     .sort((a,b)=>((a.first||'')+' '+(a.last||'')).localeCompare((b.first||'')+' '+(b.last||'')));
@@ -8381,14 +8394,14 @@ for(let i = 0; i < 14; i++){
               : 'Ordinary';
       const type = isPartialLeave ? `${baseType} - Partial Leave` : baseType;
 
-      const hrs = ROUND30(Number(
+      const rawHrs = ROUND30(Number(
         r.approvedHrs ??
         r.actualHrs ??
         r.sHrs ??
         0
       ));
 
-      if(hrs <= 0) return;
+      if(rawHrs <= 0) return;
 
       // Surface lateness so the export shows why hours were adjusted, not just the
       // adjusted total — the raw clock time is baked into the flag message itself.
@@ -8397,44 +8410,61 @@ for(let i = 0; i < 14; i++){
         .map(f => f.msg)
         .join('; ');
 
-      // A staff member's saved/approved payroll hours can exceed their contracted
-      // daily hours without a formal manager-approved OT request behind it — e.g. a
-      // manager typed in their real clock times via the Payroll custom-hours editor.
-      // Split that excess onto its own OT line rather than letting it inflate the
-      // Ordinary line, same as a formally-approved OT request already does.
-      const contractedHrs = ROUND30(Number(r.contractedHrs || 0));
-      if(baseType === 'Ordinary' && !r.approvedOT && contractedHrs > 0 && hrs > contractedHrs){
-        const excessHrs = ROUND30(hrs - contractedHrs);
-        const contractStart = r.emp?.contractStart || r.s?.start || '';
-        const contractEnd = r.emp?.contractEnd || r.s?.end || '';
-        const rawIn = r.ci?.time || '';
-        const rawOut = r.co?.time || '';
-        const earlyOT = rawIn && contractStart && rawIn < contractStart;
-        const lateOT = !earlyOT && rawOut && contractEnd && rawOut > contractEnd;
+      const isLeaveType = ['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(baseType);
 
-        let otStart = '', otEnd = '';
-        if(earlyOT){ otStart = rawIn; otEnd = contractStart; }
-        else if(lateOT){ otStart = contractEnd; otEnd = rawOut; }
-
+      // Annual/Sick Leave is paid at ordinary hours regardless of what the staff
+      // member happens to be rostered for that day — never more.
+      if(isLeaveType && !isPartialLeave){
+        const cappedHrs = Math.min(rawHrs, ordinaryHoursPerDay);
         byEmp[empId].push({
           date: ds,
           day: dayLabel(ds),
-          type: baseType,
+          type,
           summaryType: baseType,
-          start: contractStart,
-          end: contractEnd,
-          hrs: contractedHrs,
+          start: r.s?.start || '',
+          end: r.s?.end || '',
+          hrs: cappedHrs,
           notes
         });
+        return;
+      }
+
+      // A staff member's saved/approved payroll hours can exceed the standard
+      // ordinary hours per day (Settings > Overtime rules) without a formal
+      // manager-approved OT request behind it — e.g. they're always rostered
+      // 08:00–17:00 (8.5h) but only 7.5h of that is ordinary. Split the excess
+      // onto its own OT line rather than letting it inflate the Ordinary line,
+      // same as a formally-approved OT request already does.
+      if(baseType === 'Ordinary' && !r.approvedOT && rawHrs > ordinaryHoursPerDay){
+        const excessHrs = ROUND30(rawHrs - ordinaryHoursPerDay);
+        const rosteredStart = r.s?.start || r.ci?.time || '';
+        const rosteredEnd = r.s?.end || r.co?.time || '';
+
+        // The excess is assumed to sit at the start of the day (clocking/rostered in
+        // before the ordinary window) — the reported real-world case, and the safer
+        // default since a shift's start is the one time field always available.
+        // OT: rosteredStart -> rosteredStart+excess. Ordinary: that point -> rosteredEnd.
+        const splitPoint = addMinutesToTimeStr(rosteredStart, excessHrs * 60);
+
         byEmp[empId].push({
           date: ds,
           day: dayLabel(ds),
           type: 'OT',
           summaryType: 'OT',
-          start: otStart,
-          end: otEnd,
+          start: rosteredStart,
+          end: splitPoint,
           hrs: excessHrs,
-          notes: 'Auto-split — hours above contracted daily hours'
+          notes: 'Auto-split — hours above the ordinary hours/day setting'
+        });
+        byEmp[empId].push({
+          date: ds,
+          day: dayLabel(ds),
+          type: baseType,
+          summaryType: baseType,
+          start: splitPoint,
+          end: rosteredEnd,
+          hrs: ordinaryHoursPerDay,
+          notes
         });
         return;
       }
@@ -8446,7 +8476,7 @@ for(let i = 0; i < 14; i++){
         summaryType: baseType,
         start: r.s?.start || '',
         end: r.s?.end || '',
-        hrs,
+        hrs: rawHrs,
         rosteredHrs: ROUND30(Number(r.sHrs || 0)),
         notes,
         hasHoursDiscrepancy: !!r.hasHoursDiscrepancy,
@@ -8894,6 +8924,7 @@ function loadSettings(){
   });
   if(s.dailyOTHours) document.getElementById('set-doth').value=s.dailyOTHours;
   if(s.weeklyOTHours) document.getElementById('set-woth').value=s.weeklyOTHours;
+  if(s.ordinaryHoursPerDay) document.getElementById('set-ordinary-hrs').value=s.ordinaryHoursPerDay;
   if(s.otMultiplier) document.getElementById('set-otm').value=s.otMultiplier;
   if(s.gracePeriod!==undefined) document.getElementById('set-grace').value=s.gracePeriod;
   if(s.dispensaryName) document.getElementById('set-name').value=s.dispensaryName;
@@ -9019,6 +9050,7 @@ function saveSettings(){
     dailyOTHours:parseFloat(document.getElementById('set-doth').value),
     weeklyOTHours:parseFloat(document.getElementById('set-woth').value),
     otMultiplier:parseFloat(document.getElementById('set-otm').value),
+    ordinaryHoursPerDay:parseFloat(document.getElementById('set-ordinary-hrs').value)||7.5,
     gracePeriod:parseFloat(document.getElementById('set-grace').value),
     dispensaryName:document.getElementById('set-name').value,
     managerNotifyPhone:document.getElementById('set-mgr-phone').value.trim(),

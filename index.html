@@ -4045,20 +4045,23 @@ function SH(s){
 // SH_GROSS = total time on shift including unpaid break portion
 function SH_GROSS(s){return Math.max(0,(MD(s.start,s.end))/60);}
 
-// Break rules:
-//   < 8 hrs worked → 30 min total break (all paid)
-//   = 8 hrs exactly → 40 min total break (30 paid, 10 unpaid)
-//   > 8 hrs → 50 min total break (30 paid, 20 unpaid)
-// Paid break = always 30 min regardless of shift length
-// s.breakMin stores the TOTAL break (including unpaid portion)
-// For pay purposes, only 30 min of any break is paid
+// Break rules, keyed off gross (total, unpaid-break-inclusive) shift hours:
+//   3–5h   → 10 min
+//   6–7.5h → 40 min
+//   8h+    → 50 min
+//   <3h    → no mandated break
+// s.breakMin stores the TOTAL break allowance for the shift. Recomputed from
+// start/end every time it's called, so a shift extended by approved OT into
+// a different bracket picks up the new allowance automatically — nothing
+// needs to separately "update" a stored break value.
 function calcBreakMin(start, end) {
-  if(!start||!end) return 30;
+  if(!start||!end) return 0;
   const totalMins = MD(start, end);
   const grossHrs  = totalMins / 60;
-  if(grossHrs > 8)  return 50; // 30 paid + 20 unpaid
-  if(grossHrs >= 8) return 40; // 30 paid + 10 unpaid
-  return 30;                    // 30 paid
+  if(grossHrs >= 8) return 50;
+  if(grossHrs >= 6) return 40;
+  if(grossHrs >= 3) return 10;
+  return 0;
 }
 function paidBreakMin() { return 30; } // only 30 min is ever paid
 
@@ -5262,6 +5265,10 @@ if (shiftIdx >= 0) {
     ...s,
     start: newStart,
     end: newEnd,
+    // Keep the stored break allowance in step with the OT-extended shift so it
+    // doesn't just work out correctly in on-screen/export recalculations but
+    // is actually right wherever the stored value itself gets read.
+    breakMin: calcBreakMin(newStart, newEnd),
     published: true,
     status: 'published',
     otOriginalStart: origStart,
@@ -5522,6 +5529,7 @@ async function reverseOTFromShift(otId, empId, date){
     ...s,
     start: newStart,
     end: newEnd,
+    breakMin: calcBreakMin(newStart, newEnd),
     otAnnotations: annotations,
     otOriginalStart: annotations.length ? origStart : null,
     otOriginalEnd: annotations.length ? origEnd : null
@@ -7802,6 +7810,9 @@ if (s.entryType === 'leave' || s.entry_type === 'leave') {
 }
 
   const contractedHrs=getContractedDailyHrs(emp,ds);
+    // Break allowance is based on the shift's full (OT-inclusive) gross hours — capture
+    // that before any ordinary-hours clamping below narrows s.start/s.end back down.
+    const grossShiftStart=s.start, grossShiftEnd=s.end;
     // When approved OT has been merged into this shift's start/end (see approveOT()),
     // otOriginalStart/otOriginalEnd hold the pre-OT rostered boundary. Use that boundary
     // for all ordinary-hours math below so the OT window isn't counted both as part of
@@ -7862,7 +7873,9 @@ if (s.entryType === 'leave' || s.entry_type === 'leave') {
       // See comment above — ordinary hours cap at rostered end even when OT covers the
       // overrun, so it isn't paid twice; autoRoundedOut stays uncapped there for the UI.
       ordinaryCapOut=coDiff>0?s.end:autoRoundedOut;
-      const allottedBreak=s.breakMin||30;
+      // Based on the shift's full gross hours (before the ordinary-hours OT clamp
+      // above), so an OT-extended shift automatically gets the right bracket.
+      const allottedBreak=calcBreakMin(grossShiftStart, grossShiftEnd) || s.breakMin || 30;
       if(breakInfo.totalMin>allottedBreak){
         flags.push({type:'break-over',msg:`Over break limit — used ${breakInfo.totalMin}m of ${allottedBreak}m allotted${breakInfo.sessions.length>1?` across ${breakInfo.sessions.length} breaks`:''}`});
       }

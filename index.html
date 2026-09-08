@@ -8397,6 +8397,48 @@ for(let i = 0; i < 14; i++){
         .map(f => f.msg)
         .join('; ');
 
+      // A staff member's saved/approved payroll hours can exceed their contracted
+      // daily hours without a formal manager-approved OT request behind it — e.g. a
+      // manager typed in their real clock times via the Payroll custom-hours editor.
+      // Split that excess onto its own OT line rather than letting it inflate the
+      // Ordinary line, same as a formally-approved OT request already does.
+      const contractedHrs = ROUND30(Number(r.contractedHrs || 0));
+      if(baseType === 'Ordinary' && !r.approvedOT && contractedHrs > 0 && hrs > contractedHrs){
+        const excessHrs = ROUND30(hrs - contractedHrs);
+        const contractStart = r.emp?.contractStart || r.s?.start || '';
+        const contractEnd = r.emp?.contractEnd || r.s?.end || '';
+        const rawIn = r.ci?.time || '';
+        const rawOut = r.co?.time || '';
+        const earlyOT = rawIn && contractStart && rawIn < contractStart;
+        const lateOT = !earlyOT && rawOut && contractEnd && rawOut > contractEnd;
+
+        let otStart = '', otEnd = '';
+        if(earlyOT){ otStart = rawIn; otEnd = contractStart; }
+        else if(lateOT){ otStart = contractEnd; otEnd = rawOut; }
+
+        byEmp[empId].push({
+          date: ds,
+          day: dayLabel(ds),
+          type: baseType,
+          summaryType: baseType,
+          start: contractStart,
+          end: contractEnd,
+          hrs: contractedHrs,
+          notes
+        });
+        byEmp[empId].push({
+          date: ds,
+          day: dayLabel(ds),
+          type: 'OT',
+          summaryType: 'OT',
+          start: otStart,
+          end: otEnd,
+          hrs: excessHrs,
+          notes: 'Auto-split — hours above contracted daily hours'
+        });
+        return;
+      }
+
       byEmp[empId].push({
         date: ds,
         day: dayLabel(ds),

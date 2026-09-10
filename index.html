@@ -1192,7 +1192,13 @@ function isPublishedShift(shift){
     <div class="pg" id="pg-uniform">
       <div class="ph">
         <h2>Uniform Orders</h2>
-        <div style="display:flex;gap:6px">
+      </div>
+      <div class="tabs">
+        <div class="tab active" onclick="setUniformTab('orders',this)">Orders</div>
+        <div class="tab" onclick="setUniformTab('tracker',this)">Order Tracker</div>
+      </div>
+      <div id="uniform-orders-tab">
+        <div style="display:flex;gap:6px;margin:12px 0">
           <select id="uniform-status-filter" class="sort-select" onchange="renderUniformOrders()">
             <option value="all">All statuses</option>
             <option value="submitted">Submitted</option>
@@ -1200,8 +1206,12 @@ function isPublishedShift(shift){
             <option value="invoice_failed">Invoice failed</option>
           </select>
         </div>
+        <div id="uniform-orders-list"></div>
       </div>
-      <div id="uniform-orders-list"></div>
+      <div id="uniform-tracker-tab" style="display:none">
+        <div id="uniform-supplier-links" style="margin:12px 0"></div>
+        <div id="uniform-tracker-list"></div>
+      </div>
     </div>
 
     <!-- ANNOUNCEMENTS -->
@@ -11190,6 +11200,146 @@ const UNIFORM_STATUS_BADGE = {
   invoiced: { cls: 'bg', label: 'Invoiced' },
   invoice_failed: { cls: 'br', label: 'Invoice failed' }
 };
+
+function setUniformTab(tab, el){
+  document.querySelectorAll('#pg-uniform .tab').forEach(t=>t.classList.remove('active'));
+  if(el) el.classList.add('active');
+  document.getElementById('uniform-orders-tab').style.display = tab==='orders' ? 'block' : 'none';
+  document.getElementById('uniform-tracker-tab').style.display = tab==='tracker' ? 'block' : 'none';
+  if(tab==='tracker') renderUniformTracker();
+}
+
+// Supplier links for stock the manager needs to physically order — set null
+// for anything without a link yet rather than guessing a URL.
+const UNIFORM_PURCHASE_LINKS = {
+  scrubTop: 'https://airmedscrubs.com.au/products/essential-crewneck-scrub-top-black',
+  scrubPants_StraightLeg: 'https://airmedscrubs.com.au/products/aspire-straight-leg-scrub-pants-black',
+  scrubPants_Jogger: 'https://airmedscrubs.com.au/products/aspire-jogger-scrub-pants-black',
+  labCoat: 'https://labcoatcompany.com.au/white-lab-coat/?setCurrencyId=1&sku=LCW-M&gad_source=1&gad_campaignid=17741296211&gbraid=0AAAAADstRt1PImGt_20k-3bSLHSh9hmC_&gclid=Cj0KCQjwo_PRBhDNARIsAEcVALWN7Ue3OalctfYDu2SkpIDjY__H8dPlAyi2dKixKOdE7HEsZsWQ-LoaAuiPEALw_wcB',
+  winterFleece: null,
+  summerJumper: null
+};
+
+function uniformPurchaseLink(item){
+  if(item.key === 'scrubPants'){
+    return UNIFORM_PURCHASE_LINKS['scrubPants_' + (item.style === 'Jogger' ? 'Jogger' : 'StraightLeg')];
+  }
+  return UNIFORM_PURCHASE_LINKS[item.key] || null;
+}
+
+function uniformItemSignature(item){
+  return [item.key||'', item.type||'', item.fit||'', item.style||'', item.size||''].join('|');
+}
+
+function uniformItemLabel(item){
+  const parts = [item.type || item.name || 'Item'];
+  if(item.fit) parts.push(item.fit);
+  if(item.style) parts.push(item.style);
+  if(item.size) parts.push('Size ' + item.size);
+  return parts.join(' · ');
+}
+
+function renderUniformSupplierLinks(){
+  const el = document.getElementById('uniform-supplier-links');
+  if(!el) return;
+  const links = [
+    { label: 'Scrub Top', url: UNIFORM_PURCHASE_LINKS.scrubTop },
+    { label: 'Scrub Pants — Straight Leg', url: UNIFORM_PURCHASE_LINKS.scrubPants_StraightLeg },
+    { label: 'Scrub Pants — Jogger', url: UNIFORM_PURCHASE_LINKS.scrubPants_Jogger },
+    { label: 'Winter Fleece Jumper (Eagle Fleece Jumper)', url: UNIFORM_PURCHASE_LINKS.winterFleece },
+    { label: 'Summer Cotton Jumper (Softstyle Crewneck Jumper)', url: UNIFORM_PURCHASE_LINKS.summerJumper },
+    { label: 'Lab Coat', url: UNIFORM_PURCHASE_LINKS.labCoat }
+  ];
+  el.innerHTML = `<div style="font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Supplier links</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${links.map(l => l.url
+        ? `<a class="btn btn-sm" href="${l.url}" target="_blank" rel="noopener">${escHTML(l.label)} ↗</a>`
+        : `<span class="btn btn-sm" style="opacity:.5;cursor:default" title="No link provided yet">${escHTML(l.label)} — no link yet</span>`
+      ).join('')}
+    </div>`;
+}
+
+function renderUniformTracker(){
+  renderUniformSupplierLinks();
+  const el = document.getElementById('uniform-tracker-list');
+  if(!el) return;
+
+  const orders = DB.get('uniformOrders') || [];
+  const groups = {};
+
+  orders.forEach(o => {
+    (Array.isArray(o.items) ? o.items : []).forEach(item => {
+      const sig = uniformItemSignature(item);
+      const status = item.fulfillmentStatus || 'pending';
+      if(!groups[sig]) groups[sig] = { sig, item, pending: 0, ordered: 0, complete: 0 };
+      groups[sig][status] = (groups[sig][status] || 0) + (Number(item.qty) || 0);
+    });
+  });
+
+  const groupList = Object.values(groups).sort((a,b) => uniformItemLabel(a.item).localeCompare(uniformItemLabel(b.item)));
+  const activeGroups = groupList.filter(g => g.pending > 0 || g.ordered > 0);
+  const completeGroups = groupList.filter(g => g.complete > 0 && g.pending === 0 && g.ordered === 0);
+
+  const rowHTML = (g) => {
+    const link = uniformPurchaseLink(g.item);
+    const sigEsc = g.sig.replace(/'/g, "\\'");
+    return `<div class="lcard">
+      <div class="lcard-h">
+        <div><strong>${escHTML(uniformItemLabel(g.item))}</strong></div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+          ${g.pending ? `<span class="badge ba">${g.pending} to order</span>` : ''}
+          ${g.ordered ? `<span class="badge bg">${g.ordered} ordered</span>` : ''}
+          ${g.complete ? `<span class="badge bp">${g.complete} complete</span>` : ''}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+        ${link ? `<a class="btn btn-sm" href="${link}" target="_blank" rel="noopener">Buy ↗</a>` : ''}
+        ${g.pending ? `<button class="btn btn-sm btn-primary" onclick="markUniformGroup('${sigEsc}','pending','ordered')">Mark Order Placed (${g.pending})</button>` : ''}
+        ${g.ordered ? `<button class="btn btn-sm" onclick="markUniformGroup('${sigEsc}','ordered','complete')">Mark Complete (${g.ordered})</button>` : ''}
+      </div>
+    </div>`;
+  };
+
+  el.innerHTML =
+    (activeGroups.length
+      ? activeGroups.map(rowHTML).join('')
+      : '<p style="color:var(--t2);font-size:12px">Nothing outstanding — everything ordered so far is complete.</p>') +
+    (completeGroups.length
+      ? `<div style="font-weight:600;font-size:11px;color:var(--t2);margin:16px 0 7px;text-transform:uppercase;letter-spacing:.04em">Completed</div>` + completeGroups.map(rowHTML).join('')
+      : '');
+}
+
+async function markUniformGroup(sig, fromStatus, toStatus){
+  const orders = DB.get('uniformOrders') || [];
+  const affected = [];
+
+  orders.forEach(o => {
+    let changed = false;
+    const items = (Array.isArray(o.items) ? o.items : []).map(item => {
+      const itemStatus = item.fulfillmentStatus || 'pending';
+      if(uniformItemSignature(item) === sig && itemStatus === fromStatus){
+        changed = true;
+        return { ...item, fulfillmentStatus: toStatus };
+      }
+      return item;
+    });
+    if(changed) affected.push({ id: o.id, items });
+  });
+
+  if(!affected.length) return;
+
+  try{
+    for(const a of affected){
+      const { error } = await supabaseClient.from('uniform_orders').update({ items: a.items }).eq('id', a.id);
+      if(error) throw error;
+    }
+    await DB.refresh(['uniformOrders']);
+    renderUniformTracker();
+  } catch(err){
+    console.error('Update uniform fulfilment status failed:', err);
+    alert('Could not update order status: ' + (err.message || err));
+  }
+}
 
 function renderUniformOrders(){
   const el = document.getElementById('uniform-orders-list');

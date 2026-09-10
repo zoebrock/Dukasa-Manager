@@ -1202,7 +1202,8 @@ function isPublishedShift(shift){
           <select id="uniform-status-filter" class="sort-select" onchange="renderUniformOrders()">
             <option value="all">All statuses</option>
             <option value="submitted">Submitted</option>
-            <option value="invoiced">Invoiced</option>
+            <option value="invoiced">Payment pending</option>
+            <option value="paid">Paid</option>
             <option value="invoice_failed">Invoice failed</option>
             <option value="archived">Archived</option>
           </select>
@@ -9217,6 +9218,7 @@ function startManagerRealtime() {
   }
 }
 
+let uniformPaymentSweepTimer = null;
 function startManagerSync() {
   startManagerRealtime();
   if (managerSyncTimer) clearInterval(managerSyncTimer);
@@ -9225,6 +9227,15 @@ function startManagerSync() {
   managerSyncTimer = setInterval(() => {
     runManagerRefresh();
   }, 10000);
+
+  if (uniformPaymentSweepTimer) clearInterval(uniformPaymentSweepTimer);
+  // Independent of the Invoice Ninja webhook (which may not be available on
+  // every plan tier) — periodically checks pending uniform invoices so a
+  // manager is notified of payment even if they never open the Orders page.
+  uniformPaymentSweepTimer = setInterval(() => {
+    sweepUniformPayments();
+  }, 90000);
+  sweepUniformPayments();
 }
 
 async function manualSync() {
@@ -11198,7 +11209,8 @@ async function deleteAnnouncement() {
 // ── UNIFORM ORDERS ────────────────────────────────────────────────
 const UNIFORM_STATUS_BADGE = {
   submitted: { cls: 'ba', label: 'Submitted' },
-  invoiced: { cls: 'bg', label: 'Invoiced' },
+  invoiced: { cls: 'ba', label: 'Payment pending' },
+  paid: { cls: 'bg', label: 'Paid' },
   invoice_failed: { cls: 'br', label: 'Invoice failed' },
   archived: { cls: 'bp', label: 'Archived' }
 };
@@ -11382,8 +11394,10 @@ function renderUniformOrders(){
         ${items.map(i => `${escHTML(i.notes || i.name || '')} × ${i.qty || 1} — $${Number(i.lineTotal || 0).toFixed(2)}`).join('<br>')}
       </div>
       ${o.error_message ? `<div style="font-size:11px;color:var(--rd);margin-bottom:5px;padding:6px 8px;background:var(--rl);border-radius:var(--rsm)">⚠ ${escHTML(o.error_message)}</div>` : ''}
+      ${o.status === 'paid' && o.paid_at ? `<div style="font-size:11px;color:var(--gd);margin-bottom:5px">✓ Paid ${new Date(o.paid_at).toLocaleString('en-AU', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })}</div>` : ''}
       <div style="display:flex;gap:5px;flex-wrap:wrap">
         ${o.invoice_url ? `<a class="btn btn-sm" href="${o.invoice_url}" target="_blank" rel="noopener">View invoice</a>` : ''}
+        ${o.status === 'invoiced' && o.invoice_ninja_invoice_id ? `<button class="btn btn-sm" onclick="checkUniformPayment('${idEsc}')">Check payment</button>` : ''}
         ${o.status === 'invoice_failed' ? `<button class="btn btn-sm btn-primary" onclick="retryUniformInvoice('${idEsc}')">Retry invoice</button>` : ''}
         ${o.status !== 'archived'
           ? `<button class="btn btn-sm" onclick="archiveUniformOrder('${idEsc}')">Archive</button>`
@@ -11497,6 +11511,74 @@ async function retryUniformInvoice(orderId){
     console.error('Retry uniform invoice failed:', err);
     alert('Could not retry this invoice: ' + (err.message || err));
     if(btn){ btn.disabled = false; btn.textContent = 'Retry invoice'; }
+  }
+}
+
+// Marks an order paid locally + persists it, used by both the manual "Check
+// payment" button and the background sweep below.
+async function markUniformOrderPaid(orderId){
+  const { error } = await supabaseClient.from('uniform_orders').update({
+    status: 'paid',
+    paid_at: new Date().toISOString()
+  }).eq('id', orderId);
+  if(error) throw error;
+  await DB.refresh(['uniformOrders']);
+}
+
+async function checkUniformPayment(orderId){
+  const order = (DB.get('uniformOrders') || []).find(o => String(o.id) === String(orderId));
+  if(!order || !order.invoice_ninja_invoice_id) return;
+
+  const btn = event?.target;
+  if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
+
+  try{
+    const res = await fetch(`${STAFF_PORTAL_URL}/api/invoiceninja-status?invoiceId=${encodeURIComponent(order.invoice_ninja_invoice_id)}`);
+    const result = await res.json();
+    if(!result?.ok) throw new Error(result?.error || 'Status check failed');
+
+    if(result.paid){
+      await markUniformOrderPaid(order.id);
+      renderUniformOrders();
+      updateBadges();
+      alert(`${order.emp_name || 'This order'}'s invoice has been paid.`);
+    } else {
+      alert('Still unpaid — no payment received yet.');
+      if(btn){ btn.disabled = false; btn.textContent = 'Check payment'; }
+    }
+  } catch(err){
+    console.error('Check uniform payment failed:', err);
+    alert('Could not check payment status: ' + (err.message || err));
+    if(btn){ btn.disabled = false; btn.textContent = 'Check payment'; }
+  }
+}
+
+// Quietly sweeps all "payment pending" orders in the background (independent
+// of which page is open) so a manager finds out an invoice was paid even if
+// the Invoice Ninja webhook isn't configured/available on the plan in use.
+// Surfaces a one-time alert the moment an order flips to paid.
+let uniformPaymentSweepRunning = false;
+async function sweepUniformPayments(){
+  if(uniformPaymentSweepRunning) return;
+  uniformPaymentSweepRunning = true;
+  try{
+    const pending = (DB.get('uniformOrders') || []).filter(o => o.status === 'invoiced' && o.invoice_ninja_invoice_id);
+    for(const o of pending){
+      try{
+        const res = await fetch(`${STAFF_PORTAL_URL}/api/invoiceninja-status?invoiceId=${encodeURIComponent(o.invoice_ninja_invoice_id)}`);
+        const result = await res.json();
+        if(result?.ok && result.paid){
+          await markUniformOrderPaid(o.id);
+          if(document.getElementById('pg-uniform')?.classList.contains('active')) renderUniformOrders();
+          updateBadges();
+          toast(`Payment received: ${o.emp_name || 'a staff member'}'s uniform order ($${Number(o.total||0).toFixed(2)}) has been paid.`, 'success', 8000);
+        }
+      } catch(err){
+        console.warn('Uniform payment sweep check failed for order', o.id, err.message);
+      }
+    }
+  } finally {
+    uniformPaymentSweepRunning = false;
   }
 }
 

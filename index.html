@@ -11414,7 +11414,24 @@ async function retryUniformInvoice(orderId){
     await DB.refresh(['uniformOrders']);
     renderUniformOrders();
     updateBadges();
-    if(!result?.ok) alert('Invoice retry failed again: ' + (result?.error || 'Unknown error'));
+
+    if(result?.ok && result?.invoiceUrl){
+      // The invoice service marks the invoice sent without emailing it — the
+      // payment link is delivered by SMS instead, same as on initial submit.
+      const staff = (DB.get('staff') || []).find(s => String(s.id) === String(order.emp_id));
+      if(staff?.phone){
+        try{
+          await _smsPost(staff.phone, `Hi ${staff.first || ''}, here's the payment link for your Dukasa uniform order ($${Number(order.total||0).toFixed(2)}): ${result.invoiceUrl}`);
+        } catch(err){
+          console.warn('Uniform order retry SMS failed:', err.message);
+          alert('Invoice created, but the payment link text could not be sent: ' + err.message + '\n\nLink: ' + result.invoiceUrl);
+        }
+      } else {
+        alert('Invoice created, but this staff member has no phone number on file to text the payment link to.\n\nLink: ' + result.invoiceUrl);
+      }
+    } else if(!result?.ok){
+      alert('Invoice retry failed again: ' + (result?.error || 'Unknown error'));
+    }
   } catch(err){
     console.error('Retry uniform invoice failed:', err);
     alert('Could not retry this invoice: ' + (err.message || err));

@@ -1453,6 +1453,10 @@ function isPublishedShift(shift){
       <p style="font-size:11px;color:var(--t2);margin-bottom:8px">Toggle which days this staff member is generally available.</p>
       <div class="avail-grid" id="modal-avail-grid"></div>
       <div class="fr" style="margin-top:10px"><label>Availability notes</label><textarea id="sf-avail-notes" rows="2" placeholder="Any restrictions or preferences..."></textarea></div>
+      <div style="margin-top:16px">
+        <label style="display:block;margin-bottom:6px">Lunch break schedule <span style="font-weight:400;color:var(--t3)">(shown on their Staff Portal home page)</span></label>
+        <div id="modal-break-schedule" style="display:flex;flex-direction:column;gap:6px"></div>
+      </div>
     </div>
     <div id="staff-tab-leave" style="display:none">
       <div id="staff-leave-body"><p style="font-size:12px;color:var(--t2)">Save staff member first to view leave history.</p></div>
@@ -2132,6 +2136,7 @@ function mapFromSupabase(key, rows) {
     return rows.map(r => ({
       ...r,
       availNotes: r.avail_notes,
+      breakSchedule: r.break_schedule || null,
       contractStart: r.contract_start,
       contractEnd: r.contract_end,
       contractBreak: r.contract_break,
@@ -2281,6 +2286,7 @@ function mapToSupabase(key, arrOrObj) {
 
     if (key === 'staff') {
       x.avail_notes = x.availNotes;
+      x.break_schedule = x.breakSchedule || null;
       x.contract_start = x.contractStart;
       x.contract_end = x.contractEnd;
       x.contract_break = x.contractBreak;
@@ -2291,6 +2297,7 @@ function mapToSupabase(key, arrOrObj) {
       x.secondary_role = x.secondaryRole || null;
 
       delete x.availNotes;
+      delete x.breakSchedule;
       delete x.contractStart;
       delete x.contractEnd;
       delete x.contractBreak;
@@ -6069,7 +6076,7 @@ function populateRoleSelects(primaryValue, secondaryValue){
     secondaryEl.value = secondaryValue || '';
   }
 }
-function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';populateRoleSelects();const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildContractDaysTable(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
+function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';populateRoleSelects();const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildModalBreakSchedule({});buildContractDaysTable(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
 function editStaff(id){
   editingStaffId=id;const staff=DB.get('staff')||[];const emp=staff.find(s=>s.id===id);if(!emp)return;
   document.getElementById('staff-modal-title').textContent='Edit: '+emp.first+' '+emp.last;
@@ -6081,6 +6088,7 @@ function editStaff(id){
   const tog=document.getElementById('tog-auto-shift');if(tog) tog.classList.toggle('on',!!emp.autoShift);
   const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value=emp.contractedHrsPerWeek||'';
   buildModalAvailGrid(emp.availability||{});
+  buildModalBreakSchedule(emp.breakSchedule||{});
   buildContractDaysTable(emp);
   const lbody=document.getElementById('staff-leave-body');if(lbody)lbody.innerHTML=staffLeaveHTML(id);
   staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');
@@ -6125,6 +6133,30 @@ function readManagerAvailability(){
   return result;
 }
 function buildModalPayrollDays(avail){ /* legacy — no longer used, kept for safety */ }
+
+const BREAK_SCHEDULE_DAYS = ['Mon','Tue','Wed','Thu','Fri'];
+function buildModalBreakSchedule(schedule){
+  const container=document.getElementById('modal-break-schedule');
+  if(!container)return;
+  const sched=schedule||{};
+  container.innerHTML=BREAK_SCHEDULE_DAYS.map(day=>{
+    const entry=sched[day]||{};
+    return `<div data-day="${day}" style="display:grid;grid-template-columns:42px 1fr 90px;gap:8px;align-items:center">
+      <strong style="font-size:12px">${day}</strong>
+      <input type="time" class="modal-break-time" data-day="${day}" value="${entry.time||''}" style="font-size:12px;padding:6px 8px">
+      <input type="number" class="modal-break-min" data-day="${day}" value="${entry.min||''}" min="0" max="120" placeholder="min" style="font-size:12px;padding:6px 8px">
+    </div>`;
+  }).join('');
+}
+function readManagerBreakSchedule(){
+  const result={};
+  BREAK_SCHEDULE_DAYS.forEach(day=>{
+    const time=document.querySelector(`.modal-break-time[data-day="${day}"]`)?.value||'';
+    const min=parseInt(document.querySelector(`.modal-break-min[data-day="${day}"]`)?.value)||0;
+    if(time) result[day]={time,min:min||40};
+  });
+  return result;
+}
 
 function buildContractDaysTable(emp) {
   const tbody = document.getElementById('contract-days-tbody');
@@ -6236,6 +6268,7 @@ function saveStaff(){
     pin:String(document.getElementById('sf-pin').value).trim(),
     availNotes:document.getElementById('sf-avail-notes').value,
     availability:avail,
+    breakSchedule:readManagerBreakSchedule(),
     color:EMP_COLORS[staff.length%EMP_COLORS.length],
     contractStart:cStart,contractEnd:cEnd,contractBreak:cBreak,
     contractDays,contractPerDay,contractedHrsPerWeek,

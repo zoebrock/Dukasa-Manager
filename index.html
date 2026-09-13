@@ -11615,7 +11615,7 @@ async function sweepUniformPayments(){
   }
 }
 
-function renderAnnouncements(filter, tabEl) {
+async function renderAnnouncements(filter, tabEl) {
   annFilter = filter || annFilter;
   if (tabEl) {
     document.querySelectorAll('#pg-announcements .tab').forEach(t => t.classList.remove('active'));
@@ -11638,18 +11638,40 @@ function renderAnnouncements(filter, tabEl) {
     return;
   }
 
+  const { data: acksData, error: acksErr } = await supabaseClient.from('announcement_acks').select('*');
+  const acks = acksErr ? [] : (acksData || []);
+  const staffAll = DB.get('staff')||[];
+
   list.innerHTML = filtered.map(ann => {
     const isPast = ann.date < today;
     const dateLabel = new Date(ann.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
-    // Build audience label
-    const staffAll = DB.get('staff')||[];
-    let audienceLabel;
+    // Build audience
+    let audience;
     if(ann.staffIds&&ann.staffIds.length>0){
-      const names = ann.staffIds.map(id=>{const s=staffAll.find(x=>x.id===id);return s?s.first+' '+s.last:null;}).filter(Boolean);
-      audienceLabel = names.length<=3 ? names.join(', ') : names.slice(0,2).join(', ')+' +'+( names.length-2)+' more';
+      audience = ann.staffIds.map(id=>staffAll.find(x=>x.id===id)).filter(Boolean);
     } else {
-      audienceLabel = (ann.roles||[]).join(', ') || 'All Staff';
+      const roles = ann.roles||[];
+      audience = staffAll.filter(s=>roles.includes('All Staff')||roles.includes(s.role));
     }
+    const audienceLabel = ann.staffIds&&ann.staffIds.length>0
+      ? (audience.length<=3 ? audience.map(s=>s.first+' '+s.last).join(', ') : audience.slice(0,2).map(s=>s.first+' '+s.last).join(', ')+' +'+(audience.length-2)+' more')
+      : ((ann.roles||[]).join(', ') || 'All Staff');
+
+    const annAcks = acks.filter(a => String(a.announcement_id) === String(ann.id));
+    const ackByStaffId = new Map(annAcks.map(a => [String(a.staff_id), a]));
+    const total = audience.length;
+    const ackedCount = audience.filter(s => ackByStaffId.get(String(s.id))?.acked_at).length;
+    const allRead = total > 0 && ackedCount === total;
+    const detailListId = 'ann-detail-' + ann.id;
+    const reactionCounts = {};
+    annAcks.forEach(a => { if(a.emoji) reactionCounts[a.emoji] = (reactionCounts[a.emoji]||0)+1; });
+    const reactionSummary = Object.entries(reactionCounts).map(([e,c])=>`${e} ${c}`).join('  ');
+
+    const fmtDate = iso => escHTML(new Date(iso).toLocaleDateString('en-AU',{day:'numeric',month:'short'}));
+    const audienceStatus = audience
+      .map(s => ({ s, ack: ackByStaffId.get(String(s.id)) }))
+      .sort((a,b) => (a.ack?.acked_at?0:1) - (b.ack?.acked_at?0:1) || a.s.first.localeCompare(b.s.first));
+
     return `<div style="border:1px solid var(--border);border-radius:var(--rsm);padding:12px 14px;margin-bottom:8px;background:var(--surface);${isPast?'opacity:.6':''}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="flex:1;min-width:0">
@@ -11661,12 +11683,25 @@ function renderAnnouncements(filter, tabEl) {
         </div>
         <div style="display:flex;gap:5px;flex-shrink:0">
           <button class="btn btn-sm" onclick="openAnnModal('${ann.id}')">Edit</button>
-          ${isPast 
-          ? '<span class="badge ba" style="font-size:9px;align-self:center">Archived</span>' 
+          ${isPast
+          ? '<span class="badge ba" style="font-size:9px;align-self:center">Archived</span>'
           : '<span class="badge bg" style="font-size:9px;align-self:center">Active</span>'
 }
         </div>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:${allRead?'var(--gl)':'var(--al)'};color:${allRead?'var(--gd)':'var(--ad)'}">${allRead?'✓':'👁'} ${ackedCount}/${total} acknowledged</span>
+        ${reactionSummary?`<span style="font-size:12px">${escHTML(reactionSummary)}</span>`:''}
+        ${total ? `<button class="btn btn-sm" style="font-size:11px" onclick="document.getElementById('${detailListId}').style.display=document.getElementById('${detailListId}').style.display==='flex'?'none':'flex'">See who's read it</button>` : ''}
+      </div>
+      ${total ? `<div id="${detailListId}" style="display:none;margin-top:8px;flex-direction:column;gap:4px;background:var(--s2);border-radius:8px;padding:4px 10px">${audienceStatus.map(({s, ack}) => {
+        const label = ack?.acked_at
+          ? `<span style="color:var(--gd);font-weight:600">✓ Acknowledged ${fmtDate(ack.acked_at)}${ack.emoji?' '+ack.emoji:''}</span>`
+          : `<span style="color:var(--t3)">— Not acknowledged yet</span>`;
+        return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;font-size:12px;border-bottom:1px solid var(--border)">
+          <span style="color:var(--t2)">${escHTML(s.first+' '+s.last)}</span>${label}
+        </div>`;
+      }).join('')}</div>` : ''}
     </div>`;
   }).join('');
 }

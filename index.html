@@ -55,16 +55,24 @@ html{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.55;min-height:100vh}
 *{-webkit-tap-highlight-color:transparent}
 button{font-family:inherit;cursor:pointer;border:none;background:none;font-size:14px}
-input,select,textarea{
+input:not([type="checkbox"]):not([type="radio"]),select,textarea{
   font-family:inherit;font-size:13px;
   border:1px solid var(--border2);border-radius:var(--rsm);
   padding:8px 11px;background:var(--surface);color:var(--text);width:100%;
   transition:border-color var(--ease),box-shadow var(--ease);
   -webkit-appearance:none;appearance:none
 }
-input:focus,select:focus,textarea:focus{
+input:not([type="checkbox"]):not([type="radio"]):focus,select:focus,textarea:focus{
   outline:none;border-color:var(--purple);
   box-shadow:0 0 0 3px rgba(83,74,183,.14)
+}
+/* Checkboxes/radios were being caught by the reset above — appearance:none
+   with no custom paint rules meant a checked box never actually filled in,
+   just showed the focus glow. Let them render natively so accent-color
+   (already set inline wherever these appear) fills solid when checked. */
+input[type="checkbox"],input[type="radio"]{
+  -webkit-appearance:auto;appearance:auto;
+  flex-shrink:0;margin:0;cursor:pointer
 }
 select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23898781' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
 textarea{resize:vertical;min-height:64px}

@@ -1227,6 +1227,7 @@ function isPublishedShift(shift){
       <div class="tabs" style="margin-bottom:14px">
         <div class="tab active" onclick="renderAnnouncements('active',this)">Active</div>
         <div class="tab" onclick="renderAnnouncements('upcoming',this)">Upcoming</div>
+        <div class="tab" onclick="renderAnnouncements('drafts',this)">Drafts</div>
         <div class="tab" onclick="renderAnnouncements('archived',this)">Archived</div>
       </div>
 
@@ -2170,7 +2171,10 @@ if (key === 'shifts') {
     return rows.map(r => ({
       ...r,
       desc: r.description,
-      calendarEventId: r.calendar_event_id
+      calendarEventId: r.calendar_event_id,
+      publishDate: r.publish_date,
+      notifiedAt: r.notified_at,
+      status: r.status || 'published'
     }));
   }
 
@@ -2348,6 +2352,10 @@ if (key === 'shifts') {
       delete x.desc;
       x.calendar_event_id = x.calendarEventId ?? null;
       delete x.calendarEventId;
+      x.publish_date = x.publishDate ?? null;
+      delete x.publishDate;
+      x.notified_at = x.notifiedAt ?? null;
+      delete x.notifiedAt;
     }
 
 if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
@@ -9269,7 +9277,16 @@ function startManagerSync() {
     sweepUniformPayments();
   }, 90000);
   sweepUniformPayments();
+
+  if (announcementSweepTimer) clearInterval(announcementSweepTimer);
+  // Publishes + notifies any announcement whose scheduled publish date has
+  // arrived, for whichever manager session happens to be open at the time.
+  announcementSweepTimer = setInterval(() => {
+    checkScheduledAnnouncements();
+  }, 90000);
+  checkScheduledAnnouncements();
 }
+let announcementSweepTimer = null;
 
 async function manualSync() {
   const btn = document.getElementById('sync-now-btn');
@@ -11090,6 +11107,11 @@ function openAnnModal(id) {
   document.getElementById('ann-id-location').value = ann ? ann.location : '';
   document.getElementById('ann-delete-btn').style.display = ann ? 'inline-flex' : 'none';
   document.getElementById('ann-add-to-cal').checked = !!(ann && ann.calendarEventId);
+  document.getElementById('ann-id-publish-date').value = ann ? (ann.publishDate || ann.date || FD(new Date())) : FD(new Date());
+  // The draft button only makes sense before something's already published —
+  // once live, saving "as draft" again would confusingly pull it back down.
+  document.getElementById('ann-draft-btn').style.display = (!ann || ann.status === 'draft') ? 'inline-flex' : 'none';
+  updateAnnPublishHint();
 
   // Department role checkboxes
   const existingRoles = ann ? (ann.roles||[]) : ['All Staff'];
@@ -11114,6 +11136,21 @@ function openAnnModal(id) {
   OM('m-announcement');
 }
 
+function updateAnnPublishHint(){
+  const publishDate = document.getElementById('ann-id-publish-date').value;
+  const today = FD(new Date());
+  const hintEl = document.getElementById('ann-publish-hint');
+  const saveBtn = document.getElementById('ann-save-btn');
+  if(!publishDate || publishDate <= today){
+    if(hintEl) hintEl.textContent = 'Staff will see this immediately and be notified now.';
+    if(saveBtn) saveBtn.textContent = 'Publish';
+  } else {
+    const label = new Date(publishDate+'T00:00:00').toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'});
+    if(hintEl) hintEl.textContent = `Staff won't see this or be notified until ${label}.`;
+    if(saveBtn) saveBtn.textContent = 'Schedule';
+  }
+}
+
 function toggleAnnStaffList(cb) {
   const list = document.getElementById('ann-staff-list');
   list.style.display = cb.checked ? 'block' : 'none';
@@ -11123,12 +11160,13 @@ function toggleAnnStaffList(cb) {
   }
 }
 
-async function saveAnnouncement() {
+async function saveAnnouncement(isDraft) {
   const title    = document.getElementById('ann-id-title').value.trim();
   const desc     = document.getElementById('ann-id-desc').value.trim();
   const date     = document.getElementById('ann-id-date').value;
   const time     = document.getElementById('ann-id-time').value;
   const location = document.getElementById('ann-id-location').value.trim();
+  const publishDate = document.getElementById('ann-id-publish-date').value || FD(new Date());
   if (!title || !date) { alert('Title and date are required.'); return; }
 
   const roles    = [...document.querySelectorAll('.ann-role-cb:checked')].map(cb => cb.value);
@@ -11140,6 +11178,12 @@ async function saveAnnouncement() {
 
   const anns = DB.get('announcements') || [];
   const now  = new Date().toISOString();
+  const today = FD(new Date());
+  const status = isDraft ? 'draft' : 'published';
+  // Drafts never notify. Published items only notify once the publish date
+  // has actually arrived — a future publish date just saves it to publish
+  // later, which the background sweep (checkScheduledAnnouncements) handles.
+  const dueNow = !isDraft && publishDate <= today;
 
   // Keep the linked Team Calendar event (if any) in sync — create, update, or
   // remove it depending on whether "Also add to Team Calendar" is checked.
@@ -11170,7 +11214,11 @@ async function saveAnnouncement() {
     alert('The announcement will still be saved, but the linked calendar event failed to sync: ' + (e.message || e));
   }
 
-  const payload = { title, desc, date, time, location, roles, staffIds, calendarEventId, updatedAt: now };
+  const payload = {
+    title, desc, date, time, location, roles, staffIds, calendarEventId, updatedAt: now,
+    status, publishDate,
+    notifiedAt: dueNow ? now : (isDraft ? null : (editingAnnId ? anns.find(a=>a.id===editingAnnId)?.notifiedAt || null : null))
+  };
   if (editingAnnId) {
     const idx = anns.findIndex(a => a.id === editingAnnId);
     if (idx >= 0) anns[idx] = {...anns[idx], ...payload};
@@ -11182,45 +11230,79 @@ async function saveAnnouncement() {
   renderAnnouncements(annFilter);
   updateBadges();
 
-  // ── Send email to relevant staff ──────────────────────────
-  // Build the list of empIds to notify
+  if (dueNow) {
+    notifyAnnouncementRecipients_(title, desc, date, time, location, roles, staffIds);
+  }
+}
+
+// Emails the relevant staff that an announcement has gone live — used both
+// for an immediate publish and by the scheduled-publish sweep below.
+function notifyAnnouncementRecipients_(title, desc, date, time, location, roles, staffIds) {
   const staffAll = DB.get('staff') || [];
   let empIdsToNotify = [];
   if (staffIds.length > 0) {
-    // Specific staff selected
     empIdsToNotify = staffIds;
   } else {
-    // Filter by role
     empIdsToNotify = staffAll
       .filter(s => roles.includes('All Staff') || roles.includes(s.role))
       .map(s => s.id);
   }
-  if (empIdsToNotify.length > 0) {
-const staff = DB.get('staff') || [];
-const recipients = staff.filter(emp => empIdsToNotify.includes(emp.id));
+  if (!empIdsToNotify.length) return;
 
-Promise.all(
-  recipients.map(emp =>
-    notify('announcement', {
-      sendToStaff: true,
-      ...staffPayload(emp.id),
-      title,
-      message: desc || '',
-      date,
-      time,
-      location
-    })
-  )
-).then(results => {
-  const el = document.getElementById('pub-status');
-  if (el) {
-    const sent = results.filter(Boolean).length;
-    el.style.display = 'block';
-    el.textContent = 'Announcement published' + (sent > 0 ? ' - ' + sent + ' email(s) sent.' : '.');
-    setTimeout(() => el.style.display = 'none', 5000);
-  }
-}).catch(err => console.error('Announcement email failed:', err));
-  }
+  const recipients = staffAll.filter(emp => empIdsToNotify.includes(emp.id));
+  Promise.all(
+    recipients.map(emp =>
+      notify('announcement', {
+        sendToStaff: true,
+        ...staffPayload(emp.id),
+        title,
+        message: desc || '',
+        date,
+        time,
+        location
+      })
+    )
+  ).then(results => {
+    const el = document.getElementById('pub-status');
+    if (el) {
+      const sent = results.filter(Boolean).length;
+      el.style.display = 'block';
+      el.textContent = 'Announcement published' + (sent > 0 ? ' - ' + sent + ' email(s) sent.' : '.');
+      setTimeout(() => el.style.display = 'none', 5000);
+    }
+  }).catch(err => console.error('Announcement email failed:', err));
+}
+
+// Runs periodically (see startManagerSync) — publishes any announcement
+// whose scheduled publish date has arrived but hasn't notified staff yet.
+async function checkScheduledAnnouncements(){
+  const anns = DB.get('announcements') || [];
+  const today = FD(new Date());
+  const due = anns.filter(a => a.status === 'published' && a.publishDate && a.publishDate <= today && !a.notifiedAt);
+  if (!due.length) return;
+
+  const now = new Date().toISOString();
+  due.forEach(a => { a.notifiedAt = now; });
+  await DB.set('announcements', anns);
+  renderAnnouncements(annFilter);
+  updateBadges();
+
+  due.forEach(a => notifyAnnouncementRecipients_(a.title, a.desc, a.date, a.time, a.location, a.roles||[], a.staffIds||[]));
+}
+
+async function publishAnnouncementNow(id){
+  const anns = DB.get('announcements') || [];
+  const ann = anns.find(a => a.id === id);
+  if (!ann) return;
+  const today = FD(new Date());
+  const now = new Date().toISOString();
+  ann.status = 'published';
+  ann.publishDate = today;
+  ann.notifiedAt = now;
+  await DB.set('announcements', anns);
+  renderAnnouncements(annFilter);
+  updateBadges();
+  notifyAnnouncementRecipients_(ann.title, ann.desc, ann.date, ann.time, ann.location, ann.roles||[], ann.staffIds||[]);
 }
 
 async function deleteAnnouncement() {
@@ -11627,6 +11709,8 @@ async function renderAnnouncements(filter, tabEl) {
   if (!list) return;
 
   const filtered = anns.filter(a => {
+    if (filter === 'drafts')   return a.status === 'draft';
+    if (a.status === 'draft')  return false;
     if (filter === 'active')   return a.date >= today;
     if (filter === 'upcoming') return a.date > today;
     if (filter === 'archived') return a.date < today;
@@ -11634,7 +11718,8 @@ async function renderAnnouncements(filter, tabEl) {
   }).sort((a,b) => a.date.localeCompare(b.date));
 
   if (!filtered.length) {
-    list.innerHTML = `<p style="font-size:13px;color:var(--t2);padding:20px 0">${filter==='archived'?'No archived announcements.':'No announcements. Create one with the button above.'}</p>`;
+    const emptyMsg = filter === 'drafts' ? 'No drafts.' : filter === 'archived' ? 'No archived announcements.' : 'No announcements. Create one with the button above.';
+    list.innerHTML = `<p style="font-size:13px;color:var(--t2);padding:20px 0">${emptyMsg}</p>`;
     return;
   }
 
@@ -11643,8 +11728,11 @@ async function renderAnnouncements(filter, tabEl) {
   const staffAll = DB.get('staff')||[];
 
   list.innerHTML = filtered.map(ann => {
+    const isDraft = ann.status === 'draft';
+    const isScheduled = !isDraft && ann.publishDate && ann.publishDate > today;
     const isPast = ann.date < today;
     const dateLabel = new Date(ann.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short',year:'numeric'});
+    const publishDateLabel = ann.publishDate ? new Date(ann.publishDate+'T00:00:00').toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'}) : '';
     // Build audience
     let audience;
     if(ann.staffIds&&ann.staffIds.length>0){
@@ -11683,13 +11771,20 @@ async function renderAnnouncements(filter, tabEl) {
         </div>
         <div style="display:flex;gap:5px;flex-shrink:0">
           <button class="btn btn-sm" onclick="openAnnModal('${ann.id}')">Edit</button>
-          ${isPast
+          ${isDraft
+          ? `<button class="btn btn-sm btn-primary" onclick="publishAnnouncementNow('${ann.id}')">Publish now</button>`
+          : ''}
+          ${isDraft
+          ? '<span class="badge bp" style="font-size:9px;align-self:center">DRAFT</span>'
+          : isScheduled
+          ? `<span class="badge ba" style="font-size:9px;align-self:center">Scheduled ${escHTML(publishDateLabel)}</span>`
+          : isPast
           ? '<span class="badge ba" style="font-size:9px;align-self:center">Archived</span>'
           : '<span class="badge bg" style="font-size:9px;align-self:center">Active</span>'
 }
         </div>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+      ${!isDraft && !isScheduled ? `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
         <span style="font-size:11px;font-weight:700;padding:3px 8px;border-radius:20px;background:${allRead?'var(--gl)':'var(--al)'};color:${allRead?'var(--gd)':'var(--ad)'}">${allRead?'✓':'👁'} ${ackedCount}/${total} acknowledged</span>
         ${reactionSummary?`<span style="font-size:12px">${escHTML(reactionSummary)}</span>`:''}
         ${total ? `<button class="btn btn-sm" style="font-size:11px" onclick="document.getElementById('${detailListId}').style.display=document.getElementById('${detailListId}').style.display==='flex'?'none':'flex'">See who's read it</button>` : ''}
@@ -11701,7 +11796,7 @@ async function renderAnnouncements(filter, tabEl) {
         return `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;font-size:12px;border-bottom:1px solid var(--border)">
           <span style="color:var(--t2)">${escHTML(s.first+' '+s.last)}</span>${label}
         </div>`;
-      }).join('')}</div>` : ''}
+      }).join('')}</div>` : ''}` : isScheduled ? `<div style="margin-top:8px;font-size:11px;color:var(--t3)">Will publish and notify ${escHTML(audienceLabel)} on ${escHTML(publishDateLabel)}.</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -11709,7 +11804,7 @@ async function renderAnnouncements(filter, tabEl) {
 // Badge counter for active announcements
 function updateAnnBadge() {
   const today = FD(new Date());
-  const active = (DB.get('announcements')||[]).filter(a => a.date >= today).length;
+  const active = (DB.get('announcements')||[]).filter(a => a.date >= today && a.status !== 'draft' && !(a.publishDate && a.publishDate > today)).length;
   const badge = document.getElementById('ann-badge');
   if (badge) { if(active>0){badge.textContent=active;badge.style.display='inline-flex';}else badge.style.display='none'; }
 }
@@ -11843,7 +11938,13 @@ function updateAnnBadge() {
       <div class="fr"><label>Event date <span style="color:var(--rd)">*</span></label><input type="date" id="ann-id-date"></div>
       <div class="fr"><label>Time <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="time" id="ann-id-time"></div>
     </div>
-    <div style="font-size:11px;color:var(--t3);margin-top:-6px">This is published immediately regardless of the date you set — staff will keep seeing it after this date passes too, it's just informational.</div>
+    <div style="font-size:11px;color:var(--t3);margin-top:-6px">Staff keep seeing this after the event date passes too — it's just informational, and doesn't control when the announcement is published.</div>
+
+    <!-- Publish date -->
+    <div class="fr"><label>Publish date <span style="color:var(--t3);font-weight:400">(when staff start seeing this)</span></label>
+      <input type="date" id="ann-id-publish-date" onchange="updateAnnPublishHint()">
+    </div>
+    <div id="ann-publish-hint" style="font-size:11px;color:var(--t3);margin-top:-6px"></div>
 
     <!-- Location -->
     <div class="fr"><label>Location <span style="color:var(--t3);font-weight:400">(optional)</span></label>
@@ -11891,7 +11992,8 @@ function updateAnnBadge() {
       <button class="btn btn-sm btn-danger" id="ann-delete-btn" onclick="deleteAnnouncement()" style="display:none">Delete</button>
       <div style="display:flex;gap:6px;margin-left:auto">
         <button class="btn" onclick="CM('m-announcement')">Cancel</button>
-        <button class="btn btn-primary" onclick="saveAnnouncement()">Publish</button>
+        <button class="btn" id="ann-draft-btn" onclick="saveAnnouncement(true)">Save as draft</button>
+        <button class="btn btn-primary" id="ann-save-btn" onclick="saveAnnouncement(false)">Publish</button>
       </div>
     </div>
   </div>

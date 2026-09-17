@@ -261,6 +261,7 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
 .chip-ot{background:var(--gl);color:var(--gd);border-color:#C0DD97}
 .chip-unavail{background:var(--rl);color:var(--rd);border-color:#F7C1C1;cursor:default}
 .chip-unavail.chip-small{background:var(--red);color:#fff;border-color:var(--red)}
+.chip-anticipated{background:var(--pl);color:var(--purple);border:1px dashed #B7B1E8;cursor:pointer}
 .chip-small{font-size:9px;padding:1px 5px}
 
 /* ── Add-shift button in empty cell ──────────────────────────── */
@@ -1466,6 +1467,16 @@ function isPublishedShift(shift){
         <label style="display:block;margin-bottom:6px">Lunch break schedule <span style="font-weight:400;color:var(--t3)">(shown on their Staff Portal home page)</span></label>
         <div id="modal-break-schedule" style="display:flex;flex-direction:column;gap:6px"></div>
       </div>
+      <div style="margin-top:16px">
+        <label style="display:block;margin-bottom:6px">Anticipated unavailability <span style="font-weight:400;color:var(--t3)">(placemarkers for planning only — not leave, doesn't need approval or affect leave balances)</span></label>
+        <div id="modal-unavail-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
+        <div id="modal-unavail-form" style="display:grid;grid-template-columns:1fr 1fr 1.4fr auto;gap:6px;align-items:end">
+          <div><label style="font-size:11px">From</label><input type="date" id="unavail-from"></div>
+          <div><label style="font-size:11px">To</label><input type="date" id="unavail-to"></div>
+          <div><label style="font-size:11px">Note <span style="color:var(--t3);font-weight:400">(optional)</span></label><input type="text" id="unavail-note" placeholder="e.g. Anticipated annual leave"></div>
+          <button class="btn btn-sm btn-primary" onclick="addStaffUnavailability()">Add</button>
+        </div>
+      </div>
     </div>
     <div id="staff-tab-leave" style="display:none">
       <div id="staff-leave-body"><p style="font-size:12px;color:var(--t2)">Save staff member first to view leave history.</p></div>
@@ -1963,7 +1974,8 @@ const TABLE_MAP = {
   settings: 'settings',
   rosterTemplates: 'roster_templates',
   lateReports: 'late_reports',
-  uniformOrders: 'uniform_orders'
+  uniformOrders: 'uniform_orders',
+  staffUnavailability: 'staff_unavailability'
 };
 
 const CLOCK_TYPE_ALIASES = {
@@ -2156,7 +2168,16 @@ function mapFromSupabase(key, rows) {
       secondaryRole: r.secondary_role ?? r.secondaryRole ?? null
     }));
   }
-  
+
+if (key === 'staffUnavailability') {
+  return rows.map(r => ({
+    ...r,
+    empId: r.emp_id,
+    from: r.from_date,
+    to: r.to_date
+  }));
+}
+
 if (key === 'shifts') {
   return rows.map(s => ({
     ...s,
@@ -2294,6 +2315,16 @@ function mapToSupabase(key, arrOrObj) {
 
     if (key === 'lateReports') {
       return lateReportPayloads(x);
+    }
+
+    if (key === 'staffUnavailability') {
+      x.emp_id = x.empId;
+      x.from_date = x.from;
+      x.to_date = x.to;
+      delete x.empId;
+      delete x.from;
+      delete x.to;
+      return x;
     }
 
     if (key === 'staff') {
@@ -2650,7 +2681,7 @@ function _setSyncIndicator(state) {
 
 const ALL_KEYS = [
   'staff','shifts','leaveRequests','sickDays',
-  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements','lateReports','uniformOrders'
+  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements','lateReports','uniformOrders','staffUnavailability'
 ];
 // clockEvents is fetched separately only when needed (timesheets/dashboard)
 // so manual entries aren't wiped by the 10-second smart sync
@@ -3161,6 +3192,7 @@ function renderRoster(){
   const leaveReqs=(DB.get('leaveRequests')||[]).filter(l=>l.status==='approved');
   const sickDays=DB.get('sickDays')||[];
   const otReqs=(DB.get('otRequests')||[]).filter(o=>o.approved);
+  const unavailList=DB.get('staffUnavailability')||[];
   const today=FD(new Date());
 
   // Fixed-width table — name col 130px, remaining space split evenly across 7 days
@@ -3178,7 +3210,7 @@ function renderRoster(){
       const ds=FD(d);const dname=dayName(d);
       const isToday=ds===today;
       const cellStyle=isToday?'background:rgba(83,74,183,.04)':'';
-      const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs);
+      const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavailList);
       return `<td style="${cellStyle}"><div class="sc-cell">${content}</div></td>`;
     }).join('');
 
@@ -3194,16 +3226,17 @@ function renderRoster(){
     </tr>`;
   }).join('');
 
-  renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today);
+  renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today,unavailList);
 }
 
 // Builds the shift/leave/sick/availability chips + add-button for one
 // employee on one day. Shared by the desktop week grid and the mobile
 // single-day list so the two views can never drift out of sync.
-function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs){
+function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavailList){
   const dayShifts=shifts.filter(s=>s.empId===emp.id&&s.date===ds&&!s.isOT);
   const onLeave=leaveReqs.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
   const isSick=sickDays.find(sk=>sk.empId===emp.id&&sk.date===ds);
+  const anticipated=(unavailList||[]).find(u=>u.empId===emp.id&&u.from<=ds&&u.to>=ds);
 
   const hasOT = otReqs.filter(o =>
     o.empId === emp.id &&
@@ -3237,6 +3270,7 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs){
     const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
     const availabilityConflict=!isShiftWithinAvailability(emp,dname,s.start,s.end);
     const availabilityBadge=availabilityConflict?`<span class="chip chip-unavail chip-small" style="margin-top:2px">Outside availability</span>`:'';
+    const anticipatedBadge=anticipated?`<span class="chip chip-anticipated chip-small" style="margin-top:2px" title="${anticipated.note?escHTML(anticipated.note):'Anticipated unavailability'}">⚠ Anticipated unavailable</span>`:'';
 
     const isSelected = bulkShiftMode && selectedShiftIds.has(s.id);
     const chipClickAction = bulkShiftMode
@@ -3260,6 +3294,7 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs){
 
       ${otBadge}
       ${availabilityBadge}
+      ${anticipatedBadge}
     </div>`;
   });
 
@@ -3267,7 +3302,8 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs){
   if(isSick) content+=`<span class="chip chip-sick chip-small" style="cursor:pointer" onclick="openSickPopup(event,'${emp.id}','${ds}')" title="Click to manage sick day">Sick</span>`;
   else if(onLeave&&!dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">${onLeave.type.replace(' Leave','').replace(' leave','')}</span>`;
   else if(onLeave&&dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer;font-size:8px" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">Leave</span>`;
-  if(showAvail&&!dayShifts.length&&!onLeave&&!isSick){ if(avail.mode==='unavailable') content+=`<span class="chip chip-unavail chip-small">Unavailable</span>`; else if(avail.mode==='times') content+=`<span class="chip chip-partial-leave chip-small">Avail ${avail.start}–${avail.end}</span>`; }
+  else if(anticipated&&!dayShifts.length) content+=`<span class="chip chip-anticipated chip-small" onclick="editStaff('${emp.id}')" title="${anticipated.note?escHTML(anticipated.note):'Anticipated unavailability — not leave, just a placemarker'}">Anticipated leave</span>`;
+  if(showAvail&&!dayShifts.length&&!onLeave&&!isSick&&!anticipated){ if(avail.mode==='unavailable') content+=`<span class="chip chip-unavail chip-small">Unavailable</span>`; else if(avail.mode==='times') content+=`<span class="chip chip-partial-leave chip-small">Avail ${avail.start}–${avail.end}</span>`; }
 
   // Only show + button if no shifts exist for this day
   const hasShifts=dayShifts.length>0;
@@ -3278,7 +3314,7 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs){
 
 // ── Mobile roster: one day at a time, staff as a scrollable list ──
 let mobileRosterDayIndex=null;
-function renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today){
+function renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today,unavailList){
   const tabsEl=document.getElementById('r-mobile-day-tabs');
   const listEl=document.getElementById('r-mobile-list');
   if(!tabsEl||!listEl) return;
@@ -3299,7 +3335,7 @@ function renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today
   const ds=FD(d);const dname=dayName(d);
 
   listEl.innerHTML=staff.map(emp=>{
-    const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs);
+    const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavailList);
     return `<div style="display:flex;align-items:flex-start;gap:10px;padding:12px;border-bottom:1px solid var(--border)">
       <div class="av" style="background:${emp.color}22;color:${emp.color};flex-shrink:0">${INI(emp)}</div>
       <div style="flex:1;min-width:0">
@@ -6092,7 +6128,7 @@ function populateRoleSelects(primaryValue, secondaryValue){
     secondaryEl.value = secondaryValue || '';
   }
 }
-function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';populateRoleSelects();const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildModalBreakSchedule({});buildContractDaysTable(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
+function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';populateRoleSelects();const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildModalBreakSchedule({});buildContractDaysTable(null);renderStaffUnavailabilityList(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
 function editStaff(id){
   editingStaffId=id;const staff=DB.get('staff')||[];const emp=staff.find(s=>s.id===id);if(!emp)return;
   document.getElementById('staff-modal-title').textContent='Edit: '+emp.first+' '+emp.last;
@@ -6106,6 +6142,7 @@ function editStaff(id){
   buildModalAvailGrid(emp.availability||{});
   buildModalBreakSchedule(emp.breakSchedule||{});
   buildContractDaysTable(emp);
+  renderStaffUnavailabilityList(id);
   const lbody=document.getElementById('staff-leave-body');if(lbody)lbody.innerHTML=staffLeaveHTML(id);
   staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');
 }
@@ -6172,6 +6209,54 @@ function readManagerBreakSchedule(){
     if(time) result[day]={time,min:min||40};
   });
   return result;
+}
+
+// ── Anticipated unavailability (manager-only placemarkers — not leave) ──
+function renderStaffUnavailabilityList(empId){
+  const listEl=document.getElementById('modal-unavail-list');
+  const formEl=document.getElementById('modal-unavail-form');
+  if(!listEl)return;
+  if(!empId){
+    listEl.innerHTML='<p style="font-size:11px;color:var(--t2)">Save this staff member first to add unavailability placemarkers.</p>';
+    if(formEl) formEl.style.display='none';
+    return;
+  }
+  if(formEl) formEl.style.display='grid';
+  const rows=(DB.get('staffUnavailability')||[]).filter(u=>u.empId===empId).sort((a,b)=>a.from.localeCompare(b.from));
+  listEl.innerHTML = rows.length ? rows.map(u=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--border);border-radius:var(--rsm);padding:6px 10px;font-size:12px">
+      <span>${FDS(u.from)} – ${FDS(u.to)}${u.note?` · ${escHTML(u.note)}`:''}</span>
+      <button class="btn btn-sm btn-danger" onclick="deleteStaffUnavailability('${u.id}')">Remove</button>
+    </div>`).join('')
+    : '<p style="font-size:11px;color:var(--t2)">None set.</p>';
+}
+
+async function addStaffUnavailability(){
+  if(!editingStaffId){ alert('Save this staff member first.'); return; }
+  const from=document.getElementById('unavail-from').value;
+  const to=document.getElementById('unavail-to').value;
+  const note=document.getElementById('unavail-note').value.trim();
+  if(!from||!to){ alert('From and To dates are required.'); return; }
+  if(to<from){ alert('The "To" date must be on or after the "From" date.'); return; }
+
+  const rows=DB.get('staffUnavailability')||[];
+  rows.push({ id:'unavail'+Date.now(), empId:editingStaffId, from, to, note, createdAt:new Date().toISOString() });
+  const result=await DB.set('staffUnavailability', rows);
+  if(!result.ok) return;
+
+  document.getElementById('unavail-from').value='';
+  document.getElementById('unavail-to').value='';
+  document.getElementById('unavail-note').value='';
+  renderStaffUnavailabilityList(editingStaffId);
+  renderRoster();
+}
+
+async function deleteStaffUnavailability(id){
+  const rows=(DB.get('staffUnavailability')||[]).filter(u=>u.id!==id);
+  const result=await DB.set('staffUnavailability', rows);
+  if(!result.ok) return;
+  renderStaffUnavailabilityList(editingStaffId);
+  renderRoster();
 }
 
 function buildContractDaysTable(emp) {
@@ -9217,7 +9302,8 @@ const REALTIME_TABLE_TO_KEY = {
   settings: 'settings',
   roster_templates: 'rosterTemplates',
   late_reports: 'lateReports',
-  uniform_orders: 'uniformOrders'
+  uniform_orders: 'uniformOrders',
+  staff_unavailability: 'staffUnavailability'
 };
 
 function queueRealtimeRefresh(key) {

@@ -2174,7 +2174,8 @@ if (key === 'staffUnavailability') {
     ...r,
     empId: r.emp_id,
     from: r.from_date,
-    to: r.to_date
+    to: r.to_date,
+    createdAt: r.created_at
   }));
 }
 
@@ -2321,9 +2322,11 @@ function mapToSupabase(key, arrOrObj) {
       x.emp_id = x.empId;
       x.from_date = x.from;
       x.to_date = x.to;
+      x.created_at = x.createdAt;
       delete x.empId;
       delete x.from;
       delete x.to;
+      delete x.createdAt;
       return x;
     }
 

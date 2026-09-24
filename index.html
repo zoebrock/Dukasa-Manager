@@ -3255,9 +3255,11 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
     const isPartialLeave = s.entryType === 'leave' || s.entry_type === 'leave';
     const leaveType = s.leaveType || s.leave_type || s.status || 'Leave';
 
+    // A leave segment can never carry OT — otherwise a same-day OT request for
+    // the person's actual working portion would incorrectly tag this chip too.
     const hasApprovedOT =
-      (s.otAnnotations && s.otAnnotations.length) ||
-      hasOT.length;
+      !isPartialLeave &&
+      ((s.otAnnotations && s.otAnnotations.length) || hasOT.length);
 
     const chipClass =
       isPartialLeave ? 'chip-partial-leave' :
@@ -3269,7 +3271,7 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
       : hasApprovedOT
         ? `${s.start}–${s.end} · OT added`
         : `${s.start}–${s.end}`;
-    const otAnns=(s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT;
+    const otAnns=isPartialLeave?[]:((s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT);
     const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
     const availabilityConflict=!isShiftWithinAvailability(emp,dname,s.start,s.end);
     const availabilityBadge=availabilityConflict?`<span class="chip chip-unavail chip-small" style="margin-top:2px">Outside availability</span>`:'';
@@ -3301,8 +3303,13 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
     </div>`;
   });
 
-  // Status chips — clickable for sick/leave management
-  if(isSick) content+=`<span class="chip chip-sick chip-small" style="cursor:pointer" onclick="openSickPopup(event,'${emp.id}','${ds}')" title="Click to manage sick day">Sick</span>`;
+  // Status chips — clickable for sick/leave management. A partial leave/sick
+  // segment already shown above accounts for the day, so it takes priority
+  // over the full-day Sick/Leave badges below (which come from separate
+  // sickDays/leaveRequests records that may coincidentally share the date).
+  const hasPartialLeaveToday = dayShifts.some(s=>s.entryType==='leave'||s.entry_type==='leave');
+  if(hasPartialLeaveToday){ /* already represented by the partial-leave chip above */ }
+  else if(isSick) content+=`<span class="chip chip-sick chip-small" style="cursor:pointer" onclick="openSickPopup(event,'${emp.id}','${ds}')" title="Click to manage sick day">Sick</span>`;
   else if(onLeave&&!dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">${onLeave.type.replace(' Leave','').replace(' leave','')}</span>`;
   else if(onLeave&&dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer;font-size:8px" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">Leave</span>`;
   else if(anticipated&&!dayShifts.length) content+=`<span class="chip chip-anticipated chip-small" onclick="editStaff('${emp.id}')" title="${anticipated.note?escHTML(anticipated.note):'Anticipated unavailability — not leave, just a placemarker'}">Anticipated leave</span>`;
@@ -3981,8 +3988,12 @@ function openPartialLeaveModal(prefillEmpId, prefillDate, partialLeaveId){
 
   document.getElementById('pl-emp').value = existing?.empId || prefillEmpId || '';
   document.getElementById('pl-date').value = existing?.date || prefillDate || FD(new Date());
-  document.getElementById('pl-start').value = existing?.start || '13:00';
-  document.getElementById('pl-end').value = existing?.end || '17:00';
+  // A leave segment should never carry OT annotations, but a since-fixed bug in
+  // OT approval could previously merge OT hours into one — recover the true
+  // original time from otOriginalStart/End if that happened, so re-saving
+  // (which now also strips those fields) fully repairs the row.
+  document.getElementById('pl-start').value = existing?.otOriginalStart || existing?.start || '13:00';
+  document.getElementById('pl-end').value = existing?.otOriginalEnd || existing?.end || '17:00';
   document.getElementById('pl-type').value = existing?.leaveType || existing?.leave_type || existing?.status || 'Sick';
   document.getElementById('pl-notes').value = existing?.leaveReason || existing?.leave_reason || existing?.notes || '';
 
@@ -4030,7 +4041,14 @@ async function savePartialLeave(){
     status: document.getElementById('pl-type').value,
     entryType: 'leave',
     leaveType: document.getElementById('pl-type').value,
-    leaveReason: document.getElementById('pl-notes').value
+    leaveReason: document.getElementById('pl-notes').value,
+    // A leave segment must never carry OT state — a since-fixed bug in OT
+    // approval could previously merge OT hours into one of these rows.
+    isOT: false,
+    otId: null,
+    otOriginalStart: null,
+    otOriginalEnd: null,
+    otAnnotations: []
   };
 
   const dbRow = {
@@ -4043,6 +4061,11 @@ async function savePartialLeave(){
     paid_break_min: 0,
     role: ns.role,
     notes: ns.notes,
+    is_ot: false,
+    ot_id: null,
+    ot_original_start: null,
+    ot_original_end: null,
+    ot_annotations: [],
     published: true,
     status: ns.status,
     entry_type: 'leave',
@@ -5065,7 +5088,7 @@ async function reconcileManagerOTDecisions(){
     // shift extension and as a second standalone shift row.
     for (const o of reqs.filter(x => x.approved === true)) {
       const shifts = DB.get('shifts') || [];
-      const hasBase = shifts.some(s => String(s.empId ?? '') === String(o.empId ?? '') && String(s.date ?? '') === String(o.date ?? '') && !s.isOT);
+      const hasBase = shifts.some(s => String(s.empId ?? '') === String(o.empId ?? '') && String(s.date ?? '') === String(o.date ?? '') && !s.isOT && s.entryType !== 'leave' && s.entry_type !== 'leave');
       const hasStandalone = shifts.some(s => s.isOT && String(s.otId ?? '') === String(o.id ?? ''));
       if (hasBase && hasStandalone) {
         await approveOT(o.id, { bypassAvailabilityGuard: true, fromReconcile: true });
@@ -5338,7 +5361,9 @@ async function approveOT(id, opts = {}){
     .filter(({s}) =>
       String(s.empId ?? '') === oEmpId &&
       String(s.date ?? '') === oDate &&
-      !s.isOT
+      !s.isOT &&
+      s.entryType !== 'leave' &&
+      s.entry_type !== 'leave'
     )
     .sort((a,b) => Number(isPublishedShift(b.s)) - Number(isPublishedShift(a.s)));
   const shiftIdx = matchingBaseIndexes.length ? matchingBaseIndexes[0].i : -1;
@@ -5606,7 +5631,9 @@ async function reverseOTFromShift(otId, empId, date){
   const shiftIdx = shifts.findIndex(s =>
     String(s.empId ?? '') === empIdStr &&
     String(s.date  ?? '') === dateStr  &&
-    !s.isOT
+    !s.isOT &&
+    s.entryType !== 'leave' &&
+    s.entry_type !== 'leave'
   );
 
   if(shiftIdx < 0) return;
@@ -10397,6 +10424,8 @@ DB.preload(ALL_KEYS, function(){
         s.empId === ots.empId &&
         s.date === ots.date &&
         !s.isOT &&
+        s.entryType !== 'leave' &&
+        s.entry_type !== 'leave' &&
         s.published
       );
 

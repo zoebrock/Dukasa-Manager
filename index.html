@@ -2605,6 +2605,21 @@ const DB = {
     beginKeySave(k);
 
     try {
+      // Rows present before this save but missing now must be deleted from
+      // Supabase too — upsert alone only ever adds/updates rows it's given,
+      // so anything removed from the array (e.g. a "delete" action filtering
+      // it out) would otherwise never actually leave the database and would
+      // reappear the next time this key gets refreshed.
+      const newIds = new Set((Array.isArray(v) ? v : []).map(r => String(r?.id ?? '')).filter(Boolean));
+      const removedIds = (Array.isArray(previousValue) ? previousValue : [])
+        .map(r => String(r?.id ?? ''))
+        .filter(id => id && !newIds.has(id));
+
+      if (removedIds.length) {
+        const { error: delError } = await supabaseClient.from(table).delete().in('id', removedIds);
+        if (delError) throw delError;
+      }
+
       if (!rows.length) {
         _setSyncIndicator('saved');
         return { ok: true };

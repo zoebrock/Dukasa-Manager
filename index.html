@@ -3182,6 +3182,21 @@ function renderRosterAlerts(){
       }
     });
   });
+
+  // Suggest reviewing/adding OT for weeks that include a public holiday or
+  // the 1st of the month — both are common OT triggers worth a nudge rather
+  // than something the manager has to remember to check for themselves.
+  const publicHolidays=DB.get('publicHolidays')||[];
+  const weekHolidays=days.map(d=>{const ds=FD(d);return publicHolidays.find(h=>h.date===ds);}).filter(Boolean);
+  const monthStartDay=days.find(d=>d.getDate()===1);
+  if(weekHolidays.length||monthStartDay){
+    const reasons=[];
+    if(weekHolidays.length) reasons.push(`this week includes ${weekHolidays.map(h=>`<strong>${escHTML(h.name)}</strong> (${FDS(h.date)})`).join(', ')}`);
+    if(monthStartDay) reasons.push(`this week includes the 1st of the month (${FDS(FD(monthStartDay))})`);
+    const promptDate=weekHolidays[0]?weekHolidays[0].date:FD(monthStartDay);
+    alerts.push(`<div class="pharma-alert" style="background:var(--bl);border-color:#B7D8F2;color:var(--bd)"><span style="font-size:14px;flex-shrink:0">💡</span><div style="flex:1">Heads up — ${reasons.join(' and ')}. Worth reviewing whether any staff need OT added this week.<div style="margin-top:6px"><button class="btn btn-sm" onclick="openAddOTModal(null,null,'${promptDate}')">+ Add OT</button></div></div></div>`);
+  }
+
   el.innerHTML=alerts.join('');
 }
 function getWD(){const days=[];for(let i=0;i<7;i++){const d=new Date(currentWeekStart);d.setDate(d.getDate()+i);days.push(d);}return days;}

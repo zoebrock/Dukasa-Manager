@@ -1626,6 +1626,18 @@ function isPublishedShift(shift){
   </div>
 </div>
 
+<div class="modal-overlay" id="m-ot-suggestions">
+  <div class="modal" style="max-width:560px">
+    <div class="mh"><h2>Suggested OT</h2><button class="xbtn" onclick="CM('m-ot-suggestions')">×</button></div>
+    <p style="font-size:12px;color:var(--t2);margin-bottom:10px">Based on who's consistently done OT on public holidays and the 1st/2nd of the month in the past. Untick anyone you don't want, then create the rest as pending OT requests — each still needs the staff member to confirm availability in the Staff Portal before it hits the roster, same as adding OT manually.</p>
+    <div id="ot-suggestions-list" style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto"></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="CM('m-ot-suggestions')">Cancel</button>
+      <button class="btn btn-primary" id="ot-suggestions-create-btn" onclick="createSuggestedOTRequests()">Create selected requests</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="m-edit-hours">
   <div class="modal">
     <div class="mh"><h2 id="eh-title">Edit hours</h2><button class="xbtn" onclick="CM('m-edit-hours')">×</button></div>
@@ -3209,7 +3221,7 @@ function renderRosterAlerts(){
     if(weekHolidays.length) reasons.push(`this week includes ${weekHolidays.map(h=>`<strong>${escHTML(h.name)}</strong> (${FDS(h.date)})`).join(', ')}`);
     if(monthStartDay) reasons.push(`this week includes the 1st of the month (${FDS(FD(monthStartDay))})`);
     const promptDate=weekHolidays[0]?weekHolidays[0].date:FD(monthStartDay);
-    alerts.push(`<div class="pharma-alert" style="background:var(--bl);border-color:#B7D8F2;color:var(--bd)"><span style="font-size:14px;flex-shrink:0">💡</span><div style="flex:1">Heads up — ${reasons.join(' and ')}. Worth reviewing whether any staff need OT added this week.<div style="margin-top:6px"><button class="btn btn-sm" onclick="openAddOTModal(null,null,'${promptDate}')">+ Add OT</button></div></div></div>`);
+    alerts.push(`<div class="pharma-alert" style="background:var(--bl);border-color:#B7D8F2;color:var(--bd)"><span style="font-size:14px;flex-shrink:0">💡</span><div style="flex:1">Heads up — ${reasons.join(' and ')}. Worth reviewing whether any staff need OT added this week.<div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm" onclick="openAddOTModal(null,null,'${promptDate}')">+ Add OT</button><button class="btn btn-sm btn-primary" onclick="openOTSuggestionsModal()">💡 Suggest staff</button></div></div></div>`);
   }
 
   el.innerHTML=alerts.join('');
@@ -5464,7 +5476,193 @@ async function saveOT(){
     });
   }
 }
-  
+
+// ── OT SUGGESTIONS ───────────────────────────────────────────────
+// Looks at who has historically done OT on the 1st/2nd of the month, and on
+// public holidays, and suggests the same for the next upcoming occurrence(s)
+// — the manager still has to review and create them, and each still goes
+// through the normal staff-availability-confirmation step before it lands
+// on the roster, same as any other manager-initiated OT request.
+function computeOTSuggestions(){
+  const staff = DB.get('staff')||[];
+  const otAll = DB.get('otRequests')||[];
+  const approvedOT = otAll.filter(o=>o.approved===true);
+  const publicHolidays = DB.get('publicHolidays')||[];
+  const today = FD(new Date());
+
+  const monthStartHistory = {};
+  approvedOT.forEach(o=>{
+    const dom = new Date(o.date+'T00:00:00').getDate();
+    if(dom===1||dom===2){
+      if(!monthStartHistory[o.empId]) monthStartHistory[o.empId]={count:0,starts:[],ends:[]};
+      monthStartHistory[o.empId].count++;
+      monthStartHistory[o.empId].starts.push(o.start);
+      monthStartHistory[o.empId].ends.push(o.end);
+    }
+  });
+
+  const pastHolidayDates = new Set(publicHolidays.filter(h=>h.date<today).map(h=>h.date));
+  const holidayHistory = {};
+  approvedOT.forEach(o=>{
+    if(pastHolidayDates.has(o.date)){
+      if(!holidayHistory[o.empId]) holidayHistory[o.empId]={count:0,starts:[],ends:[]};
+      holidayHistory[o.empId].count++;
+      holidayHistory[o.empId].starts.push(o.start);
+      holidayHistory[o.empId].ends.push(o.end);
+    }
+  });
+
+  function mostCommon(arr){
+    if(!arr.length) return null;
+    const counts={};
+    arr.forEach(v=>counts[v]=(counts[v]||0)+1);
+    return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0];
+  }
+
+  const now = new Date();
+  let targetMonth = now.getMonth(), targetYear = now.getFullYear();
+  if(now.getDate() > 2){ targetMonth++; if(targetMonth>11){targetMonth=0;targetYear++;} }
+  const monthStartDates = [
+    FD(new Date(targetYear, targetMonth, 1)),
+    FD(new Date(targetYear, targetMonth, 2))
+  ];
+
+  const lookaheadEnd = FD(new Date(now.getTime()+60*86400000));
+  const upcomingHolidays = publicHolidays.filter(h=>h.date>=today && h.date<=lookaheadEnd);
+
+  const existingOTKey = new Set(otAll.map(o=>o.empId+'|'+o.date));
+  const suggestions = [];
+
+  // Require at least 2 historical occurrences for month-start — a single
+  // past OT shift on the 1st isn't really a "pattern" yet.
+  Object.entries(monthStartHistory).forEach(([empId,hist])=>{
+    if(hist.count<2) return;
+    const emp = staff.find(s=>s.id===empId);
+    if(!emp) return;
+    monthStartDates.forEach(date=>{
+      if(existingOTKey.has(empId+'|'+date)) return;
+      suggestions.push({
+        empId, date, emp,
+        start: mostCommon(hist.starts)||'17:00',
+        end: mostCommon(hist.ends)||'19:00',
+        reason: `Historically works OT on the 1st/2nd of the month (${hist.count} times previously)`
+      });
+    });
+  });
+
+  // Public holidays are rarer, so even one prior occurrence counts.
+  Object.entries(holidayHistory).forEach(([empId,hist])=>{
+    const emp = staff.find(s=>s.id===empId);
+    if(!emp) return;
+    upcomingHolidays.forEach(hol=>{
+      if(existingOTKey.has(empId+'|'+hol.date)) return;
+      suggestions.push({
+        empId, date:hol.date, emp,
+        start: mostCommon(hist.starts)||'17:00',
+        end: mostCommon(hist.ends)||'19:00',
+        reason: `Historically works OT on public holidays (${hist.count} time${hist.count===1?'':'s'} previously) — ${hol.name}`
+      });
+    });
+  });
+
+  const seen=new Set();
+  return suggestions.filter(s=>{
+    const key=s.empId+'|'+s.date;
+    if(seen.has(key)) return false;
+    seen.add(key); return true;
+  }).sort((a,b)=>a.date.localeCompare(b.date)||a.emp.first.localeCompare(b.emp.first));
+}
+
+function openOTSuggestionsModal(){
+  const suggestions = computeOTSuggestions();
+  const listEl = document.getElementById('ot-suggestions-list');
+  const createBtn = document.getElementById('ot-suggestions-create-btn');
+  if(!suggestions.length){
+    listEl.innerHTML = '<p style="font-size:12px;color:var(--t2)">No consistent OT pattern found yet for the upcoming public holiday(s) or month-start dates — add OT manually as usual, and suggestions will start appearing here once there\'s history to learn from.</p>';
+    if(createBtn) createBtn.style.display='none';
+  } else {
+    if(createBtn){ createBtn.style.display='inline-flex'; createBtn.disabled=false; createBtn.textContent='Create selected requests'; }
+    listEl.innerHTML = suggestions.map(s=>{
+      const dataStr = JSON.stringify({empId:s.empId,date:s.date,start:s.start,end:s.end,reason:s.reason}).replace(/"/g,'&quot;');
+      return `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rsm);cursor:pointer">
+        <input type="checkbox" class="ot-suggestion-cb" checked data-suggestion="${dataStr}" style="margin-top:2px;width:15px;height:15px;flex-shrink:0">
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:13px">${escHTML(s.emp.first+' '+s.emp.last)} — ${FDS(s.date)}</div>
+          <div style="font-size:11px;color:var(--t2);margin-top:1px">${escHTML(s.reason)}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:1px">Suggested time: ${escHTML(s.start)}–${escHTML(s.end)}</div>
+        </div>
+      </label>`;
+    }).join('');
+  }
+  OM('m-ot-suggestions');
+}
+
+async function createSuggestedOTRequests(){
+  const checked = [...document.querySelectorAll('.ot-suggestion-cb:checked')];
+  if(!checked.length){ CM('m-ot-suggestions'); return; }
+
+  const btn = document.getElementById('ot-suggestions-create-btn');
+  if(btn){ btn.disabled=true; btn.textContent='Creating…'; }
+
+  const reqs = DB.get('otRequests') || [];
+  const mgr = getCurrentManager();
+  const newRequests = [];
+
+  checked.forEach((cb,i)=>{
+    const s = JSON.parse(cb.dataset.suggestion);
+    const req = {
+      id: 'ot'+Date.now()+'-'+i,
+      empId: s.empId, date: s.date, start: s.start, end: s.end,
+      reason: s.reason, task: s.reason,
+      availConfirmed: false,
+      approved: null,
+      requestedBy: 'manager',
+      staffConfirmed: null,
+      submitted: new Date().toISOString(),
+      createdBy: mgr.username, createdByName: mgr.name, createdByRole: mgr.role,
+      updatedBy: mgr.username, updatedByName: mgr.name, updatedByRole: mgr.role
+    };
+    reqs.push(req);
+    newRequests.push(req);
+  });
+
+  const result = await DB.set('otRequests', reqs);
+  if(!result.ok){
+    alert('Could not create the OT requests. Please try again.');
+    if(btn){ btn.disabled=false; btn.textContent='Create selected requests'; }
+    return;
+  }
+
+  CM('m-ot-suggestions');
+  renderOT();
+  renderDashboard();
+
+  newRequests.forEach(req=>{
+    const staffInfo = staffPayload(req.empId);
+    notify('manager_ot_request', {
+      otId: req.id,
+      empId: req.empId,
+      empEmail: staffInfo.empEmail || '',
+      empPhone: staffInfo.empPhone || '',
+      empFirst: staffInfo.empFirst || '',
+      empLast: staffInfo.empLast || '',
+      empName: staffInfo.empName || '',
+      date: req.date,
+      start: req.start,
+      end: req.end,
+      reason: req.reason || '',
+      task: req.task || '',
+      requestedBy: 'manager',
+      source: 'Manager Portal',
+      sendToStaff: true
+    })
+    .then(r => console.log('OT suggestion email sent', r))
+    .catch(err => console.warn('OT suggestion email failed for ' + req.date + ': ' + err.message));
+  });
+
+  alert(`${newRequests.length} OT request${newRequests.length===1?'':'s'} created — each still needs the staff member to confirm availability before it's added to the roster.`);
+}
+
 async function approveOT(id, opts = {}){
  try{
   const reqs = DB.get('otRequests') || [];

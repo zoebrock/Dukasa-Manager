@@ -4329,7 +4329,7 @@ function calcBreakMin(start, end) {
   if(!start||!end) return 0;
   const totalMins = MD(start, end);
   const grossHrs  = totalMins / 60;
-  if(grossHrs >= 8) return 50;
+  if(grossHrs > 8) return 50;
   if(grossHrs >= 6) return 40;
   if(grossHrs >= 3) return 10;
   return 0;

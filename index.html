@@ -262,6 +262,7 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
 .chip-unavail{background:var(--rl);color:var(--rd);border-color:#F7C1C1;cursor:default}
 .chip-unavail.chip-small{background:var(--red);color:#fff;border-color:var(--red)}
 .chip-anticipated{background:var(--pl);color:var(--purple);border:1px dashed #B7B1E8;cursor:pointer}
+.chip-holiday{background:var(--bl);color:var(--bd);border-color:#B7D8F2}
 .chip-small{font-size:9px;padding:1px 5px}
 
 /* ── Add-shift button in empty cell ──────────────────────────── */
@@ -1040,6 +1041,7 @@ function isPublishedShift(shift){
           <button class="btn btn-sm btn-ghost" style="color:var(--rd)" onclick="deleteDuplicateShiftRows()">Clean dupes</button>
           <button class="btn btn-danger btn-sm" id="bulk-delete-btn" onclick="openBulkDeleteShifts()" style="display:none">Delete selected</button>
           <button class="btn btn-sm" onclick="openPartialLeaveModal()">+ Leave</button>
+          <button class="btn btn-sm" onclick="openPublicHolidayModal()">+ Holiday</button>
           <button class="btn btn-sm" onclick="openPublishModal()" style="border-color:var(--amber);color:var(--ad);background:var(--al)">Publish</button>
           <button class="btn btn-primary btn-sm" onclick="openAddShiftModal()">+ Shift</button>
         </div>
@@ -1051,6 +1053,7 @@ function isPublishedShift(shift){
         <span class="chip chip-shift" style="cursor:default">Published shift</span>
         <span class="chip chip-draft" style="cursor:default">Draft shift</span>
         <span class="chip chip-leave" style="cursor:default">Annual leave</span>
+        <span class="chip chip-holiday" style="cursor:default">Public holiday</span>
         <span class="chip chip-sick" style="cursor:default">Sick</span>
         <span class="chip chip-ot" style="cursor:default">OT</span>
         <span class="chip chip-unavail" style="cursor:default">Unavailable</span>
@@ -1420,6 +1423,29 @@ function isPublishedShift(shift){
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="btn" onclick="CM('m-partial-leave')">Cancel</button>
       <button class="btn btn-primary" onclick="savePartialLeave()">Save leave</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="m-public-holiday">
+  <div class="modal" style="max-width:480px">
+    <div class="mh"><h2 id="ph-modal-title">Add public holiday</h2><button class="xbtn" onclick="CM('m-public-holiday')">×</button></div>
+
+    <div class="fr"><label>Holiday name <span style="color:var(--rd)">*</span></label><input type="text" id="ph-name" placeholder="e.g. Christmas Day" maxlength="60"></div>
+    <div class="fr"><label>Date <span style="color:var(--rd)">*</span></label><input type="date" id="ph-date"></div>
+
+    <div style="margin-top:8px">
+      <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t2);margin-bottom:2px">Grant public holiday leave to</div>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:8px">A paid day off with no shift needed — typically full-time staff. Everyone else still sees the day flagged as a public holiday on the roster and Staff Portal, but isn't given leave for it automatically.</div>
+      <div id="ph-staff-list" style="border:1px solid var(--border);border-radius:var(--rsm);max-height:220px;overflow-y:auto;padding:8px 10px"></div>
+    </div>
+
+    <div style="display:flex;gap:6px;justify-content:space-between;margin-top:16px;align-items:center">
+      <button class="btn btn-sm btn-danger" id="ph-delete-btn" onclick="deletePublicHoliday()" style="display:none">Delete</button>
+      <div style="display:flex;gap:6px;margin-left:auto">
+        <button class="btn" onclick="CM('m-public-holiday')">Cancel</button>
+        <button class="btn btn-primary" onclick="savePublicHoliday()">Save</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1975,7 +2001,8 @@ const TABLE_MAP = {
   rosterTemplates: 'roster_templates',
   lateReports: 'late_reports',
   uniformOrders: 'uniform_orders',
-  staffUnavailability: 'staff_unavailability'
+  staffUnavailability: 'staff_unavailability',
+  publicHolidays: 'public_holidays'
 };
 
 const CLOCK_TYPE_ALIASES = {
@@ -2179,6 +2206,14 @@ if (key === 'staffUnavailability') {
   }));
 }
 
+if (key === 'publicHolidays') {
+  return rows.map(r => ({
+    ...r,
+    staffIds: r.staff_ids || [],
+    createdAt: r.created_at
+  }));
+}
+
 if (key === 'shifts') {
   return rows.map(s => ({
     ...s,
@@ -2326,6 +2361,14 @@ function mapToSupabase(key, arrOrObj) {
       delete x.empId;
       delete x.from;
       delete x.to;
+      delete x.createdAt;
+      return x;
+    }
+
+    if (key === 'publicHolidays') {
+      x.staff_ids = x.staffIds || [];
+      x.created_at = x.createdAt;
+      delete x.staffIds;
       delete x.createdAt;
       return x;
     }
@@ -2684,7 +2727,7 @@ function _setSyncIndicator(state) {
 
 const ALL_KEYS = [
   'staff','shifts','leaveRequests','sickDays',
-  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements','lateReports','uniformOrders','staffUnavailability'
+  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements','lateReports','uniformOrders','staffUnavailability','publicHolidays'
 ];
 // clockEvents is fetched separately only when needed (timesheets/dashboard)
 // so manual entries aren't wiped by the 10-second smart sync
@@ -3196,6 +3239,7 @@ function renderRoster(){
   const sickDays=DB.get('sickDays')||[];
   const otReqs=(DB.get('otRequests')||[]).filter(o=>o.approved);
   const unavailList=DB.get('staffUnavailability')||[];
+  const publicHolidays=DB.get('publicHolidays')||[];
   const today=FD(new Date());
 
   // Fixed-width table — name col 130px, remaining space split evenly across 7 days
@@ -3204,7 +3248,8 @@ function renderRoster(){
     days.map(d=>{
       const ds=FD(d);
       const isToday=ds===today;
-      return`<th style="${isToday?'background:var(--pl);color:var(--pd)':''}">${FDISP(d)}</th>`;
+      const hol=publicHolidays.find(h=>h.date===ds);
+      return`<th style="${isToday?'background:var(--pl);color:var(--pd)':hol?'background:var(--bl);color:var(--bd)':''}" ${hol?`title="Public holiday — ${escHTML(hol.name)}"`:''}>${FDISP(d)}${hol?`<div style="font-size:9px;font-weight:700;margin-top:2px;cursor:pointer" onclick="openPublicHolidayModal('${hol.id}')">🎉 ${escHTML(hol.name)}</div>`:''}</th>`;
     }).join('')+
     '</tr>';
 
@@ -3212,8 +3257,9 @@ function renderRoster(){
     const cells=days.map(d=>{
       const ds=FD(d);const dname=dayName(d);
       const isToday=ds===today;
-      const cellStyle=isToday?'background:rgba(83,74,183,.04)':'';
-      const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavailList);
+      const hol=publicHolidays.find(h=>h.date===ds);
+      const cellStyle=isToday?'background:rgba(83,74,183,.04)':hol?'background:rgba(24,95,165,.04)':'';
+      const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavailList,hol);
       return `<td style="${cellStyle}"><div class="sc-cell">${content}</div></td>`;
     }).join('');
 
@@ -3229,17 +3275,18 @@ function renderRoster(){
     </tr>`;
   }).join('');
 
-  renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today,unavailList);
+  renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today,unavailList,publicHolidays);
 }
 
 // Builds the shift/leave/sick/availability chips + add-button for one
 // employee on one day. Shared by the desktop week grid and the mobile
 // single-day list so the two views can never drift out of sync.
-function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavailList){
+function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavailList,publicHoliday){
   const dayShifts=shifts.filter(s=>s.empId===emp.id&&s.date===ds&&!s.isOT);
   const onLeave=leaveReqs.find(l=>l.empId===emp.id&&l.from<=ds&&l.to>=ds);
   const isSick=sickDays.find(sk=>sk.empId===emp.id&&sk.date===ds);
   const anticipated=(unavailList||[]).find(u=>u.empId===emp.id&&u.from<=ds&&u.to>=ds);
+  const grantedHoliday=publicHoliday&&(publicHoliday.staffIds||[]).includes(emp.id)?publicHoliday:null;
 
   const hasOT = otReqs.filter(o =>
     o.empId === emp.id &&
@@ -3312,8 +3359,11 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
   else if(isSick) content+=`<span class="chip chip-sick chip-small" style="cursor:pointer" onclick="openSickPopup(event,'${emp.id}','${ds}')" title="Click to manage sick day">Sick</span>`;
   else if(onLeave&&!dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">${onLeave.type.replace(' Leave','').replace(' leave','')}</span>`;
   else if(onLeave&&dayShifts.length) content+=`<span class="chip chip-leave chip-small" style="cursor:pointer;font-size:8px" onclick="openLeavePopup(event,'${onLeave.id}')" title="Click to manage leave">Leave</span>`;
+  else if(grantedHoliday&&!dayShifts.length) content+=`<span class="chip chip-holiday chip-small" style="cursor:pointer" onclick="openPublicHolidayModal('${grantedHoliday.id}')" title="Public holiday leave — ${escHTML(grantedHoliday.name)}">🎉 Public Holiday</span>`;
   else if(anticipated&&!dayShifts.length) content+=`<span class="chip chip-anticipated chip-small" onclick="editStaff('${emp.id}')" title="${anticipated.note?escHTML(anticipated.note):'Anticipated unavailability — not leave, just a placemarker'}">Anticipated leave</span>`;
-  if(showAvail&&!dayShifts.length&&!onLeave&&!isSick&&!anticipated){ if(avail.mode==='unavailable') content+=`<span class="chip chip-unavail chip-small">Unavailable</span>`; else if(avail.mode==='times') content+=`<span class="chip chip-partial-leave chip-small">Avail ${avail.start}–${avail.end}</span>`; }
+  if(showAvail&&!dayShifts.length&&!onLeave&&!isSick&&!anticipated&&!grantedHoliday){ if(avail.mode==='unavailable') content+=`<span class="chip chip-unavail chip-small">Unavailable</span>`; else if(avail.mode==='times') content+=`<span class="chip chip-partial-leave chip-small">Avail ${avail.start}–${avail.end}</span>`; }
+  // Flag it when someone granted the day off is rostered on anyway.
+  if(grantedHoliday&&dayShifts.length) content+=`<span class="chip chip-holiday chip-small" style="margin-top:2px" title="Granted public holiday leave but still rostered">🎉 PH — rostered anyway</span>`;
 
   // Only show + button if no shifts exist for this day
   const hasShifts=dayShifts.length>0;
@@ -3324,7 +3374,7 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
 
 // ── Mobile roster: one day at a time, staff as a scrollable list ──
 let mobileRosterDayIndex=null;
-function renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today,unavailList){
+function renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today,unavailList,publicHolidays){
   const tabsEl=document.getElementById('r-mobile-day-tabs');
   const listEl=document.getElementById('r-mobile-list');
   if(!tabsEl||!listEl) return;
@@ -3343,9 +3393,10 @@ function renderRosterMobileDay(days,staff,shifts,leaveReqs,sickDays,otReqs,today
 
   const d=days[mobileRosterDayIndex];
   const ds=FD(d);const dname=dayName(d);
+  const hol=(publicHolidays||[]).find(h=>h.date===ds);
 
   listEl.innerHTML=staff.map(emp=>{
-    const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavailList);
+    const content=buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavailList,hol);
     return `<div style="display:flex;align-items:flex-start;gap:10px;padding:12px;border-bottom:1px solid var(--border)">
       <div class="av" style="background:${emp.color}22;color:${emp.color};flex-shrink:0">${INI(emp)}</div>
       <div style="flex:1;min-width:0">
@@ -4133,7 +4184,71 @@ async function deletePartialLeave(){
 
   _setSyncIndicator('saved');
 }
-  
+
+// ── PUBLIC HOLIDAYS ──────────────────────────────────────────────
+let editingPublicHolidayId = null;
+function openPublicHolidayModal(id){
+  editingPublicHolidayId = id || null;
+  const holidays = DB.get('publicHolidays') || [];
+  const hol = id ? holidays.find(h => h.id === id) : null;
+  const staff = [...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+
+  document.getElementById('ph-modal-title').textContent = hol ? 'Edit public holiday' : 'Add public holiday';
+  document.getElementById('ph-name').value = hol ? hol.name : '';
+  document.getElementById('ph-date').value = hol ? hol.date : FD(new Date());
+  document.getElementById('ph-delete-btn').style.display = hol ? 'inline-flex' : 'none';
+
+  // Defaults to full-time staff (30+ contracted hrs/week) when creating a new
+  // holiday — the manager can still tick/untick anyone before saving.
+  const grantedIds = hol ? (hol.staffIds || []) : staff.filter(s => (s.contractedHrsPerWeek||0) >= 30).map(s => s.id);
+  document.getElementById('ph-staff-list').innerHTML = staff.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 2px;cursor:pointer;border-radius:4px">
+      <input type="checkbox" class="ph-staff-cb" value="${s.id}" ${grantedIds.includes(s.id)?'checked':''} style="accent-color:var(--purple);width:15px;height:15px;flex-shrink:0">
+      <div class="av" style="width:22px;height:22px;font-size:8px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${s.color}22;color:${s.color};flex-shrink:0">${INI(s)}</div>
+      <span>${s.first} ${s.last} <span style="color:var(--t3);font-size:10px">${s.role}${s.contractedHrsPerWeek?' · '+s.contractedHrsPerWeek+'h/wk':''}</span></span>
+    </label>`).join('');
+
+  OM('m-public-holiday');
+}
+
+async function savePublicHoliday(){
+  const name = document.getElementById('ph-name').value.trim();
+  const date = document.getElementById('ph-date').value;
+  if(!name || !date){ alert('Holiday name and date are required.'); return; }
+
+  const staffIds = [...document.querySelectorAll('.ph-staff-cb:checked')].map(cb => cb.value);
+  const holidays = DB.get('publicHolidays') || [];
+
+  if(editingPublicHolidayId){
+    const idx = holidays.findIndex(h => h.id === editingPublicHolidayId);
+    if(idx >= 0) holidays[idx] = {...holidays[idx], name, date, staffIds};
+  } else {
+    holidays.push({ id:'ph'+Date.now(), name, date, staffIds, createdAt:new Date().toISOString() });
+  }
+
+  const result = await DB.set('publicHolidays', holidays);
+  if(!result.ok) return;
+
+  editingPublicHolidayId = null;
+  CM('m-public-holiday');
+  renderRoster();
+  updateBadges();
+}
+
+async function deletePublicHoliday(){
+  if(!editingPublicHolidayId) return;
+  if(!confirm('Delete this public holiday? Anyone granted leave for it will lose that leave marker.')) return;
+
+  const holidays = (DB.get('publicHolidays') || []).filter(h => h.id !== editingPublicHolidayId);
+  const result = await DB.set('publicHolidays', holidays);
+  if(!result.ok) return;
+
+  editingPublicHolidayId = null;
+  CM('m-public-holiday');
+  renderRoster();
+  updateBadges();
+}
+
 function notifyStaffMember(empId,weekStart,weekEnd,updatedShifts){
   const shiftDate=new Date(weekStart+'T00:00:00');
   const dow=shiftDate.getDay();
@@ -9333,7 +9448,8 @@ const REALTIME_TABLE_TO_KEY = {
   roster_templates: 'rosterTemplates',
   late_reports: 'lateReports',
   uniform_orders: 'uniformOrders',
-  staff_unavailability: 'staffUnavailability'
+  staff_unavailability: 'staffUnavailability',
+  public_holidays: 'publicHolidays'
 };
 
 function queueRealtimeRefresh(key) {

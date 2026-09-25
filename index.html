@@ -5911,47 +5911,7 @@ async function nudgeOTRequest(id){
   }
 }
 
-// Runs periodically (see startManagerSync) — auto-nudges any manager-
-// initiated OT request that's sat unconfirmed for 24+ hours since it was
-// sent, or since its last nudge, so staff don't get missed simply because
-// nobody happened to open the OT Tracker page again.
-async function autoNudgeStaleOTRequests(){
-  const reqs = DB.get('otRequests') || [];
-  const staff = DB.get('staff') || [];
-  const now = Date.now();
-  const DAY_MS = 24 * 60 * 60 * 1000;
 
-  const due = reqs.filter(o => {
-    if (o.approved === true || o.approved === false) return false;
-    if (o.requestedBy !== 'manager') return false;
-    if (o.availConfirmed || o.staffConfirmed === true) return false;
-    const lastAction = o.lastNudgedAt || o.submitted;
-    if (!lastAction) return false;
-    return (now - new Date(lastAction).getTime()) >= DAY_MS;
-  });
-  if (!due.length) return;
-
-  const updated = [...reqs];
-  let sentAny = false;
-
-  for (const o of due) {
-    const person = staff.find(s => s.id === o.empId);
-    if (!person || !person.phone) continue;
-    try {
-      const msg = `Hi ${person.first || ''}, just a reminder — you have a pending OT request for ${FDS(o.date)} (${o.start}–${o.end}) waiting on your confirmation in the Staff Portal. Please confirm or decline when you get a chance.`;
-      await _smsPost(person.phone, msg);
-      const idx = updated.findIndex(x => x.id === o.id);
-      if (idx >= 0) updated[idx] = { ...updated[idx], lastNudgedAt: new Date().toISOString() };
-      sentAny = true;
-    } catch (err) {
-      console.warn('Auto-nudge failed for OT request', o.id, err.message);
-    }
-  }
-
-  if (!sentAny) return;
-  await DB.set('otRequests', updated);
-  if (document.getElementById('pg-ot')?.classList.contains('active')) renderOT();
-}
 
 
 
@@ -9836,17 +9796,8 @@ function startManagerSync() {
     checkScheduledAnnouncements();
   }, 90000);
   checkScheduledAnnouncements();
-
-  if (otNudgeSweepTimer) clearInterval(otNudgeSweepTimer);
-  // Auto-texts a reminder for any manager-initiated OT request still
-  // unconfirmed 24+ hours after it was sent (or after its last nudge).
-  otNudgeSweepTimer = setInterval(() => {
-    autoNudgeStaleOTRequests();
-  }, 90000);
-  autoNudgeStaleOTRequests();
 }
 let announcementSweepTimer = null;
-let otNudgeSweepTimer = null;
 
 async function manualSync() {
   const btn = document.getElementById('sync-now-btn');

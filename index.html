@@ -2336,7 +2336,8 @@ if (key === 'otRequests') {
     deniedByRole: r.deniedByRole || r.denied_by_role,
     createdBy: r.createdBy || r.created_by,
     createdByName: r.createdByName || r.created_by_name,
-    createdByRole: r.createdByRole || r.created_by_role
+    createdByRole: r.createdByRole || r.created_by_role,
+    lastNudgedAt: r.lastNudgedAt || r.last_nudged_at || null
   }));
 }
 
@@ -5288,7 +5289,7 @@ function renderOT(filter){
           : '<span class="badge ba">Awaiting staff</span>';
     const pendingActions = (o.approved===null||o.approved===undefined)
       ? (waitingForManagerStaff
-          ? '<span class="badge ba">Waiting for staff</span>'
+          ? `<span class="badge ba">Waiting for staff</span> <button class="btn btn-sm" onclick="nudgeOTRequest('${o.id}')" title="Text a reminder to confirm/decline">${o.lastNudgedAt?'Nudge again':'Nudge'}</button>${o.lastNudgedAt?`<div style="font-size:10px;color:var(--t3);margin-top:2px">Nudged ${nudgeAgoLabel(o.lastNudgedAt)}</div>`:''}`
           : `<button class="btn btn-sm btn-success" onclick="approveOT('${o.id}')">Approve</button> <button class="btn btn-sm btn-danger" onclick="denyOT('${o.id}')">Deny</button>`)
       : '';
     return `<tr class="${rowCls}">
@@ -5869,6 +5870,45 @@ async function denyOT(id, opts = {}){
   console.error('Deny OT failed:', err);
   alert('Could not deny this OT request: ' + (err.message || err));
  }
+}
+
+// Texts a reminder to a staff member with an OT request awaiting their
+// confirmation. Just sends an SMS + timestamps it on the request so the
+// manager can see it's already been nudged — doesn't change the request's
+// status, staff still needs to actually confirm/decline in the Staff Portal.
+function nudgeAgoLabel(iso){
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
+  if(mins < 60) return mins + 'm ago';
+  const hrs = Math.round(mins / 60);
+  if(hrs < 24) return hrs + 'h ago';
+  return Math.round(hrs / 24) + 'd ago';
+}
+
+async function nudgeOTRequest(id){
+  const reqs = DB.get('otRequests') || [];
+  const o = reqs.find(x => x.id === id);
+  if(!o) return;
+  const staff = (DB.get('staff') || []).find(s => s.id === o.empId);
+  if(!staff){ alert('Could not find this staff member.'); return; }
+  if(!staff.phone){ alert(`${staff.first} ${staff.last} has no phone number on file to text.`); return; }
+
+  const btn = event?.target;
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+
+  try{
+    const msg = `Hi ${staff.first || ''}, just a reminder — you have a pending OT request for ${FDS(o.date)} (${o.start}–${o.end}) waiting on your confirmation in the Staff Portal. Please confirm or decline when you get a chance.`;
+    await _smsPost(staff.phone, msg);
+
+    const idx = reqs.findIndex(x => x.id === id);
+    if(idx >= 0) reqs[idx] = { ...reqs[idx], lastNudgedAt: new Date().toISOString() };
+    await DB.set('otRequests', reqs);
+
+    renderOT();
+    if(typeof toast === 'function') toast(`Nudge sent to ${staff.first}.`, 'success');
+  } catch(err){
+    alert('Could not send the nudge: ' + (err.message || err));
+    if(btn){ btn.disabled = false; btn.textContent = 'Nudge'; }
+  }
 }
 
 

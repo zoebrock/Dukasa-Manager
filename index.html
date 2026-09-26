@@ -1082,7 +1082,8 @@ function isPublishedShift(shift){
           <button class="btn btn-sm" onclick="filterOT('all',this)">All</button>
           <button class="btn btn-sm active-filter" id="ot-filter-pending" onclick="filterOT('pending',this)">Pending</button>
           <button class="btn btn-sm" onclick="filterOT('approved',this)">Approved</button>
-          <button class="btn btn-primary btn-sm" onclick="openAddOTModal(null)">+ Add OT request</button>
+          <button class="btn btn-sm" onclick="openAddOTModal(null)">+ Add OT request</button>
+          <button class="btn btn-primary btn-sm" onclick="openBulkOTModal()">+ Bulk add OT</button>
         </div>
       </div>
       <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
@@ -1634,6 +1635,22 @@ function isPublishedShift(shift){
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px">
       <button class="btn" onclick="CM('m-ot-suggestions')">Cancel</button>
       <button class="btn btn-primary" id="ot-suggestions-create-btn" onclick="createSuggestedOTRequests()">Create selected requests</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="m-bulk-ot">
+  <div class="modal" style="max-width:640px">
+    <div class="mh"><h2>Bulk add OT</h2><button class="xbtn" onclick="CM('m-bulk-ot')">×</button></div>
+    <div class="fr"><label>Reason / justification <span style="color:var(--rd)">*</span></label><textarea id="bulk-ot-reason" rows="2" placeholder="Why is OT required? Applied to every row below."></textarea></div>
+    <div class="fr"><label>Task <span style="font-weight:400;color:var(--t3)">(optional, applied to every row)</span></label><textarea id="bulk-ot-task" rows="2" placeholder="Describe the work..."></textarea></div>
+    <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t2);margin:10px 0 6px">Staff & times</div>
+    <div id="bulk-ot-rows" style="display:flex;flex-direction:column;gap:8px;max-height:280px;overflow-y:auto"></div>
+    <button class="btn btn-sm" style="margin-top:8px" onclick="addBulkOTRow()">+ Add another staff member</button>
+    <div class="nr" style="margin-top:10px"><span style="font-size:12px">Availability confirmed for all?</span><button class="toggle" id="tog-bulk-ot-avail" onclick="this.classList.toggle('on')"></button></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="CM('m-bulk-ot')">Cancel</button>
+      <button class="btn btn-primary" id="bulk-ot-save-btn" onclick="saveBulkOT()">Create OT requests</button>
     </div>
   </div>
 </div>
@@ -5358,6 +5375,115 @@ function dateRangeInclusive(fromStr, toStr){
   return dates;
 }
 
+// ── BULK OT ──────────────────────────────────────────────────────
+function openBulkOTModal(){
+  document.getElementById('bulk-ot-reason').value='';
+  document.getElementById('bulk-ot-task').value='';
+  document.getElementById('tog-bulk-ot-avail').classList.remove('on');
+  document.getElementById('bulk-ot-rows').innerHTML='';
+  addBulkOTRow();
+  addBulkOTRow();
+  OM('m-bulk-ot');
+}
+
+function addBulkOTRow(){
+  const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
+  const container=document.getElementById('bulk-ot-rows');
+  const row=document.createElement('div');
+  row.className='bulk-ot-row';
+  row.style.cssText='display:grid;grid-template-columns:1.6fr 1fr 0.8fr 0.8fr auto;gap:6px;align-items:end;border:1px solid var(--border);border-radius:var(--rsm);padding:8px';
+  row.innerHTML=`
+    <div><label style="font-size:11px">Staff</label><select class="bulk-ot-emp">${staff.map(s=>`<option value="${s.id}">${escHTML(s.first+' '+s.last)}</option>`).join('')}</select></div>
+    <div><label style="font-size:11px">Date</label><input type="date" class="bulk-ot-date" value="${FD(new Date())}"></div>
+    <div><label style="font-size:11px">Start</label><input type="time" class="bulk-ot-start" value="17:00"></div>
+    <div><label style="font-size:11px">End</label><input type="time" class="bulk-ot-end" value="19:00"></div>
+    <button class="btn btn-sm btn-danger" type="button" onclick="this.closest('.bulk-ot-row').remove()">✕</button>
+  `;
+  container.appendChild(row);
+}
+
+async function saveBulkOT(){
+  const reason=document.getElementById('bulk-ot-reason').value.trim();
+  if(!reason){ alert('Reason is required.'); return; }
+  const task=document.getElementById('bulk-ot-task').value;
+  const availConfirmed=document.getElementById('tog-bulk-ot-avail').classList.contains('on');
+  const rows=[...document.querySelectorAll('#bulk-ot-rows .bulk-ot-row')];
+  if(!rows.length){ alert('Add at least one staff member.'); return; }
+
+  const mgr=getCurrentManager();
+  const reqs=DB.get('otRequests')||[];
+  const newRequests=[];
+
+  rows.forEach((row,i)=>{
+    const empId=row.querySelector('.bulk-ot-emp').value;
+    const date=row.querySelector('.bulk-ot-date').value;
+    const start=row.querySelector('.bulk-ot-start').value;
+    const end=row.querySelector('.bulk-ot-end').value;
+    if(!empId||!date||!start||!end) return;
+    const req={
+      id:'ot'+Date.now()+'-b'+i,
+      empId, date, start, end,
+      reason, task,
+      availConfirmed,
+      approved: null,
+      requestedBy:'manager',
+      staffConfirmed: availConfirmed?true:null,
+      submitted:new Date().toISOString(),
+      createdBy:mgr.username, createdByName:mgr.name, createdByRole:mgr.role,
+      updatedBy:mgr.username, updatedByName:mgr.name, updatedByRole:mgr.role
+    };
+    reqs.push(req);
+    newRequests.push(req);
+  });
+
+  if(!newRequests.length){ alert('Each row needs a staff member, date, start and end time.'); return; }
+
+  const btn=document.getElementById('bulk-ot-save-btn');
+  if(btn){ btn.disabled=true; btn.textContent='Creating…'; }
+
+  const result=await DB.set('otRequests', reqs);
+  if(!result.ok){
+    alert('Could not create the OT requests. Please try again.');
+    if(btn){ btn.disabled=false; btn.textContent='Create OT requests'; }
+    return;
+  }
+
+  CM('m-bulk-ot');
+
+  if(availConfirmed){
+    for(const req of newRequests){
+      await approveOT(req.id, { bypassAvailabilityGuard:true });
+    }
+  } else {
+    renderOT();
+    renderDashboard();
+    newRequests.forEach(req=>{
+      const staffInfo=staffPayload(req.empId);
+      notify('manager_ot_request', {
+        otId: req.id,
+        empId: req.empId,
+        empEmail: staffInfo.empEmail || '',
+        empPhone: staffInfo.empPhone || '',
+        empFirst: staffInfo.empFirst || '',
+        empLast: staffInfo.empLast || '',
+        empName: staffInfo.empName || '',
+        date: req.date,
+        start: req.start,
+        end: req.end,
+        reason: req.reason || '',
+        task: req.task || '',
+        requestedBy: 'manager',
+        source: 'Manager Portal',
+        sendToStaff: true
+      })
+      .then(r => console.log('Bulk OT email sent', r))
+      .catch(err => console.warn('Bulk OT email failed for ' + req.date + ': ' + err.message));
+    });
+  }
+
+  alert(`${newRequests.length} OT request${newRequests.length===1?'':'s'} created.`);
+}
+
 async function saveOT(){
   const reqs = DB.get('otRequests') || [];
   const existing = editingOTId ? (reqs.find(x => x.id === editingOTId) || {}) : {};
@@ -5532,12 +5658,21 @@ function computeOTSuggestions(){
   const upcomingHolidays = publicHolidays.filter(h=>h.date>=today && h.date<=lookaheadEnd);
 
   const existingOTKey = new Set(otAll.map(o=>o.empId+'|'+o.date));
+  // If someone already has an OT request sent (pending their confirmation or
+  // the manager's decision) or approved — for ANY date, not just the one
+  // being suggested — they shouldn't be suggested again until that's
+  // resolved. Only a declined request doesn't block a fresh suggestion.
+  const busyEmpIds = new Set(
+    otAll.filter(o => o.approved === true || o.approved === null || o.approved === undefined)
+         .map(o => String(o.empId))
+  );
   const suggestions = [];
 
   // Require at least 2 historical occurrences for month-start — a single
   // past OT shift on the 1st isn't really a "pattern" yet.
   Object.entries(monthStartHistory).forEach(([empId,hist])=>{
     if(hist.count<2) return;
+    if(busyEmpIds.has(String(empId))) return;
     const emp = staff.find(s=>s.id===empId);
     if(!emp) return;
     monthStartDates.forEach(date=>{
@@ -5553,6 +5688,7 @@ function computeOTSuggestions(){
 
   // Public holidays are rarer, so even one prior occurrence counts.
   Object.entries(holidayHistory).forEach(([empId,hist])=>{
+    if(busyEmpIds.has(String(empId))) return;
     const emp = staff.find(s=>s.id===empId);
     if(!emp) return;
     upcomingHolidays.forEach(hol=>{

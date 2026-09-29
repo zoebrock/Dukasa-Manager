@@ -3249,6 +3249,18 @@ function renderRosterAlerts(){
     alerts.push(`<div class="pharma-alert" style="background:var(--bl);border-color:#B7D8F2;color:var(--bd)"><span style="font-size:14px;flex-shrink:0">💡</span><div style="flex:1">Heads up — ${reasons.join(' and ')}. Worth reviewing whether any staff need OT added this week.<div style="margin-top:6px;display:flex;gap:6px"><button class="btn btn-sm" onclick="openAddOTModal(null,null,'${promptDate}')">+ Add OT</button><button class="btn btn-sm btn-primary" onclick="openOTSuggestionsModal()">💡 Suggest staff</button></div></div></div>`);
   }
 
+  // Public holiday weeks tend to need Saturday cover too — prompt for it
+  // rather than auto-creating it, since asking someone to work a Saturday
+  // is a request, not something to spring on them via an already-published
+  // roster.
+  if(weekHolidays.length){
+    const saturday = days.find(d=>d.getDay()===6);
+    if(saturday){
+      const satDate = FD(saturday);
+      alerts.push(`<div class="pharma-alert" style="background:var(--bl);border-color:#B7D8F2;color:var(--bd)"><span style="font-size:14px;flex-shrink:0">📅</span><div style="flex:1">This week includes a public holiday (${weekHolidays.map(h=>escHTML(h.name)).join(', ')}) — consider requesting staff to work Saturday ${FDS(satDate)} to help cover demand.<div style="margin-top:6px"><button class="btn btn-sm" onclick="openAddShiftForED('','${satDate}')">+ Add Saturday shift</button></div></div></div>`);
+    }
+  }
+
   el.innerHTML=alerts.join('');
 }
 function getWD(){const days=[];for(let i=0;i<7;i++){const d=new Date(currentWeekStart);d.setDate(d.getDate()+i);days.push(d);}return days;}
@@ -3299,6 +3311,7 @@ function setRosterSort(mode){ rosterSortMode = mode; renderRoster(); }
 function renderRoster(){
   if(!currentWeekStart){initWeek(new Date());}
   const days=getWD();const we=new Date(currentWeekStart);we.setDate(we.getDate()+6);
+  autoFillPublicHolidayRoster(days);
   document.getElementById('wk-lbl').textContent=`${FDISP(currentWeekStart)} – ${FDISP(we)}`;updateTodayBtn();
   const staff=sortByNameOrRole(DB.get('staff')||[], rosterSortMode);
   const shifts = dedupeShifts(DB.get('shifts') || []);
@@ -5608,6 +5621,115 @@ async function saveOT(){
       .then(r => console.log('OT request email sent', r))
       .catch(err => alert('OT request saved, but the staff email failed for ' + req.date + ': ' + err.message));
     });
+  }
+}
+
+// ── PUBLIC HOLIDAY ROSTER AUTO-FILL ─────────────────────────────
+// Whenever a week is opened for drafting, automatically pre-loads:
+//  - an 08:00-18:00 draft shift for every staff member who'd normally work
+//    the first business day after a public holiday, and
+//  - an 08:00-18:00 draft OT request (reason "Public Holiday Madness") for
+//    "core" staff — those frequently rostered for OT — on the second
+//    business day after it.
+// Everything lands as drafts/pending requests the manager reviews and
+// publishes as part of the normal roster cycle, so staff get the usual
+// advance notice instead of being asked the week of.
+function isBusinessDay_(dateStr, publicHolidays){
+  const dow = new Date(dateStr+'T00:00:00').getDay();
+  if(dow===0||dow===6) return false;
+  return !publicHolidays.some(h=>h.date===dateStr);
+}
+function addBusinessDays_(dateStr, n, publicHolidays){
+  let d = new Date(dateStr+'T00:00:00');
+  let count=0;
+  while(count<n){
+    d.setDate(d.getDate()+1);
+    if(isBusinessDay_(FD(d), publicHolidays)) count++;
+  }
+  return FD(d);
+}
+// "Core" OT staff = anyone with a real track record of approved OT, not
+// just a one-off — reuses the same "2+ times" bar as the OT suggestions
+// feature rather than inventing a second threshold.
+function getFrequentOTStaffIds_(){
+  const counts={};
+  (DB.get('otRequests')||[]).filter(o=>o.approved===true).forEach(o=>{
+    counts[o.empId]=(counts[o.empId]||0)+1;
+  });
+  return new Set(Object.entries(counts).filter(([,c])=>c>=2).map(([id])=>id));
+}
+
+let phAutoFillDone = new Set();
+async function autoFillPublicHolidayRoster(days){
+  const weekKey = FD(days[0]);
+  if(phAutoFillDone.has(weekKey)) return;
+  phAutoFillDone.add(weekKey);
+
+  const publicHolidays = DB.get('publicHolidays')||[];
+  if(!publicHolidays.length) return;
+
+  const weekStart = FD(days[0]);
+  const weekEnd = FD(days[6]);
+  // A holiday from up to ~10 days before this week could still have its
+  // 1st/2nd business-day-after land inside it (e.g. a holiday just before
+  // a run of weekends/other holidays).
+  const lookbackStart = FD(new Date(days[0].getTime() - 10*86400000));
+  const relevantHolidays = publicHolidays.filter(h=>h.date>=lookbackStart && h.date<=weekEnd);
+  if(!relevantHolidays.length) return;
+
+  const staff = DB.get('staff')||[];
+  const frequentOTIds = getFrequentOTStaffIds_();
+  const mgr = getCurrentManager();
+  let shifts = DB.get('shifts')||[];
+  let otReqs = DB.get('otRequests')||[];
+  let anyShiftAdded=false, anyOTAdded=false;
+
+  for(const hol of relevantHolidays){
+    const day1 = addBusinessDays_(hol.date,1,publicHolidays);
+    const day2 = addBusinessDays_(hol.date,2,publicHolidays);
+
+    if(day1>=weekStart && day1<=weekEnd){
+      for(const emp of staff){
+        if(!isContractedWorkDay_(emp, day1)) continue;
+        if(shifts.some(s=>String(s.empId)===String(emp.id) && s.date===day1 && !s.isOT)) continue;
+        const newShift = {
+          id:'phshift-'+day1+'-'+emp.id,
+          empId:emp.id, date:day1, start:'08:00', end:'18:00',
+          breakMin: calcBreakMin('08:00','18:00'), paidBreakMin: paidBreakMin(),
+          role: emp.role||'', notes:'Public Holiday Madness — auto-scheduled extended hours ('+hol.name+')',
+          published:false, status:'draft'
+        };
+        const result = await upsertSupabaseRow('shifts', newShift);
+        if(result.ok){ shifts.push(newShift); anyShiftAdded=true; }
+      }
+    }
+
+    if(day2>=weekStart && day2<=weekEnd){
+      for(const emp of staff){
+        if(!frequentOTIds.has(String(emp.id))) continue;
+        if(!isContractedWorkDay_(emp, day2)) continue;
+        if(otReqs.some(o=>String(o.empId)===String(emp.id) && o.date===day2)) continue;
+        const newOT = {
+          id:'phot-'+day2+'-'+emp.id,
+          empId:emp.id, date:day2, start:'08:00', end:'18:00',
+          reason:'Public Holiday Madness', task:'Public Holiday Madness',
+          availConfirmed:false, approved:null, requestedBy:'manager', staffConfirmed:null,
+          submitted:new Date().toISOString(),
+          createdBy:mgr.username, createdByName:mgr.name, createdByRole:mgr.role,
+          updatedBy:mgr.username, updatedByName:mgr.name, updatedByRole:mgr.role
+        };
+        const result = await upsertSupabaseRow('otRequests', newOT);
+        if(result.ok){ otReqs.push(newOT); anyOTAdded=true; }
+      }
+    }
+  }
+
+  if(anyShiftAdded){ CACHE['rx3_shifts']=shifts; bumpDataVersion('shifts'); }
+  if(anyOTAdded){ CACHE['rx3_otRequests']=otReqs; bumpDataVersion('otRequests'); }
+  if(anyShiftAdded||anyOTAdded){
+    renderRoster();
+    if(document.getElementById('pg-ot')?.classList.contains('active')) renderOT();
+    if(typeof toast==='function') toast('Public-holiday-adjacent shifts/OT auto-added to this week\'s draft.', 'info', 5000);
   }
 }
 

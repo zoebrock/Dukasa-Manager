@@ -1125,9 +1125,16 @@ function isPublishedShift(shift){
         <div class="tab" onclick="filterLeave('approved',this)">Approved</div>
         <div class="tab" onclick="filterLeave('sick',this)">Sick days</div>
         <div class="tab" onclick="filterLeave('calendar',this)">Calendar</div>
+        <div class="tab" onclick="filterLeave('accrual',this)">Accrual</div>
         <div class="tab" onclick="filterLeave('all',this)">All</div>
       </div>
       <div id="leave-list"></div>
+      <div id="leave-accrual" style="display:none">
+        <div class="alert ai" style="font-size:12px;margin-bottom:12px">
+          Annual leave accrues at <strong>5.7534h / 75h per fortnight ≈ 0.0767 hours per ordinary hour paid</strong> (full-time NES rate), based on ordinary hours actually paid each completed fortnight — worked hours plus any paid annual/personal leave taken that fortnight (1 day = 7.5h). Shown for full-time staff (75+ contracted hrs/fortnight) only. This is a live calculation from roster/leave records, not a stored balance — it starts from the most recent pay cycle rather than assuming any earlier opening balance.
+        </div>
+        <div id="leave-accrual-list"></div>
+      </div>
       <div id="leave-calendar" style="display:none">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
           <button class="btn btn-sm" onclick="calNav(-1)">&#8249; Prev</button>
@@ -7587,9 +7594,11 @@ function renderLeave(filter){
   const pcb=document.getElementById('pc-badge');const lb=document.getElementById('leave-badge');
   if(pending.length){pcb.textContent=pending.length;pcb.style.display='inline-flex';lb.textContent=pending.length;lb.style.display='inline-flex';}
   else{pcb.style.display='none';lb.style.display='none';}
-  document.getElementById('leave-list').style.display=filter==='calendar'?'none':'block';
+  document.getElementById('leave-list').style.display=(filter==='calendar'||filter==='accrual')?'none':'block';
   document.getElementById('leave-calendar').style.display=filter==='calendar'?'block':'none';
+  document.getElementById('leave-accrual').style.display=filter==='accrual'?'block':'none';
   if(filter==='calendar'){renderCalendar();return;}
+  if(filter==='accrual'){renderLeaveAccrual();return;}
   let html='';
   // Sort descending — most recently submitted first
   const sortDesc=(a,b)=>((b.submitted||b.from)>(a.submitted||a.from)?1:-1);
@@ -8053,6 +8062,198 @@ function getRollingPayCycleStart(date){
   start.setDate(anchor.getDate() + cycleOffset);
   start.setHours(0,0,0,0);
   return start;
+}
+
+// ── LEAVE ACCRUAL ────────────────────────────────────────────────
+// Full-time NES annual leave accrual rate: 5.7534h per 75 ordinary hours
+// paid in a fortnight = this many hours of annual leave per ordinary hour
+// paid (worked hours plus any paid annual/personal leave taken that
+// fortnight — 1 day = 7.5h).
+const LEAVE_ACCRUAL_RATE = 5.7534 / 75;
+const FULL_TIME_FORTNIGHT_HRS = 75;
+
+// This is a live calculation from roster/leave records, not a stored
+// ledger — there's no record of anyone's true leave balance from before
+// this feature existed, so rather than fabricate history back to the
+// payroll anchor, it deliberately starts at the most recently completed
+// pay cycle as of when this was built ("back track to... the last pay
+// cycle"). Every fortnight that completes after this keeps extending the
+// ledger forward automatically.
+const LEAVE_ACCRUAL_START = (function(){
+  const cur = getRollingPayCycleStart(new Date(2026, 8, 29));
+  const d = new Date(cur);
+  d.setDate(d.getDate() - 14);
+  return d;
+})();
+
+function isFullTimeStaff(emp){
+  return ((emp.contractedHrsPerWeek || 0) * 2) >= FULL_TIME_FORTNIGHT_HRS;
+}
+
+function isContractedWorkDay_(emp, dateStr){
+  const d = new Date(dateStr + 'T00:00:00');
+  const dayKey = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][(d.getDay()+6)%7];
+  if(emp.contractPerDay && emp.contractPerDay[dayKey]) return !!emp.contractPerDay[dayKey].on;
+  if(emp.contractDays && dayKey in emp.contractDays) return !!emp.contractDays[dayKey];
+  return dayKey !== 'Sat' && dayKey !== 'Sun';
+}
+
+function dateRangeInclusiveDates_(fromStr, toStr){
+  const dates = [];
+  let d = new Date(fromStr + 'T00:00:00');
+  const end = new Date(toStr + 'T00:00:00');
+  while(d <= end){ dates.push(FD(d)); d.setDate(d.getDate() + 1); }
+  return dates;
+}
+
+// Ordinary paid hours for one employee across [startDs,endDs] — the base
+// that annual leave accrues against: actual worked hours (gross minus the
+// standard 30min unpaid break, same rule used everywhere else in the app)
+// plus paid annual/personal leave taken in that window (a full contracted
+// work day = 7.5h, a partial-leave segment = its actual duration).
+function ordinaryPaidHoursForAccrual_(emp, startDs, endDs){
+  let hours = 0;
+  const shifts = getCleanTSShiftsForRange(startDs, endDs).filter(s => s.empId === emp.id);
+
+  shifts.forEach(s => {
+    const isLeaveSeg = s.entryType === 'leave' || s.entry_type === 'leave';
+    hours += isLeaveSeg
+      ? ROUND30(Math.max(0, MD(s.start, s.end) / 60))
+      : paidHrsFromTimes(s.start, s.end);
+  });
+
+  const leaveReqs = (DB.get('leaveRequests') || []).filter(l =>
+    String(l.empId) === String(emp.id) && l.status === 'approved' && l.requestKind !== 'partial_day'
+  );
+  leaveReqs.forEach(l => {
+    if(!l.from || !l.to) return;
+    dateRangeInclusiveDates_(l.from, l.to).forEach(ds => {
+      if(ds < startDs || ds > endDs) return;
+      if(isContractedWorkDay_(emp, ds)) hours += 7.5;
+    });
+  });
+
+  const sickDays = (DB.get('sickDays') || []).filter(s =>
+    String(s.empId) === String(emp.id) && s.date >= startDs && s.date <= endDs
+  );
+  sickDays.forEach(s => {
+    if(isContractedWorkDay_(emp, s.date)) hours += 7.5;
+  });
+
+  return hours;
+}
+
+// Annual leave hours actually taken by one employee across [startDs,endDs]
+// — full days at 7.5h plus partial-leave segments of type Annual Leave.
+function annualLeaveUsedHoursForRange_(emp, startDs, endDs){
+  let hours = 0;
+  const shifts = getCleanTSShiftsForRange(startDs, endDs).filter(s => s.empId === emp.id);
+  shifts.forEach(s => {
+    if(!(s.entryType === 'leave' || s.entry_type === 'leave')) return;
+    const type = s.leaveType || s.leave_type || s.status || '';
+    if(!/annual/i.test(type)) return;
+    hours += ROUND30(Math.max(0, MD(s.start, s.end) / 60));
+  });
+
+  const leaveReqs = (DB.get('leaveRequests') || []).filter(l =>
+    String(l.empId) === String(emp.id) && l.status === 'approved' && l.requestKind !== 'partial_day' && /annual/i.test(l.type || '')
+  );
+  leaveReqs.forEach(l => {
+    if(!l.from || !l.to) return;
+    dateRangeInclusiveDates_(l.from, l.to).forEach(ds => {
+      if(ds < startDs || ds > endDs) return;
+      if(isContractedWorkDay_(emp, ds)) hours += 7.5;
+    });
+  });
+
+  return hours;
+}
+
+// Fortnight-by-fortnight ledger for one employee, from LEAVE_ACCRUAL_START
+// through the most recently completed pay cycle (the one in progress hasn't
+// been processed/paid yet, so it isn't counted).
+function buildLeaveAccrualLedger(emp){
+  const fortnights = [];
+  const today = new Date(); today.setHours(0,0,0,0);
+  const currentCycleStart = getRollingPayCycleStart(today);
+  const lastCompletedStart = new Date(currentCycleStart);
+  lastCompletedStart.setDate(lastCompletedStart.getDate() - 14);
+
+  let cursor = new Date(LEAVE_ACCRUAL_START);
+  let runningBalance = 0;
+
+  while(cursor <= lastCompletedStart){
+    const start = FD(cursor);
+    const endDate = new Date(cursor); endDate.setDate(endDate.getDate() + 13);
+    const end = FD(endDate);
+
+    const ordinaryHrs = ordinaryPaidHoursForAccrual_(emp, start, end);
+    const accrued = ordinaryHrs * LEAVE_ACCRUAL_RATE;
+    const used = annualLeaveUsedHoursForRange_(emp, start, end);
+    runningBalance += accrued - used;
+
+    fortnights.push({ start, end, ordinaryHrs, accrued, used, balanceAfter: runningBalance });
+    cursor.setDate(cursor.getDate() + 14);
+  }
+
+  return fortnights;
+}
+
+let expandedAccrualEmpId = null;
+function toggleAccrualDetail(empId){
+  expandedAccrualEmpId = expandedAccrualEmpId === empId ? null : empId;
+  renderLeaveAccrual();
+}
+
+function renderLeaveAccrual(){
+  const el = document.getElementById('leave-accrual-list');
+  if(!el) return;
+
+  const staff = [...(DB.get('staff') || [])]
+    .filter(isFullTimeStaff)
+    .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
+
+  if(!staff.length){
+    el.innerHTML = '<p style="font-size:12px;color:var(--t2)">No full-time staff (75+ contracted hrs/fortnight) found.</p>';
+    return;
+  }
+
+  el.innerHTML = staff.map(emp => {
+    const ledger = buildLeaveAccrualLedger(emp);
+    const totalAccrued = ledger.reduce((t,f) => t + f.accrued, 0);
+    const totalUsed = ledger.reduce((t,f) => t + f.used, 0);
+    const balance = totalAccrued - totalUsed;
+    const isOpen = expandedAccrualEmpId === emp.id;
+
+    const detailRows = ledger.slice().reverse().map(f => `
+      <tr>
+        <td>${FDS(f.start)} – ${FDS(f.end)}</td>
+        <td>${f.ordinaryHrs.toFixed(1)}h</td>
+        <td>+${f.accrued.toFixed(2)}h</td>
+        <td>${f.used ? '-' + f.used.toFixed(1) + 'h' : '—'}</td>
+        <td>${f.balanceAfter.toFixed(2)}h</td>
+      </tr>`).join('');
+
+    return `<div class="lcard" style="margin-bottom:8px">
+      <div class="lcard-h" style="cursor:pointer" onclick="toggleAccrualDetail('${emp.id}')">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="av" style="background:${emp.color}22;color:${emp.color};width:28px;height:28px;font-size:11px">${INI(emp)}</div>
+          <strong>${escHTML(emp.first + ' ' + emp.last)}</strong>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:11px;color:var(--t2)">Accrued ${totalAccrued.toFixed(1)}h · Used ${totalUsed.toFixed(1)}h</span>
+          <strong style="font-size:14px;color:${balance>=0?'var(--gd)':'var(--rd)'}">${balance.toFixed(2)}h <span style="font-weight:400;font-size:11px;color:var(--t3)">(${(balance/7.5).toFixed(1)}d)</span></strong>
+          <span style="color:var(--t3)">${isOpen?'▲':'▼'}</span>
+        </div>
+      </div>
+      ${isOpen ? `<div style="margin-top:8px;overflow-x:auto">
+        <table class="tbl" style="font-size:11px">
+          <thead><tr><th>Fortnight</th><th>Ordinary hrs paid</th><th>Accrued</th><th>Used</th><th>Balance</th></tr></thead>
+          <tbody>${detailRows || `<tr><td colspan="5" style="text-align:center;color:var(--t2);padding:10px">No completed fortnights yet.</td></tr>`}</tbody>
+        </table>
+      </div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 function popTSWeeks(){

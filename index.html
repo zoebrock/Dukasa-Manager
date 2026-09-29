@@ -9027,6 +9027,34 @@ rows.push({
       autoRoundedIn:emp.contractStart||'09:00',autoRoundedOut:emp.contractEnd||'17:00',contractedHrs});
   });
 
+  // Step 3 — a weekday public holiday counts as a paid Annual Leave day for
+  // full-time staff who'd normally work that day and don't already have a
+  // shift/leave/sick row for it (a rostered shift or approved leave that
+  // already covers the day takes priority and is left alone).
+  const publicHolidaysTS = DB.get('publicHolidays') || [];
+  const phToday = publicHolidaysTS.find(h => h.date === ds);
+  if(phToday){
+    const phDow = new Date(ds+'T00:00:00').getDay();
+    if(phDow !== 0 && phDow !== 6){
+      staff.forEach(emp=>{
+        if(rows.some(r=>r.emp && r.emp.id===emp.id)) return;
+        if(!isFullTimeStaff(emp)) return;
+        if(!isContractedWorkDay_(emp, ds)) return;
+        const phHrs = 7.5;
+        const phLabel = 'Annual Leave (Public Holiday)';
+        const syntheticShift={id:'ph-'+emp.id+'-'+ds,empId:emp.id,date:ds,
+          start:emp.contractStart||'09:00',end:emp.contractEnd||'17:00',
+          breakMin:0,role:emp.role,notes:phToday.name,published:true,status:'leave'};
+        const custom=getOrCreateCustom(emp.id,ds,phHrs,emp.contractStart||'09:00',emp.contractEnd||'17:00',phHrs);
+        rows.push({s:syntheticShift,emp,sHrs:phHrs,actualHrs:phHrs,otHrs:0,
+          status:phLabel,rowCls:'tr-leave',ci:null,co:null,bs:null,be:null,bActMin:0,
+          flags:[{type:'leave',msg:`Public Holiday (${phToday.name}) — Annual Leave applied (${phHrs.toFixed(1)}h)`}],
+          isSick:false,isLeave:{type:phLabel},approvedOT:null,custom,approvedHrs:custom.approved?custom.customHrs:null,
+          autoRoundedIn:emp.contractStart||'09:00',autoRoundedOut:emp.contractEnd||'17:00',contractedHrs:phHrs});
+      });
+    }
+  }
+
   rows.sort((a,b)=>(a.emp&&b.emp)?a.emp.first.localeCompare(b.emp.first)||a.emp.last.localeCompare(b.emp.last):0);
   return rows;
 }
@@ -9417,6 +9445,7 @@ for(let i = 0; i < 14; i++){
 
   const cleanType = v => {
     const t = String(v || '').toLowerCase();
+    if(t.includes('public holiday')) return 'Annual Leave (Public Holiday)';
     if(t.includes('annual')) return 'Annual Leave';
     if(t.includes('sick')) return 'Sick';
     if(t.includes('personal')) return 'Personal Leave';
@@ -9473,7 +9502,7 @@ for(let i = 0; i < 14; i++){
         .map(f => f.msg)
         .join('; ');
 
-      const isLeaveType = ['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(baseType);
+      const isLeaveType = ['Annual Leave','Annual Leave (Public Holiday)','Sick','Personal Leave','Unpaid Leave','Leave'].includes(baseType);
 
       // Annual/Sick Leave is paid at ordinary hours regardless of what the staff
       // member happens to be rostered for that day — never more.

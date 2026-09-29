@@ -5625,15 +5625,16 @@ async function saveOT(){
 }
 
 // ── PUBLIC HOLIDAY ROSTER AUTO-FILL ─────────────────────────────
-// Whenever a week is opened for drafting, automatically pre-loads:
-//  - an 08:00-18:00 draft shift for every staff member who'd normally work
-//    the first business day after a public holiday, and
-//  - an 08:00-18:00 draft OT request (reason "Public Holiday Madness") for
-//    "core" staff — those frequently rostered for OT — on the second
-//    business day after it.
-// Everything lands as drafts/pending requests the manager reviews and
-// publishes as part of the normal roster cycle, so staff get the usual
-// advance notice instead of being asked the week of.
+// Whenever a week is opened for drafting, automatically pre-loads an
+// 08:00-18:00 draft shift for every staff member who'd normally work the
+// first business day after a public holiday. It lands as a draft the
+// manager reviews and publishes as part of the normal roster cycle, so
+// staff get the usual advance notice instead of being asked the week of.
+//
+// "Public Holiday Madness" OT (the second business day after) is NOT
+// auto-created here — it's only ever proposed via the "Suggest staff" OT
+// suggestions modal (see computeOTSuggestions below), so nothing reaches
+// staff until the manager explicitly reviews and approves it.
 function isBusinessDay_(dateStr, publicHolidays){
   const dow = new Date(dateStr+'T00:00:00').getDay();
   if(dow===0||dow===6) return false;
@@ -5678,15 +5679,11 @@ async function autoFillPublicHolidayRoster(days){
   if(!relevantHolidays.length) return;
 
   const staff = DB.get('staff')||[];
-  const frequentOTIds = getFrequentOTStaffIds_();
-  const mgr = getCurrentManager();
   let shifts = DB.get('shifts')||[];
-  let otReqs = DB.get('otRequests')||[];
-  let anyShiftAdded=false, anyOTAdded=false;
+  let anyShiftAdded=false;
 
   for(const hol of relevantHolidays){
     const day1 = addBusinessDays_(hol.date,1,publicHolidays);
-    const day2 = addBusinessDays_(hol.date,2,publicHolidays);
 
     if(day1>=weekStart && day1<=weekEnd){
       for(const emp of staff){
@@ -5703,33 +5700,12 @@ async function autoFillPublicHolidayRoster(days){
         if(result.ok){ shifts.push(newShift); anyShiftAdded=true; }
       }
     }
-
-    if(day2>=weekStart && day2<=weekEnd){
-      for(const emp of staff){
-        if(!frequentOTIds.has(String(emp.id))) continue;
-        if(!isContractedWorkDay_(emp, day2)) continue;
-        if(otReqs.some(o=>String(o.empId)===String(emp.id) && o.date===day2)) continue;
-        const newOT = {
-          id:'phot-'+day2+'-'+emp.id,
-          empId:emp.id, date:day2, start:'08:00', end:'18:00',
-          reason:'Public Holiday Madness', task:'Public Holiday Madness',
-          availConfirmed:false, approved:null, requestedBy:'manager', staffConfirmed:null,
-          submitted:new Date().toISOString(),
-          createdBy:mgr.username, createdByName:mgr.name, createdByRole:mgr.role,
-          updatedBy:mgr.username, updatedByName:mgr.name, updatedByRole:mgr.role
-        };
-        const result = await upsertSupabaseRow('otRequests', newOT);
-        if(result.ok){ otReqs.push(newOT); anyOTAdded=true; }
-      }
-    }
   }
 
   if(anyShiftAdded){ CACHE['rx3_shifts']=shifts; bumpDataVersion('shifts'); }
-  if(anyOTAdded){ CACHE['rx3_otRequests']=otReqs; bumpDataVersion('otRequests'); }
-  if(anyShiftAdded||anyOTAdded){
+  if(anyShiftAdded){
     renderRoster();
-    if(document.getElementById('pg-ot')?.classList.contains('active')) renderOT();
-    if(typeof toast==='function') toast('Public-holiday-adjacent shifts/OT auto-added to this week\'s draft.', 'info', 5000);
+    if(typeof toast==='function') toast('Public-holiday-adjacent shifts auto-added to this week\'s draft.', 'info', 5000);
   }
 }
 
@@ -5808,8 +5784,7 @@ function computeOTSuggestions(){
       if(existingOTKey.has(empId+'|'+date)) return;
       suggestions.push({
         empId, date, emp,
-        start: mostCommon(hist.starts)||'17:00',
-        end: mostCommon(hist.ends)||'19:00',
+        segments: [{ start: mostCommon(hist.starts)||'17:00', end: mostCommon(hist.ends)||'19:00' }],
         reason: `Historically works OT on the 1st/2nd of the month (${hist.count} times previously)`
       });
     });
@@ -5824,9 +5799,35 @@ function computeOTSuggestions(){
       if(existingOTKey.has(empId+'|'+hol.date)) return;
       suggestions.push({
         empId, date:hol.date, emp,
-        start: mostCommon(hist.starts)||'17:00',
-        end: mostCommon(hist.ends)||'19:00',
+        segments: [{ start: mostCommon(hist.starts)||'17:00', end: mostCommon(hist.ends)||'19:00' }],
         reason: `Historically works OT on public holidays (${hist.count} time${hist.count===1?'':'s'} previously) — ${hol.name}`
+      });
+    });
+  });
+
+  // Public Holiday Madness — "core" OT staff on the 2nd business day after a
+  // public holiday. The day is extended to 08:00-18:00 overall, but only the
+  // hours outside the person's normal contracted start/end actually count as
+  // OT (e.g. 08:00-09:00 and 17:00-18:00 for a 9-5 worker) — never the whole
+  // span, since the middle hours are ordinary time, not overtime.
+  const frequentOTIds = getFrequentOTStaffIds_();
+  publicHolidays.forEach(hol=>{
+    const day2 = addBusinessDays_(hol.date, 2, publicHolidays);
+    if(day2 < today || day2 > lookaheadEnd) return;
+    frequentOTIds.forEach(empId=>{
+      if(busyEmpIds.has(String(empId))) return;
+      const emp = staff.find(s=>s.id===empId);
+      if(!emp) return;
+      if(!isContractedWorkDay_(emp, day2)) return;
+      if(existingOTKey.has(empId+'|'+day2)) return;
+      const { start: normalStart, end: normalEnd } = getContractedStartEnd_(emp, day2);
+      const segments = [];
+      if(normalStart > '08:00') segments.push({ start:'08:00', end: normalStart });
+      if(normalEnd < '18:00') segments.push({ start: normalEnd, end:'18:00' });
+      if(!segments.length) return;
+      suggestions.push({
+        empId, date: day2, emp, segments,
+        reason: `Public Holiday Madness — extended hours, 2nd business day after ${hol.name}`
       });
     });
   });
@@ -5849,13 +5850,14 @@ function openOTSuggestionsModal(){
   } else {
     if(createBtn){ createBtn.style.display='inline-flex'; createBtn.disabled=false; createBtn.textContent='Create selected requests'; }
     listEl.innerHTML = suggestions.map(s=>{
-      const dataStr = JSON.stringify({empId:s.empId,date:s.date,start:s.start,end:s.end,reason:s.reason}).replace(/"/g,'&quot;');
+      const dataStr = JSON.stringify({empId:s.empId,date:s.date,segments:s.segments,reason:s.reason}).replace(/"/g,'&quot;');
+      const timesLabel = s.segments.map(seg=>`${escHTML(seg.start)}–${escHTML(seg.end)}`).join(' and ');
       return `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rsm);cursor:pointer">
         <input type="checkbox" class="ot-suggestion-cb" checked data-suggestion="${dataStr}" style="margin-top:2px;width:15px;height:15px;flex-shrink:0">
         <div style="flex:1">
           <div style="font-weight:600;font-size:13px">${escHTML(s.emp.first+' '+s.emp.last)} — ${FDS(s.date)}</div>
           <div style="font-size:11px;color:var(--t2);margin-top:1px">${escHTML(s.reason)}</div>
-          <div style="font-size:11px;color:var(--t3);margin-top:1px">Suggested time: ${escHTML(s.start)}–${escHTML(s.end)}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:1px">Suggested OT time${s.segments.length>1?'s':''}: ${timesLabel}</div>
         </div>
       </label>`;
     }).join('');
@@ -5876,20 +5878,22 @@ async function createSuggestedOTRequests(){
 
   checked.forEach((cb,i)=>{
     const s = JSON.parse(cb.dataset.suggestion);
-    const req = {
-      id: 'ot'+Date.now()+'-'+i,
-      empId: s.empId, date: s.date, start: s.start, end: s.end,
-      reason: s.reason, task: s.reason,
-      availConfirmed: false,
-      approved: null,
-      requestedBy: 'manager',
-      staffConfirmed: null,
-      submitted: new Date().toISOString(),
-      createdBy: mgr.username, createdByName: mgr.name, createdByRole: mgr.role,
-      updatedBy: mgr.username, updatedByName: mgr.name, updatedByRole: mgr.role
-    };
-    reqs.push(req);
-    newRequests.push(req);
+    (s.segments||[]).forEach((seg,j)=>{
+      const req = {
+        id: 'ot'+Date.now()+'-'+i+'-'+j,
+        empId: s.empId, date: s.date, start: seg.start, end: seg.end,
+        reason: s.reason, task: s.reason,
+        availConfirmed: false,
+        approved: null,
+        requestedBy: 'manager',
+        staffConfirmed: null,
+        submitted: new Date().toISOString(),
+        createdBy: mgr.username, createdByName: mgr.name, createdByRole: mgr.role,
+        updatedBy: mgr.username, updatedByName: mgr.name, updatedByRole: mgr.role
+      };
+      reqs.push(req);
+      newRequests.push(req);
+    });
   });
 
   const result = await DB.set('otRequests', reqs);
@@ -8218,6 +8222,22 @@ function isContractedWorkDay_(emp, dateStr){
   if(emp.contractPerDay && emp.contractPerDay[dayKey]) return !!emp.contractPerDay[dayKey].on;
   if(emp.contractDays && dayKey in emp.contractDays) return !!emp.contractDays[dayKey];
   return dayKey !== 'Sat' && dayKey !== 'Sun';
+}
+
+// A staff member's normal contracted start/end for a given weekday, used to
+// work out which portion of an extended day is genuinely OT vs. ordinary
+// time (e.g. an 08:00-18:00 day for a normal 9-5 worker is 1h OT + 8h
+// ordinary + 1h OT, not 10h of OT).
+function getContractedStartEnd_(emp, dateStr){
+  const d = new Date(dateStr + 'T00:00:00');
+  const dayKey = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][(d.getDay()+6)%7];
+  if(emp.contractPerDay && emp.contractPerDay[dayKey] && emp.contractPerDay[dayKey].on){
+    return {
+      start: emp.contractPerDay[dayKey].start || emp.contractStart || '09:00',
+      end: emp.contractPerDay[dayKey].end || emp.contractEnd || '17:00'
+    };
+  }
+  return { start: emp.contractStart || '09:00', end: emp.contractEnd || '17:00' };
 }
 
 function dateRangeInclusiveDates_(fromStr, toStr){

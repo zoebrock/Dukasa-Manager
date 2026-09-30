@@ -4921,6 +4921,39 @@ function findMCForSickDay(empId,date){
   const spell=sickSpellFor(empId,date);
   return mcs.find(m=>m.empId===empId&&m.date>=spell.from&&m.date<=spell.to)||null;
 }
+// Manager-side resolution of an outstanding MC requirement for a whole sick spell,
+// without an actual file upload — either because none is needed, or because it was
+// supplied through some other channel (email, in person, etc).
+function resolveMCRequirement(empId,from,to,mode){
+  const staff=DB.get('staff')||[];
+  const emp=staff.find(s=>s.id===empId);
+  const label=mode==='waived'?'no certificate required':'received via another avenue';
+  if(!confirm(`Mark medical certificate for ${emp?emp.first+' '+emp.last:'this staff member'} (${FDS(from)}${to!==from?' – '+FDS(to):''}) as ${label}?`))return;
+  const rangeLabel=from===to?FDS(from):`${FDS(from)} – ${FDS(to)}`;
+  const sickDayIds=(DB.get('sickDays')||[]).filter(s=>s.empId===empId&&s.date>=from&&s.date<=to).map(s=>s.id);
+  const mcs=DB.get('medCerts')||[];
+  mcs.push({
+    id:'mc'+Date.now()+Math.floor(Math.random()*1000),
+    empId,date:from,
+    sickDayIds,
+    // fileType is reused as a status sentinel here rather than a real MIME
+    // type, since there is no uploaded file for a waived/received-elsewhere
+    // record — this avoids introducing new columns med_certs doesn't have.
+    fileType:mode,
+    fileName:mode==='waived'?`No certificate required — ${rangeLabel}`:`Received via another avenue — ${rangeLabel}`,
+    uploadedAt:new Date().toISOString(),
+    manager_notified:true
+  });
+  DB.set('medCerts',mcs);
+  renderLeave(currentLeaveFilter);renderDashboard();
+}
+function deleteMCRecord(mcId){
+  if(!confirm('Remove this and re-open the medical certificate requirement?'))return;
+  let mcs=DB.get('medCerts')||[];
+  mcs=mcs.filter(m=>m.id!==mcId);
+  DB.set('medCerts',mcs);
+  renderLeave(currentLeaveFilter);renderDashboard();
+}
 function findShiftForSickDate(empId,date){
   return (DB.get('shifts')||[]).find(s=>s.empId===empId&&s.date===date&&s.published);
 }
@@ -7753,7 +7786,17 @@ function renderLeave(filter){
         const mc=g.rows.map(r=>findMCForSickDay(g.empId,r.date)).find(Boolean);
         const notes=(g.rows.find(r=>r.notes)||{}).notes||'';
         const range=g.from===g.to?FDS(g.from):`${FDS(g.from)} – ${FDS(g.to)}`;
-        return`<div class="lcard"><div class="lcard-h"><div><strong>${emp?emp.first+' '+emp.last:'?'}</strong> — ${range} (Sick leave)</div><div style="display:flex;gap:5px;align-items:center">${mc?`<span class="badge bg">MC uploaded</span><button class="btn btn-sm" onclick="viewMC('${mc.id}')">View MC</button>`:`<span class="badge br">MC pending</span>`}<button class="btn btn-sm" onclick="openEditSickLeave('${g.empId}','${g.from}')">Edit dates</button></div></div>${notes?`<div style="font-size:11px;color:var(--t2)">${notes}</div>`:''}</div>`;
+        let mcArea;
+        if(mc&&mc.fileType==='waived'){
+          mcArea=`<span class="badge ba">MC not required</span><button class="btn btn-sm" onclick="deleteMCRecord('${mc.id}')">Undo</button>`;
+        }else if(mc&&mc.fileType==='receivedElsewhere'){
+          mcArea=`<span class="badge bg">MC received (other)</span><button class="btn btn-sm" onclick="deleteMCRecord('${mc.id}')">Undo</button>`;
+        }else if(mc){
+          mcArea=`<span class="badge bg">MC uploaded</span><button class="btn btn-sm" onclick="viewMC('${mc.id}')">View MC</button>`;
+        }else{
+          mcArea=`<span class="badge br">MC pending</span><button class="btn btn-sm" onclick="resolveMCRequirement('${g.empId}','${g.from}','${g.to}','receivedElsewhere')">Mark received (other)</button><button class="btn btn-sm" onclick="resolveMCRequirement('${g.empId}','${g.from}','${g.to}','waived')">Not required</button>`;
+        }
+        return`<div class="lcard"><div class="lcard-h"><div><strong>${emp?emp.first+' '+emp.last:'?'}</strong> — ${range} (Sick leave)</div><div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap">${mcArea}<button class="btn btn-sm" onclick="openEditSickLeave('${g.empId}','${g.from}')">Edit dates</button></div></div>${notes?`<div style="font-size:11px;color:var(--t2)">${notes}</div>`:''}</div>`;
       }).join('');
     }
     if(filter==='sick'){document.getElementById('leave-list').innerHTML=html||'<p style="color:var(--t2);font-size:12px">No sick leave recorded.</p>';return;}

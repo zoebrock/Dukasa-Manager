@@ -1131,7 +1131,7 @@ function isPublishedShift(shift){
       <div id="leave-list"></div>
       <div id="leave-accrual" style="display:none">
         <div class="alert ai" style="font-size:12px;margin-bottom:12px">
-          Annual leave accrues at <strong>5.7534h / 75h per fortnight ≈ 0.0767 hours per ordinary hour paid</strong> (full-time NES rate), based on ordinary hours actually paid each completed fortnight — worked hours plus any paid annual/personal leave taken that fortnight (1 day = 7.5h). Shown for full-time staff (75+ contracted hrs/fortnight) only. This is a live calculation from roster/leave records, not a stored balance — it starts from the most recent pay cycle rather than assuming any earlier opening balance.
+          Annual leave accrues at <strong>5.7534h / 75h per fortnight ≈ 0.0767 hours per ordinary hour paid</strong> (full-time NES rate), based on ordinary hours actually paid each completed fortnight — worked hours plus any paid annual/personal leave taken that fortnight (1 day = 7.5h). Shown for full-time staff (75+ contracted hrs/fortnight) only. Most staff's balances are seeded from their actual reconciled balance as at 22 Sep 2026 and tracked live from there; anyone without a reconciled balance starts from the most recent pay cycle instead.
         </div>
         <div id="leave-accrual-list"></div>
       </div>
@@ -8255,6 +8255,48 @@ const LEAVE_ACCRUAL_START = (function(){
   return d;
 })();
 
+// Employer-reconciled accrued annual leave balances (hours) as at 22 Sep
+// 2026, supplied directly from payroll. Used to seed each employee's live
+// ledger from a known-correct starting point instead of recomputing years
+// of history this app has no record of. Aspasia Dukas and Kosta Strintzos
+// are deliberately excluded — their balances keep using the from-scratch
+// live calculation.
+const LEAVE_OPENING_BALANCE_DATE = '2026-09-22';
+const LEAVE_OPENING_BALANCES = {
+  'Antigone Gougoussis': 17.8669,
+  'Aristotle Otis': 225.1240,
+  'Arman Jannesar': 33.3314,
+  'Christina Gougoussis': 16.7378,
+  'Crystal Ryan': 22.0127,
+  'Elli Ziaei': 26.7666,
+  'Eneb Khelifa Ismail': 25.2385,
+  'Fiya James': 2.3014,
+  'Harrison Collinge': 6.1272,
+  'Helena Cangadis': 9.6074,
+  'Julian Green': 0.4966,
+  'Kirti Chand': 13.9616,
+  'Kush Jamnadass': 195.7797,
+  'Manisha Rahman': 2.8767,
+  'Matthew Josipovic': 1.1507,
+  'Mia Lee': 15.7277,
+  'Nafisa Haque': 40.0519,
+  'Natalie Yip': 244.3136,
+  'Rahal De Silva': 52.7716,
+  'Robert Jedwab': 59.6569,
+  'Sadikalmahdi Hussen Abdella': 25.1972,
+  'Simon Foley': 43.2277,
+  'Simone Altklass': 0.0000,
+  'Sofia Enriquez': 25.7547,
+  'Tina Ho': 197.8273,
+  'Valerie Chau': 119.5092,
+  'Yao Cheng Thong': 20.7210,
+  'Zoe Brock': 130.1673
+};
+function leaveOpeningBalanceFor_(emp){
+  const key = `${emp.first||''} ${emp.last||''}`.replace(/\s+/g,' ').trim();
+  return LEAVE_OPENING_BALANCES.hasOwnProperty(key) ? LEAVE_OPENING_BALANCES[key] : null;
+}
+
 function isFullTimeStaff(emp){
   return ((emp.contractedHrsPerWeek || 0) * 2) >= FULL_TIME_FORTNIGHT_HRS;
 }
@@ -8364,8 +8406,22 @@ function buildLeaveAccrualLedger(emp){
   const lastCompletedStart = new Date(currentCycleStart);
   lastCompletedStart.setDate(lastCompletedStart.getDate() - 14);
 
-  let cursor = new Date(LEAVE_ACCRUAL_START);
-  let runningBalance = 0;
+  const opening = leaveOpeningBalanceFor_(emp);
+  let cursor, runningBalance, openingBalance = null;
+
+  if(opening !== null){
+    // Skip straight to the first full pay cycle after the reconciled
+    // snapshot date and seed the ledger with the real balance, rather than
+    // recomputing (and double-counting) everything before it.
+    const anchorCycleStart = getRollingPayCycleStart(new Date(LEAVE_OPENING_BALANCE_DATE + 'T00:00:00'));
+    cursor = new Date(anchorCycleStart);
+    cursor.setDate(cursor.getDate() + 14);
+    runningBalance = opening;
+    openingBalance = opening;
+  } else {
+    cursor = new Date(LEAVE_ACCRUAL_START);
+    runningBalance = 0;
+  }
 
   while(cursor <= lastCompletedStart){
     const start = FD(cursor);
@@ -8381,6 +8437,7 @@ function buildLeaveAccrualLedger(emp){
     cursor.setDate(cursor.getDate() + 14);
   }
 
+  fortnights.openingBalance = openingBalance;
   return fortnights;
 }
 
@@ -8394,8 +8451,12 @@ function renderLeaveAccrual(){
   const el = document.getElementById('leave-accrual-list');
   if(!el) return;
 
+  // Full-time staff always show (live NES accrual). Anyone else with a
+  // reconciled opening balance supplied by payroll also shows, even if
+  // they're part-time/casual, so their real balance isn't hidden — it just
+  // won't keep accruing live the way a full-timer's does.
   const staff = [...(DB.get('staff') || [])]
-    .filter(isFullTimeStaff)
+    .filter(emp => isFullTimeStaff(emp) || leaveOpeningBalanceFor_(emp) !== null)
     .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
 
   if(!staff.length){
@@ -8407,7 +8468,7 @@ function renderLeaveAccrual(){
     const ledger = buildLeaveAccrualLedger(emp);
     const totalAccrued = ledger.reduce((t,f) => t + f.accrued, 0);
     const totalUsed = ledger.reduce((t,f) => t + f.used, 0);
-    const balance = totalAccrued - totalUsed;
+    const balance = ledger.length ? ledger[ledger.length-1].balanceAfter : (ledger.openingBalance ?? 0);
     const isOpen = expandedAccrualEmpId === emp.id;
 
     const detailRows = ledger.slice().reverse().map(f => `
@@ -8417,7 +8478,11 @@ function renderLeaveAccrual(){
         <td>+${f.accrued.toFixed(2)}h</td>
         <td>${f.used ? '-' + f.used.toFixed(1) + 'h' : '—'}</td>
         <td>${f.balanceAfter.toFixed(2)}h</td>
-      </tr>`).join('');
+      </tr>`).join('') + (ledger.openingBalance != null ? `
+      <tr>
+        <td colspan="4" style="text-align:right;color:var(--t2)">Opening balance (reconciled, as at ${FDS(LEAVE_OPENING_BALANCE_DATE)})</td>
+        <td>${ledger.openingBalance.toFixed(2)}h</td>
+      </tr>` : '');
 
     return `<div class="lcard" style="margin-bottom:8px">
       <div class="lcard-h" style="cursor:pointer" onclick="toggleAccrualDetail('${emp.id}')">
@@ -8426,7 +8491,7 @@ function renderLeaveAccrual(){
           <strong>${escHTML(emp.first + ' ' + emp.last)}</strong>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-size:11px;color:var(--t2)">Accrued ${totalAccrued.toFixed(1)}h · Used ${totalUsed.toFixed(1)}h</span>
+          <span style="font-size:11px;color:var(--t2)">${ledger.openingBalance != null ? 'Since reconciliation: ' : ''}Accrued ${totalAccrued.toFixed(1)}h · Used ${totalUsed.toFixed(1)}h</span>
           <strong style="font-size:14px;color:${balance>=0?'var(--gd)':'var(--rd)'}">${balance.toFixed(2)}h <span style="font-weight:400;font-size:11px;color:var(--t3)">(${(balance/7.5).toFixed(1)}d)</span></strong>
           <span style="color:var(--t3)">${isOpen?'▲':'▼'}</span>
         </div>

@@ -16,12 +16,19 @@
 /* ── Reset & Base ─────────────────────────────────────────────── */
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  /* Surfaces */
-  --bg:#f5f4f1;--surface:#fff;--s2:#f0efe9;--s3:#e6e5de;
+  /* Surfaces — warm cream/paper, matching the Operations Portal and the
+     rest of the Dukasa ecosystem (Staff Portal, Dukasa Clock) rather than
+     a neutral grey SaaS palette. */
+  --bg:#f2ede2;--surface:#fffdf8;--s2:#f4f0e3;--s3:#e9e3d2;
   /* Borders */
-  --border:rgba(11,11,11,.09);--border2:rgba(11,11,11,.16);
+  --border:#e2dcc9;--border2:#d3cbb2;
   /* Text */
-  --text:#161614;--t2:#52514e;--t3:#898781;
+  --text:#181816;--t2:#58584e;--t3:#98988f;
+  /* Typography — serif for headings (same stack as the Staff Portal/Clock),
+     monospace for eyebrow labels, tags, badges and metadata, body stays
+     on the system sans-serif stack for density/readability. */
+  --font-serif:Georgia,'Iowan Old Style','Palatino Linotype',Palatino,serif;
+  --font-mono:'SF Mono',ui-monospace,Menlo,Consolas,'Courier New',monospace;
   /* Brand – purple */
   --purple:#534AB7;--pl:#EEEDFE;--pd:#3C3489;--plh:#E0DDFB;
   /* Teal / success */
@@ -77,8 +84,8 @@ input[type="checkbox"],input[type="radio"]{
 select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23898781' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px}
 textarea{resize:vertical;min-height:64px}
 label{font-size:12px;color:var(--t2);display:block;margin-bottom:4px;font-weight:500;letter-spacing:.01em}
-h2{font-size:17px;font-weight:600;letter-spacing:-.01em}
-h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
+h2{font-family:var(--font-serif);font-weight:400;font-size:19px;letter-spacing:-.01em}
+h3{font-family:var(--font-serif);font-weight:400;font-size:16px;letter-spacing:-.005em}
 
 /* ── Scrollbars ───────────────────────────────────────────────── */
 ::-webkit-scrollbar{width:5px;height:5px}
@@ -120,7 +127,7 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
 .btn-ghost:hover{background:var(--s2);border-color:transparent}
 
 /* ── Badges ───────────────────────────────────────────────────── */
-.badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;letter-spacing:.01em}
+.badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:20px;font-size:10.5px;font-weight:700;white-space:nowrap;letter-spacing:.03em;font-family:var(--font-mono);text-transform:uppercase}
 .bp{background:var(--pl);color:var(--pd)}.bt{background:var(--tl);color:var(--td)}.ba{background:var(--al);color:var(--ad)}
 .br{background:var(--rl);color:var(--rd)}.bg{background:var(--gl);color:var(--gd)}.bb{background:var(--bl);color:var(--bd)}
 .bc{background:var(--cl);color:var(--cd)}.bpk{background:var(--pkl);color:var(--pkd)}
@@ -171,8 +178,8 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
   display:flex;flex-direction:column;flex-shrink:0;
 }
 .slogo{padding:18px 16px 15px;border-bottom:1px solid var(--border)}
-.slogo .lm{font-size:18px;font-weight:700;color:var(--purple);letter-spacing:-.02em}
-.slogo .ls{font-size:10px;color:var(--t3);margin-top:2px;font-weight:500;letter-spacing:.04em;text-transform:uppercase}
+.slogo .lm{font-family:var(--font-serif);font-size:20px;font-weight:400;color:var(--purple);letter-spacing:-.01em}
+.slogo .ls{font-family:var(--font-mono);font-size:10px;color:var(--t3);margin-top:2px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
 .ni{
   display:flex;align-items:center;gap:9px;padding:9px 12px;
   color:var(--t2);font-size:13px;font-weight:500;
@@ -222,8 +229,8 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
   transition:box-shadow var(--ease);
 }
 .sc:hover{box-shadow:var(--shadow-sm)}
-.sc .sl{font-size:11px;color:var(--t3);margin-bottom:6px;font-weight:500;letter-spacing:.03em;text-transform:uppercase}
-.sc .sv{font-size:24px;font-weight:700;letter-spacing:-.02em;color:var(--text)}
+.sc .sl{font-family:var(--font-mono);font-size:10.5px;color:var(--t3);margin-bottom:6px;font-weight:600;letter-spacing:.05em;text-transform:uppercase}
+.sc .sv{font-family:var(--font-serif);font-size:25px;font-weight:400;letter-spacing:-.01em;color:var(--text)}
 
 /* ── Roster grid ──────────────────────────────────────────────── */
 .roster-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow-xs)}
@@ -232,7 +239,7 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
   padding:8px 7px;font-size:10px;font-weight:600;color:var(--t3);
   background:var(--s2);border-bottom:1px solid var(--border);
   text-align:center;white-space:nowrap;overflow:hidden;
-  letter-spacing:.04em;text-transform:uppercase;
+  letter-spacing:.05em;text-transform:uppercase;font-family:var(--font-mono);
 }
 .rt th:first-child{text-align:left;width:136px}
 .rt th.col-today{background:var(--pl);color:var(--pd)}
@@ -281,7 +288,7 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
 
 /* ── General tables ───────────────────────────────────────────── */
 .tbl{width:100%;border-collapse:collapse}
-.tbl th{padding:10px 12px;text-align:left;font-size:11px;color:var(--t3);border-bottom:1px solid var(--border);background:var(--s2);font-weight:600;white-space:nowrap;letter-spacing:.04em;text-transform:uppercase}
+.tbl th{padding:10px 12px;text-align:left;font-size:10.5px;color:var(--t3);border-bottom:1px solid var(--border);background:var(--s2);font-weight:600;white-space:nowrap;letter-spacing:.05em;text-transform:uppercase;font-family:var(--font-mono)}
 .tbl td{padding:9px 12px;border-bottom:1px solid var(--border);font-size:13px}
 .tbl tr:last-child td{border-bottom:none}
 .tbl tr:hover td{background:rgba(83,74,183,.03)}
@@ -289,7 +296,7 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
 /* ── Timesheets ───────────────────────────────────────────────── */
 .ts-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow-xs)}
 .ts-tbl{width:100%;border-collapse:collapse;min-width:1300px}
-.ts-tbl th{padding:8px 9px;text-align:left;font-size:10px;color:var(--t3);border-bottom:1px solid var(--border);background:var(--s2);font-weight:600;white-space:nowrap;letter-spacing:.04em;text-transform:uppercase}
+.ts-tbl th{padding:8px 9px;text-align:left;font-size:9.5px;color:var(--t3);border-bottom:1px solid var(--border);background:var(--s2);font-weight:600;white-space:nowrap;letter-spacing:.05em;text-transform:uppercase;font-family:var(--font-mono)}
 .ts-tbl td{padding:8px 9px;border-bottom:1px solid var(--border);font-size:12px;white-space:nowrap}
 .ts-tbl tr:hover td{background:rgba(83,74,183,.03)}
 .ts-tbl tr.tr-sick td{background:#fff5f5}.ts-tbl tr.tr-leave td{background:#fffdf0}.ts-tbl tr.tr-ot td{background:#f0fdf5}
@@ -324,7 +331,7 @@ h3{font-size:14px;font-weight:600;letter-spacing:-.005em}
 /* ── Settings rows ────────────────────────────────────────────── */
 .nr{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px}
 .settings-s{margin-bottom:24px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:18px;box-shadow:var(--shadow-xs)}
-.settings-s h3{margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);font-size:13px;color:var(--t2);letter-spacing:.04em;text-transform:uppercase}
+.settings-s h3{font-family:var(--font-mono);margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);font-size:12px;font-weight:600;color:var(--t2);letter-spacing:.05em;text-transform:uppercase}
 .settings-s .nr:last-child{border-bottom:none}
 
 /* ── Availability grid ────────────────────────────────────────── */
@@ -929,8 +936,8 @@ function isPublishedShift(shift){
         <button id="hamburger-btn" onclick="openSidebar()" aria-label="Menu">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
-        <div id="page-title" style="font-weight:700;font-size:15px;letter-spacing:-.01em">Dashboard</div>
-        <span id="topbar-date" style="font-size:12px;color:var(--t3)"></span>
+        <div id="page-title" style="font-family:var(--font-serif);font-weight:400;font-size:17px;letter-spacing:-.01em">Dashboard</div>
+        <span id="topbar-date" style="font-family:var(--font-mono);font-size:11px;color:var(--t3);letter-spacing:.03em;text-transform:uppercase"></span>
       </div>
       <div style="display:flex;align-items:center;gap:7px">
         <span id="mgr-user-badge" class="badge bp" style="display:none"></span>

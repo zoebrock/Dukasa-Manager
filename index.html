@@ -1323,6 +1323,14 @@ function isPublishedShift(shift){
       <button class="btn btn-primary" onclick="saveSettings()">Save settings</button>
 
       <div class="settings-s" style="margin-top:24px">
+        <h3>Lunch break schedule</h3>
+        <p style="font-size:11px;color:var(--t2);margin-bottom:12px">Who takes lunch when, by role group — shown on the Dukasa Clock's "🍽️ Lunch breaks" screen. Changes here sync to the Clock automatically, nothing to redeploy there.</p>
+        <div id="lunch-schedule-list"></div>
+        <button class="btn btn-sm" type="button" onclick="addLunchScheduleGroup()" style="margin-bottom:10px">+ Add group</button>
+        <button class="btn btn-primary btn-sm" onclick="saveLunchSchedule()">Save lunch break schedule</button>
+      </div>
+
+      <div class="settings-s" style="margin-top:24px">
         <h3>Message templates</h3>
         <p style="font-size:11px;color:var(--t2);margin-bottom:12px">Edit the wording sent by SMS for OT, leave, roster, announcement and chat notifications. Changes apply immediately to new messages — nothing to redeploy. Use the tokens listed under each box; they're replaced automatically when a message is sent. Email wording is set separately (see note below) and isn't covered by this editor yet.</p>
         <div id="sms-template-list"></div>
@@ -10204,12 +10212,143 @@ function loadSettings(){
   if(s.managerEmail) document.getElementById('set-mgr-email').value=s.managerEmail;
   renderRolesSettings();
   renderSmsTemplateEditor_();
+  renderLunchScheduleEditor_();
 }
 // SP('settings') calls renderSettings() to refresh the page on nav, but that
 // function was never defined anywhere — loadSettings() is what actually
 // populates the fields, so alias it rather than every Settings-page visit
 // throwing a silent console error.
 function renderSettings(){ loadSettings(); }
+
+// Seed for the lunch break schedule the first time a manager opens this
+// editor — mirrors what was previously hardcoded directly into the Dukasa
+// Clock app, so nothing changes for staff until the manager actually edits
+// and saves it here.
+const DEFAULT_LUNCH_SCHEDULE = [
+  {
+    group:"Pharmacists",
+    note:"Pharmacists should only be on the phone for clinical enquiries.",
+    slots:[
+      {time:"12:00 PM",dur:"40 min",days:["Rob, Helena","Rob, Helena","Rob, Helena, Kirti","Rob, Helena, Kirti","Rob, Helena"]},
+      {time:"12:30 PM",dur:"40 min",days:["Sadik, Eneb","Sadik","Sadik, Eneb","Sadik","Sadik, Eneb"]},
+      {time:"1:00 PM",dur:"50 min",days:["Nafisa","Nafisa","Nafisa","Nafisa","Nafisa"]},
+      {time:"1:30 PM",dur:"40 min",days:["Elli, Manisha","Manisha","Elli, Manisha","Manisha","Elli, Manisha"]},
+      {time:"2:00 PM",dur:"40 min",days:["Jonathan","Jonathan","Jonathan","Jonathan","Jonathan"]}
+    ]
+  },
+  {
+    group:"Dispense & lab techs",
+    slots:[
+      {time:"10:30 AM",dur:"10 min",days:["Simon","Simon","Simon","Simon","Simon"]},
+      {time:"11:30 AM",dur:"40 min",days:["Julian, Meryll, Mathew","Julian, Mathew","Julian, Meryll, Mathew","Julian, Mathew","Julian, Meryll, Mathew"]},
+      {time:"12:00 PM",dur:"30 / 40 min",days:["Kim, Simon, Samantha","Kim, Simon, Samantha","Kim, Simon, Samantha","Kim, Simon, Samantha","Kim, Simon, Samantha"]},
+      {time:"12:30 PM",dur:"50 min",days:["Christina, Antigone","Christina, Antigone","Christina, Antigone","Christina, Antigone","Christina, Antigone"]},
+      {time:"1:00 PM",dur:"40 min",days:["Sofia, Aristotle","Sofia, Aristotle","Sofia, Aristotle","Sofia, Aristotle","Sofia, Aristotle"]},
+      {time:"1:30 PM",dur:"40 min",days:["Valerie, Tina, Natalie","Valerie, Tina, Natalie","Valerie, Tina, Natalie","Valerie, Tina, Natalie","Valerie, Tina, Natalie"]},
+      {time:"2:00 PM",dur:"40 min",days:["Arman","Arman","Arman","Arman","Arman"]}
+    ]
+  },
+  {
+    group:"Admin & dispatch",
+    slots:[
+      {time:"12:00 PM",dur:"40 min",days:["Harrison","Harrison","Harrison","Harrison","Harrison"]},
+      {time:"12:30 PM",dur:"40 min",days:["Kush","Kush","Kush","Kush","Kush"]},
+      {time:"1:00 PM",dur:"50 min",days:["Rahal, Crystal","Rahal, Crystal","Rahal, Crystal","Rahal, Crystal","Rahal, Crystal"]},
+      {time:"1:30 PM",dur:"40 min",days:["Nick","Nick","Nick","Nick","Nick"]},
+      {time:"2:00 PM",dur:"50 min",days:["Zoe","Zoe","Zoe","Zoe","Zoe"]}
+    ]
+  }
+];
+
+function getLunchSchedule(){
+  const s = DB.get('settings') || {};
+  return Array.isArray(s.lunchBreakSchedule) ? s.lunchBreakSchedule : DEFAULT_LUNCH_SCHEDULE;
+}
+
+function renderLunchScheduleEditor_(){
+  const el = document.getElementById('lunch-schedule-list');
+  if(!el) return;
+  const groups = getLunchSchedule();
+  el.innerHTML = groups.map((g, gi) => `
+    <div class="lunch-group" data-gi="${gi}" style="border:1px solid var(--border);border-radius:var(--rsm);padding:10px;margin-bottom:10px">
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <input type="text" class="lunch-group-name" value="${escHTML(g.group||'')}" placeholder="Group name (e.g. Pharmacists)" style="flex:1;font-weight:600">
+        <button type="button" class="btn btn-xs" onclick="removeLunchScheduleGroup(${gi})" style="color:var(--rd)">Remove group</button>
+      </div>
+      <input type="text" class="lunch-group-note" value="${escHTML(g.note||'')}" placeholder="Optional note for this group" style="width:100%;margin-bottom:8px;font-size:12px">
+      <div class="lunch-slots">
+        ${(g.slots||[]).map((slot, si) => `
+          <div class="lunch-slot" data-si="${si}" style="display:grid;grid-template-columns:90px 90px repeat(5,1fr) auto;gap:5px;align-items:center;margin-bottom:5px">
+            <input type="text" class="lunch-slot-time" value="${escHTML(slot.time||'')}" placeholder="12:00 PM" style="font-size:11px">
+            <input type="text" class="lunch-slot-dur" value="${escHTML(slot.dur||'')}" placeholder="40 min" style="font-size:11px">
+            ${LUNCH_SCHEDULE_DAYS.map((d,di) => `<input type="text" class="lunch-slot-day" data-di="${di}" value="${escHTML((slot.days||[])[di]||'')}" placeholder="${d.slice(0,3)}" title="${d}" style="font-size:11px">`).join('')}
+            <button type="button" class="btn btn-xs" onclick="this.closest('.lunch-slot').remove()" style="color:var(--rd)">✕</button>
+          </div>
+        `).join('')}
+      </div>
+      <button type="button" class="btn btn-xs" onclick="addLunchScheduleSlot(${gi})">+ Add time slot</button>
+    </div>
+  `).join('') || '<span style="font-size:12px;color:var(--t3)">No groups yet.</span>';
+}
+const LUNCH_SCHEDULE_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday"];
+
+function addLunchScheduleGroup(){
+  const el = document.getElementById('lunch-schedule-list');
+  const div = document.createElement('div');
+  div.className = 'lunch-group';
+  div.dataset.gi = document.querySelectorAll('.lunch-group').length;
+  div.style.cssText = 'border:1px solid var(--border);border-radius:var(--rsm);padding:10px;margin-bottom:10px';
+  div.innerHTML = `
+    <div style="display:flex;gap:6px;margin-bottom:6px">
+      <input type="text" class="lunch-group-name" value="" placeholder="Group name (e.g. Pharmacists)" style="flex:1;font-weight:600">
+      <button type="button" class="btn btn-xs" onclick="this.closest('.lunch-group').remove()" style="color:var(--rd)">Remove group</button>
+    </div>
+    <input type="text" class="lunch-group-note" value="" placeholder="Optional note for this group" style="width:100%;margin-bottom:8px;font-size:12px">
+    <div class="lunch-slots"></div>
+    <button type="button" class="btn btn-xs" onclick="addLunchScheduleSlotToEl_(this.previousElementSibling)">+ Add time slot</button>
+  `;
+  el.appendChild(div);
+}
+function removeLunchScheduleGroup(gi){
+  const group = document.querySelectorAll('.lunch-group')[gi];
+  if(group) group.remove();
+}
+function addLunchScheduleSlot(gi){
+  const group = document.querySelectorAll('.lunch-group')[gi];
+  if(!group) return;
+  addLunchScheduleSlotToEl_(group.querySelector('.lunch-slots'));
+}
+function addLunchScheduleSlotToEl_(slotsEl){
+  if(!slotsEl) return;
+  const row = document.createElement('div');
+  row.className = 'lunch-slot';
+  row.style.cssText = 'display:grid;grid-template-columns:90px 90px repeat(5,1fr) auto;gap:5px;align-items:center;margin-bottom:5px';
+  row.innerHTML = `
+    <input type="text" class="lunch-slot-time" value="" placeholder="12:00 PM" style="font-size:11px">
+    <input type="text" class="lunch-slot-dur" value="" placeholder="40 min" style="font-size:11px">
+    ${LUNCH_SCHEDULE_DAYS.map((d,di) => `<input type="text" class="lunch-slot-day" data-di="${di}" value="" placeholder="${d.slice(0,3)}" title="${d}" style="font-size:11px">`).join('')}
+    <button type="button" class="btn btn-xs" onclick="this.closest('.lunch-slot').remove()" style="color:var(--rd)">✕</button>
+  `;
+  slotsEl.appendChild(row);
+}
+
+async function saveLunchSchedule(){
+  const groups = [...document.querySelectorAll('#lunch-schedule-list .lunch-group')].map(g => {
+    const name = g.querySelector('.lunch-group-name').value.trim();
+    const note = g.querySelector('.lunch-group-note').value.trim();
+    const slots = [...g.querySelectorAll('.lunch-slot')].map(row => ({
+      time: row.querySelector('.lunch-slot-time').value.trim(),
+      dur: row.querySelector('.lunch-slot-dur').value.trim(),
+      days: [...row.querySelectorAll('.lunch-slot-day')].map(i => i.value.trim())
+    })).filter(s => s.time || s.dur || s.days.some(Boolean));
+    return { group: name, note: note || undefined, slots };
+  }).filter(g => g.group);
+
+  const settings = { ...(DB.get('settings') || {}), lunchBreakSchedule: groups };
+  const result = await DB.set('settings', settings);
+  if(!result.ok){ toast('Could not save the lunch break schedule. Please try again.', 'error'); return; }
+  toast('Lunch break schedule saved — synced to the Dukasa Clock.', 'success');
+}
 
 function renderSmsTemplateEditor_(){
   const el = document.getElementById('sms-template-list');

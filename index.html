@@ -5611,15 +5611,18 @@ async function saveOT(){
   const task = document.getElementById('ot-task').value;
   const mgr = getCurrentManager();
 
+  // Slot labels (e.g. "Morning"/"Evening") are a creation-time convenience
+  // only — ot_requests has no label column, so they're folded into the task
+  // field instead of being sent as their own property (which would fail the
+  // Supabase upsert with an unknown-column error).
   const buildRequest = (id, date, slot, priorExisting) => ({
     id,
     empId,
     date,
     start: slot.start,
     end: slot.end,
-    label: slot.label || undefined,
     reason,
-    task,
+    task: slot.label ? `[${slot.label}] ${task}`.trim() : task,
     availConfirmed,
     approved: priorExisting.approved !== undefined ? priorExisting.approved : null,
     requestedBy: priorExisting.requestedBy || 'manager',

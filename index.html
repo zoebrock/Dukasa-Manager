@@ -1103,6 +1103,20 @@ function isPublishedShift(shift){
           <tbody id="ot-body"></tbody>
         </table>
       </div>
+
+      <div class="ph" style="margin-top:28px">
+        <h2>Weekend Shift Requests</h2>
+        <button class="btn btn-primary btn-sm" onclick="openWeekendShiftModal()">+ Request weekend shift</button>
+      </div>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Proposed to a staff member for them to approve or decline (with a reason) — much like an OT request, but for a shift on a day they're not normally rostered. The time must fall within the hours a Pharmacist is rostered that day.</div>
+      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
+        <table class="tbl" id="wknd-tbl">
+          <thead><tr>
+            <th>Staff member</th><th>Date</th><th>Start</th><th>End</th><th>Reason</th><th>Status</th><th>Decline reason</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="wknd-body"></tbody>
+        </table>
+      </div>
     </div>
 
     <!-- STAFF -->
@@ -1651,6 +1665,27 @@ function isPublishedShift(shift){
   </div>
 </div>
 
+<div class="modal-overlay" id="m-weekend-shift">
+  <div class="modal">
+    <div class="mh"><h2>Request weekend shift</h2><button class="xbtn" onclick="CM('m-weekend-shift')">×</button></div>
+    <div class="fg">
+      <div class="fr"><label>Staff member</label><select id="wknd-emp"></select></div>
+      <div class="fr"><label>Date</label><input type="date" id="wknd-date" onchange="updateWeekendShiftWindow()"></div>
+    </div>
+    <div id="wknd-window-hint" class="alert ai" style="font-size:12px;display:none"></div>
+    <div class="fg">
+      <div class="fr"><label>Shift start</label><input type="time" id="wknd-start"></div>
+      <div class="fr"><label>Shift end</label><input type="time" id="wknd-end"></div>
+    </div>
+    <div class="fr"><label>Reason / what they'll be doing</label><textarea id="wknd-reason" rows="2" placeholder="Why is cover needed this weekend?"></textarea></div>
+    <div style="font-size:11px;color:var(--t3);margin-bottom:12px">Sent to the staff member to approve or decline — a reason is required if they decline. Approving adds it straight to the roster; nothing is added until then.</div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="CM('m-weekend-shift')">Cancel</button>
+      <button class="btn btn-primary" id="wknd-save-btn" onclick="saveWeekendShiftRequest()">Send request</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="m-ot-suggestions">
   <div class="modal" style="max-width:560px">
     <div class="mh"><h2>Suggested OT</h2><button class="xbtn" onclick="CM('m-ot-suggestions')">×</button></div>
@@ -2055,7 +2090,8 @@ const TABLE_MAP = {
   lateReports: 'late_reports',
   uniformOrders: 'uniform_orders',
   staffUnavailability: 'staff_unavailability',
-  publicHolidays: 'public_holidays'
+  publicHolidays: 'public_holidays',
+  weekendShiftRequests: 'weekend_shift_requests'
 };
 
 const CLOCK_TYPE_ALIASES = {
@@ -2382,6 +2418,21 @@ if (key === 'otRequests') {
   }));
 }
 
+if (key === 'weekendShiftRequests') {
+  return rows.map(r => ({
+    ...r,
+    empId: r.emp_id,
+    declineReason: r.declineReason ?? r.decline_reason ?? '',
+    decidedAt: r.decidedAt || r.decided_at || null,
+    pharmacistStart: r.pharmacistStart || r.pharmacist_start || '',
+    pharmacistEnd: r.pharmacistEnd || r.pharmacist_end || '',
+    createdBy: r.createdBy || r.created_by,
+    createdByName: r.createdByName || r.created_by_name,
+    createdByRole: r.createdByRole || r.created_by_role,
+    createdAt: r.createdAt || r.created_at
+  }));
+}
+
 if (key === 'settings') {
   return rows[0]?.value || {};
 }
@@ -2497,7 +2548,7 @@ if (key === 'shifts') {
       delete x.notifiedAt;
     }
 
-if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].includes(key)) {
+if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours', 'weekendShiftRequests'].includes(key)) {
   x.emp_id = x.empId;
 
   if (x.ts && !x.timestamp) {
@@ -2506,6 +2557,26 @@ if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours'].inclu
 
   delete x.empId;
   delete x.ts;
+}
+
+if (key === 'weekendShiftRequests') {
+  x.decline_reason = x.declineReason || null;
+  x.decided_at = x.decidedAt || null;
+  x.pharmacist_start = x.pharmacistStart || null;
+  x.pharmacist_end = x.pharmacistEnd || null;
+  x.created_by = x.createdBy || null;
+  x.created_by_name = x.createdByName || null;
+  x.created_by_role = x.createdByRole || null;
+  x.created_at = x.createdAt || null;
+
+  delete x.declineReason;
+  delete x.decidedAt;
+  delete x.pharmacistStart;
+  delete x.pharmacistEnd;
+  delete x.createdBy;
+  delete x.createdByName;
+  delete x.createdByRole;
+  delete x.createdAt;
 }
 
 if (key === 'leaveRequests') {
@@ -2796,7 +2867,7 @@ function _setSyncIndicator(state) {
 
 const ALL_KEYS = [
   'staff','shifts','leaveRequests','sickDays',
-  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements','lateReports','uniformOrders','staffUnavailability','publicHolidays'
+  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements','lateReports','uniformOrders','staffUnavailability','publicHolidays','weekendShiftRequests'
 ];
 // clockEvents is fetched separately only when needed (timesheets/dashboard)
 // so manual entries aren't wiped by the 10-second smart sync
@@ -3051,17 +3122,20 @@ function renderDashboard(){
 function updateBadges(){
   const leaveReqs=(DB.get('leaveRequests')||[]).map(normaliseLeaveRequestRow);
   const otReqs=DB.get('otRequests')||[];
+  const weekendReqs=DB.get('weekendShiftRequests')||[];
   const pendingLR=leaveReqs.filter(l=>l.status==='pending');
   const pendingOT=otReqs.filter(o=>o.approved===null||o.approved===undefined);
+  const pendingWeekend=weekendReqs.filter(r=>r.status==='pending');
   const pendingLate=allLateReports(getClockEvents()).filter(r=>!r.acknowledged && (!r.date || r.date>=FD(new Date())));
   const lb=document.getElementById('leave-badge');
   if(lb){if(pendingLR.length){lb.textContent=pendingLR.length;lb.style.display='inline-flex';}else lb.style.display='none';}
   const ob=document.getElementById('ot-badge');
-  if(ob){if(pendingOT.length){ob.textContent=pendingOT.length;ob.style.display='inline-flex';}else ob.style.display='none';}
+  const otAndWeekendPending=pendingOT.length+pendingWeekend.length;
+  if(ob){if(otAndWeekendPending){ob.textContent=otAndWeekendPending;ob.style.display='inline-flex';}else ob.style.display='none';}
   const pcb=document.getElementById('pc-badge');
   if(pcb){if(pendingLR.length){pcb.textContent=pendingLR.length;pcb.style.display='inline-flex';}else pcb.style.display='none';}
   const dp=document.getElementById('d-pending');
-  if(dp) dp.textContent=pendingLR.length+pendingOT.length+pendingLate.length;
+  if(dp) dp.textContent=pendingLR.length+pendingOT.length+pendingWeekend.length+pendingLate.length;
   const uniformOrders=DB.get('uniformOrders')||[];
   const failedUniform=uniformOrders.filter(o=>o.status==='invoice_failed');
   const ub=document.getElementById('uniform-badge');
@@ -3158,7 +3232,7 @@ function SP(p){
     });
   }
   else if(p==='ot'){
-    DB.refresh(['otRequests'],function(){renderOT('pending');updateBadges();});
+    DB.refresh(['otRequests','weekendShiftRequests','shifts','staff'],function(){renderOT('pending');renderWeekendShiftTable();updateBadges();});
   }
 else if(p==='timesheets'){
   DB.refresh(['staff','shifts','clockEvents','customHours','leaveRequests','sickDays','otRequests','settings'],function(){
@@ -5723,6 +5797,141 @@ async function saveOT(){
       .catch(err => alert('OT request saved, but the staff email failed for ' + req.date + ': ' + err.message));
     });
   }
+}
+
+// ── WEEKEND SHIFT REQUESTS ───────────────────────────────────────
+// Like an OT request, but proposing a whole shift on a day the staff
+// member isn't normally rostered (a weekend). The staff member — not the
+// manager — makes the final call: approve (adds it straight to the
+// roster) or decline with a required reason. The allowed time window is
+// constrained to whenever a Pharmacist is actually rostered that day,
+// since no one can work without pharmacist supervision/coverage.
+function pharmacistWindowForDate_(dateStr){
+  const staff = DB.get('staff') || [];
+  const shifts = DB.get('shifts') || [];
+  const pharmIds = new Set(staff.filter(s => s.role === 'Pharmacist').map(s => s.id));
+  const pharmShifts = shifts.filter(s =>
+    s.date === dateStr && s.published && pharmIds.has(s.empId) &&
+    !(s.entryType === 'leave' || s.entry_type === 'leave')
+  );
+  if (!pharmShifts.length) return null;
+  const start = pharmShifts.reduce((min, s) => (s.start < min ? s.start : min), pharmShifts[0].start);
+  const end = pharmShifts.reduce((max, s) => (s.end > max ? s.end : max), pharmShifts[0].end);
+  return { start, end };
+}
+
+function openWeekendShiftModal(){
+  const staff = [...(DB.get('staff') || [])].sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
+  document.getElementById('wknd-emp').innerHTML = staff.map(s => `<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
+  document.getElementById('wknd-date').value = '';
+  document.getElementById('wknd-start').value = '';
+  document.getElementById('wknd-end').value = '';
+  document.getElementById('wknd-reason').value = '';
+  document.getElementById('wknd-window-hint').style.display = 'none';
+  OM('m-weekend-shift');
+}
+
+function updateWeekendShiftWindow(){
+  const dateStr = document.getElementById('wknd-date').value;
+  const hint = document.getElementById('wknd-window-hint');
+  const startEl = document.getElementById('wknd-start');
+  const endEl = document.getElementById('wknd-end');
+  if (!dateStr) { hint.style.display = 'none'; startEl.removeAttribute('min'); startEl.removeAttribute('max'); endEl.removeAttribute('min'); endEl.removeAttribute('max'); return; }
+
+  const dow = new Date(dateStr + 'T00:00:00').getDay();
+  const win = pharmacistWindowForDate_(dateStr);
+  hint.style.display = 'block';
+  hint.className = win ? 'alert ai' : 'alert ad';
+  if (dow !== 0 && dow !== 6) {
+    hint.textContent = `Heads up — ${FDS(dateStr)} isn't a Saturday or Sunday.`;
+  } else if (!win) {
+    hint.textContent = `No Pharmacist is rostered on ${FDS(dateStr)} yet — add their shift first, then this time window will be available.`;
+  } else {
+    hint.textContent = `Pharmacist is rostered ${win.start}–${win.end} on ${FDS(dateStr)}. The shift time must fall within this window.`;
+  }
+  if (win) {
+    [startEl, endEl].forEach(el => { el.min = win.start; el.max = win.end; });
+  } else {
+    [startEl, endEl].forEach(el => { el.removeAttribute('min'); el.removeAttribute('max'); });
+  }
+}
+
+async function saveWeekendShiftRequest(){
+  const empId = document.getElementById('wknd-emp').value;
+  const date = document.getElementById('wknd-date').value;
+  const start = document.getElementById('wknd-start').value;
+  const end = document.getElementById('wknd-end').value;
+  const reason = document.getElementById('wknd-reason').value.trim();
+
+  if (!date || !start || !end) { alert('Date, start time and end time are all required.'); return; }
+  if (end <= start) { alert('End time must be after start time.'); return; }
+  if (!reason) { alert('A reason is required.'); return; }
+
+  const win = pharmacistWindowForDate_(date);
+  if (!win) { alert('No Pharmacist is rostered that day — add their shift first so there is coverage.'); return; }
+  if (start < win.start || end > win.end) {
+    alert(`The shift time must fall within the Pharmacist's rostered hours (${win.start}–${win.end}).`);
+    return;
+  }
+
+  const mgr = getCurrentManager();
+  const reqs = DB.get('weekendShiftRequests') || [];
+  const req = {
+    id: 'wknd' + Date.now(),
+    empId, date, start, end, reason,
+    status: 'pending',
+    declineReason: '',
+    decidedAt: null,
+    pharmacistStart: win.start,
+    pharmacistEnd: win.end,
+    createdBy: mgr.username, createdByName: mgr.name, createdByRole: mgr.role,
+    createdAt: new Date().toISOString()
+  };
+  reqs.push(req);
+
+  const btn = document.getElementById('wknd-save-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+
+  const result = await DB.set('weekendShiftRequests', reqs);
+
+  if (btn) { btn.disabled = false; btn.textContent = 'Send request'; }
+
+  if (!result.ok) { alert('Could not send the request. Please try again.'); return; }
+
+  CM('m-weekend-shift');
+  renderWeekendShiftTable();
+  toast('Weekend shift request sent — the staff member can approve or decline it from the Staff Portal.', 'success');
+}
+
+function renderWeekendShiftTable(){
+  const tbody = document.getElementById('wknd-body');
+  if (!tbody) return;
+  const reqs = [...(DB.get('weekendShiftRequests') || [])].sort((a,b) => (b.date||'').localeCompare(a.date||'') || (b.createdAt||'').localeCompare(a.createdAt||''));
+  const staff = DB.get('staff') || [];
+
+  tbody.innerHTML = reqs.length ? reqs.map(r => {
+    const emp = staff.find(s => s.id === r.empId);
+    const status = r.status === 'approved' ? '<span class="badge bg">Approved</span>'
+      : r.status === 'declined' ? '<span class="badge br">Declined</span>'
+      : '<span class="badge ba">Pending</span>';
+    return `<tr>
+      <td><strong>${emp ? emp.first + ' ' + emp.last : '?'}</strong></td>
+      <td>${FDS(r.date)}</td><td>${r.start}</td><td>${r.end}</td>
+      <td style="max-width:160px;white-space:normal">${r.reason || '—'}</td>
+      <td>${status}</td>
+      <td style="max-width:160px;white-space:normal">${r.declineReason || '—'}</td>
+      <td style="white-space:nowrap">${r.status === 'pending' ? `<button class="btn btn-sm" onclick="deleteWeekendShiftRequest('${r.id}')" style="color:var(--red);border-color:var(--red)">Cancel</button>` : ''}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="8" style="text-align:center;color:var(--t2);padding:20px;font-size:12px">No weekend shift requests yet.</td></tr>`;
+}
+
+async function deleteWeekendShiftRequest(id){
+  if (!confirm('Cancel this weekend shift request?')) return;
+  let reqs = DB.get('weekendShiftRequests') || [];
+  reqs = reqs.filter(r => r.id !== id);
+  const result = await DB.set('weekendShiftRequests', reqs);
+  if (!result.ok) { alert('Could not cancel the request. Please try again.'); return; }
+  renderWeekendShiftTable();
 }
 
 // ── PUBLIC HOLIDAY ROSTER AUTO-FILL ─────────────────────────────
@@ -10535,7 +10744,8 @@ const REALTIME_TABLE_TO_KEY = {
   late_reports: 'lateReports',
   uniform_orders: 'uniformOrders',
   staff_unavailability: 'staffUnavailability',
-  public_holidays: 'publicHolidays'
+  public_holidays: 'publicHolidays',
+  weekend_shift_requests: 'weekendShiftRequests'
 };
 
 function queueRealtimeRefresh(key) {

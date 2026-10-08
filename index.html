@@ -1617,12 +1617,13 @@ function isPublishedShift(shift){
       <div class="fr"><label id="ot-date-label">Date</label><input type="date" id="ot-date"></div>
     </div>
     <div class="fr" id="ot-date-to-row" style="display:none">
-      <label>To date <span style="font-weight:400;color:var(--t3)">(creates one OT request per day in this range, same times each day)</span></label>
+      <label>To date <span style="font-weight:400;color:var(--t3)">(creates one OT request per day in this range, per time slot below)</span></label>
       <input type="date" id="ot-date-to">
     </div>
-    <div class="fg">
-      <div class="fr"><label>OT start</label><input type="time" id="ot-start" value="17:00"></div>
-      <div class="fr"><label>OT end</label><input type="time" id="ot-end" value="19:00"></div>
+    <div class="fr">
+      <label>OT time slot(s) <span style="font-weight:400;color:var(--t3)" id="ot-slots-hint">(e.g. a Morning slot and an Evening slot — each becomes its own OT request)</span></label>
+      <div id="ot-slots"></div>
+      <button class="btn btn-sm" type="button" id="ot-add-slot-btn" onclick="addOTSlotRow()" style="margin-top:6px">+ Add time slot</button>
     </div>
     <div class="fr"><label>Reason / justification</label><textarea id="ot-reason" rows="2" placeholder="Why is OT required?"></textarea></div>
     <div class="fr"><label>Task / what they'll be doing</label><textarea id="ot-task" rows="2" placeholder="Describe the work..."></textarea></div>
@@ -5387,6 +5388,38 @@ function manageOvertimeForShift(empId, date){
   openAddOTModal(existing ? existing.id : null, empId, date);
 }
 
+// A new OT request can have several independent time slots for the same
+// staff member/date(s) — e.g. a Morning slot and an Evening slot — which
+// each become their own separate OT request on save. Editing an existing
+// request only ever edits that one record, so it keeps a single fixed slot.
+function addOTSlotRow(label, start, end){
+  const container=document.getElementById('ot-slots');
+  const row=document.createElement('div');
+  row.className='ot-slot-row';
+  row.style.cssText='display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:6px;align-items:end;margin-bottom:6px';
+  row.innerHTML=`
+    <div><label style="font-size:11px">Label <span style="font-weight:400;color:var(--t3)">(optional)</span></label><input type="text" class="ot-slot-label" placeholder="e.g. Morning" value="${escHTML(label||'')}"></div>
+    <div><label style="font-size:11px">Start</label><input type="time" class="ot-slot-start" value="${start||'17:00'}"></div>
+    <div><label style="font-size:11px">End</label><input type="time" class="ot-slot-end" value="${end||'19:00'}"></div>
+    <button class="btn btn-sm btn-danger" type="button" onclick="removeOTSlotRow(this)">✕</button>
+  `;
+  container.appendChild(row);
+  updateOTSlotRemoveButtons();
+}
+function removeOTSlotRow(btn){
+  const rows=document.querySelectorAll('#ot-slots .ot-slot-row');
+  if(rows.length<=1) return;
+  btn.closest('.ot-slot-row').remove();
+  updateOTSlotRemoveButtons();
+}
+function updateOTSlotRemoveButtons(){
+  const rows=[...document.querySelectorAll('#ot-slots .ot-slot-row')];
+  rows.forEach(r=>{
+    const btn=r.querySelector('.btn-danger');
+    if(btn) btn.style.visibility = rows.length>1 ? 'visible' : 'hidden';
+  });
+}
+
 function openAddOTModal(id, prefillEmpId, prefillDate){
   editingOTId=id;
   const staff = [...(DB.get('staff') || [])].sort((a,b) =>
@@ -5394,6 +5427,8 @@ function openAddOTModal(id, prefillEmpId, prefillDate){
 );
   document.getElementById('ot-emp').innerHTML=staff.map(s=>`<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
   const dateToRow = document.getElementById('ot-date-to-row');
+  const addSlotBtn = document.getElementById('ot-add-slot-btn');
+  document.getElementById('ot-slots').innerHTML='';
   if(id){
     const o=(DB.get('otRequests')||[]).find(x=>x.id===id);if(!o)return;
     document.getElementById('ot-modal-title').textContent='Edit OT request';
@@ -5401,7 +5436,8 @@ function openAddOTModal(id, prefillEmpId, prefillDate){
     dateToRow.style.display='none';
     document.getElementById('ot-date-to').value='';
     document.getElementById('ot-emp').value=o.empId;document.getElementById('ot-date').value=o.date;
-    document.getElementById('ot-start').value=o.start;document.getElementById('ot-end').value=o.end;
+    addOTSlotRow(o.label||'', o.start, o.end);
+    addSlotBtn.style.display='none';
     document.getElementById('ot-reason').value=o.reason||'';document.getElementById('ot-task').value=o.task||'';
     document.getElementById('tog-ot-avail').classList.toggle('on',o.availConfirmed);
   } else {
@@ -5409,6 +5445,8 @@ function openAddOTModal(id, prefillEmpId, prefillDate){
     document.getElementById('ot-date-label').textContent='From date';
     dateToRow.style.display='block';
     document.getElementById('ot-date-to').value='';
+    addOTSlotRow('', '17:00', '19:00');
+    addSlotBtn.style.display='inline-block';
     // Prefill from shift popup if provided
     if(prefillEmpId) document.getElementById('ot-emp').value=prefillEmpId;
     document.getElementById('ot-date').value=prefillDate||FD(new Date());
@@ -5560,17 +5598,26 @@ async function saveOT(){
   }
 
   const empId = document.getElementById('ot-emp').value;
-  const start = document.getElementById('ot-start').value;
-  const end = document.getElementById('ot-end').value;
+  const slotRows = [...document.querySelectorAll('#ot-slots .ot-slot-row')];
+  const slots = slotRows.map(row => ({
+    label: row.querySelector('.ot-slot-label').value.trim(),
+    start: row.querySelector('.ot-slot-start').value,
+    end: row.querySelector('.ot-slot-end').value
+  })).filter(s => s.start && s.end);
+  if (!slots.length) {
+    alert('At least one time slot (start and end) is required.');
+    return;
+  }
   const task = document.getElementById('ot-task').value;
   const mgr = getCurrentManager();
 
-  const buildRequest = (id, date, priorExisting) => ({
+  const buildRequest = (id, date, slot, priorExisting) => ({
     id,
     empId,
     date,
-    start,
-    end,
+    start: slot.start,
+    end: slot.end,
+    label: slot.label || undefined,
     reason,
     task,
     availConfirmed,
@@ -5590,14 +5637,16 @@ async function saveOT(){
 
   if (editingOTId) {
     const idx = reqs.findIndex(x => x.id === editingOTId);
-    const updated = buildRequest(editingOTId, fromDate, existing);
+    const updated = buildRequest(editingOTId, fromDate, slots[0], existing);
     if (idx >= 0) reqs[idx] = updated;
     newRequests.push(updated);
   } else {
-    dates.forEach((date, i) => {
-      const req = buildRequest('ot' + Date.now() + '-' + i, date, {});
-      reqs.push(req);
-      newRequests.push(req);
+    dates.forEach((date, di) => {
+      slots.forEach((slot, si) => {
+        const req = buildRequest('ot' + Date.now() + '-' + di + '-' + si, date, slot, {});
+        reqs.push(req);
+        newRequests.push(req);
+      });
     });
   }
 
@@ -5613,7 +5662,7 @@ async function saveOT(){
   // linked roster shift — approveOT() is what merges OT times into `shifts`, and
   // it's idempotent to call again here (it just re-derives the merged start/end).
   const wasApproved = editingOTId && existing.approved === true;
-  const timesOrDateChanged = wasApproved && (existing.start !== start || existing.end !== end || existing.date !== fromDate);
+  const timesOrDateChanged = wasApproved && (existing.start !== slots[0].start || existing.end !== slots[0].end || existing.date !== fromDate);
   if (wasApproved && timesOrDateChanged) {
     await approveOT(editingOTId, { bypassAvailabilityGuard: true });
     return;

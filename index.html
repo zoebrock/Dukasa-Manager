@@ -273,6 +273,7 @@ h3{font-family:var(--font-serif);font-weight:400;font-size:16px;letter-spacing:-
 .chip-unavail.chip-small{background:var(--red);color:#fff;border-color:var(--red)}
 .chip-anticipated{background:var(--pl);color:var(--purple);border:1px dashed #B7B1E8;cursor:pointer}
 .chip-holiday{background:var(--bl);color:var(--bd);border-color:#B7D8F2}
+.chip-pharm-risk{background:var(--pkl);color:var(--pkd);border-color:#E9A9C2}
 .chip-small{font-size:9px;padding:1px 5px}
 
 /* ── Add-shift button in empty cell ──────────────────────────── */
@@ -3494,8 +3495,17 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
       !isPartialLeave &&
       ((s.otAnnotations && s.otAnnotations.length) || hasOT.length);
 
+    // Weekend shift with no Pharmacist covering the same hours — flagged so
+    // it's visually obvious which shifts still need a Pharmacist request
+    // approved before go-live. Clears itself automatically once one is.
+    const isWeekendShift = dname==='Sat'||dname==='Sun';
+    const pharmacistRisk = isWeekendShift && !isPartialLeave && s.published &&
+      emp.role!=='Pharmacist' &&
+      !hasPharmacistCoverageForShift_(ds, s.start, s.end, emp.id);
+
     const chipClass =
       isPartialLeave ? 'chip-partial-leave' :
+      pharmacistRisk ? 'chip-pharm-risk' :
       hasApprovedOT ? 'chip-ot' :
       s.published ? 'chip-shift' : 'chip-draft';
 
@@ -3509,6 +3519,7 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
     const availabilityConflict=!isShiftWithinAvailability(emp,dname,s.start,s.end);
     const availabilityBadge=availabilityConflict?`<span class="chip chip-unavail chip-small" style="margin-top:2px">Outside availability</span>`:'';
     const anticipatedBadge=anticipated?`<span class="chip chip-anticipated chip-small" style="margin-top:2px" title="${anticipated.note?escHTML(anticipated.note):'Anticipated unavailability'}">⚠ Anticipated unavailable</span>`:'';
+    const pharmacistRiskBadge=pharmacistRisk?`<span class="chip chip-pharm-risk chip-small" style="margin-top:2px" title="No Pharmacist is published/approved for overlapping hours yet">⚠ No pharmacist coverage</span>`:'';
 
     const isSelected = bulkShiftMode && selectedShiftIds.has(s.id);
     const chipClickAction = bulkShiftMode
@@ -3533,6 +3544,7 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
       ${otBadge}
       ${availabilityBadge}
       ${anticipatedBadge}
+      ${pharmacistRiskBadge}
     </div>`;
   });
 
@@ -5856,6 +5868,22 @@ function isPharmacistEmp_(empId){
   return !!emp && emp.role === 'Pharmacist';
 }
 
+// Does any OTHER published Pharmacist shift overlap this time window that
+// day? Used to flag a non-pharmacist's weekend shift as at-risk on the
+// roster when it isn't — computed live every render, so the flag clears
+// itself the moment a covering Pharmacist shift gets approved/published.
+function hasPharmacistCoverageForShift_(dateStr, start, end, excludeEmpId){
+  const staff = DB.get('staff') || [];
+  const shifts = DB.get('shifts') || [];
+  const pharmIds = new Set(staff.filter(s => s.role === 'Pharmacist').map(s => s.id));
+  return shifts.some(s =>
+    s.date === dateStr && s.published && pharmIds.has(s.empId) &&
+    String(s.empId) !== String(excludeEmpId) &&
+    !(s.entryType === 'leave' || s.entry_type === 'leave') &&
+    s.start <= start && s.end >= end
+  );
+}
+
 function openWeekendShiftModal(prefillEmpId, prefillDate){
   const staff = [...(DB.get('staff') || [])].sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
   document.getElementById('wknd-emp').innerHTML = staff.map(s => `<option value="${s.id}" ${s.id===prefillEmpId?'selected':''}>${s.first} ${s.last}</option>`).join('');
@@ -5880,21 +5908,20 @@ function updateWeekendShiftWindow(){
   const isPharmacist = isPharmacistEmp_(empId);
   const win = isPharmacist ? null : pharmacistWindowForDate_(dateStr, empId);
   hint.style.display = 'block';
-  hint.className = (isPharmacist || win) ? 'alert ai' : 'alert ad';
+  hint.className = (isPharmacist || win) ? 'alert ai' : 'alert aw';
   if (dow !== 0 && dow !== 6) {
     hint.textContent = `Heads up — ${FDS(dateStr)} isn't a Saturday or Sunday.`;
   } else if (isPharmacist) {
     hint.textContent = `This staff member is a Pharmacist — rostering them provides their own coverage, so any time is fine.`;
   } else if (!win) {
-    hint.textContent = `No Pharmacist is rostered on ${FDS(dateStr)} yet — add their shift first, then this time window will be available.`;
+    hint.textContent = `⚠ No Pharmacist is rostered on ${FDS(dateStr)} yet. You can still send this request, but until a Pharmacist's own shift is approved for overlapping hours, it'll show as an at-risk shift on the roster.`;
   } else {
-    hint.textContent = `Pharmacist is rostered ${win.start}–${win.end} on ${FDS(dateStr)}. The shift time must fall within this window.`;
+    hint.textContent = `Pharmacist is rostered ${win.start}–${win.end} on ${FDS(dateStr)}. Times outside this window can still be sent, but will show as at-risk until covered.`;
   }
-  if (win) {
-    [startEl, endEl].forEach(el => { el.min = win.start; el.max = win.end; });
-  } else {
-    [startEl, endEl].forEach(el => { el.removeAttribute('min'); el.removeAttribute('max'); });
-  }
+  // Soft guide only, not enforced — a non-pharmacist can be requested for
+  // hours no pharmacist covers yet; it just needs to resolve (via their own
+  // pharmacist request being approved) before go-live, flagged on the roster.
+  [startEl, endEl].forEach(el => { el.removeAttribute('min'); el.removeAttribute('max'); });
 }
 
 async function saveWeekendShiftRequest(){
@@ -5909,14 +5936,13 @@ async function saveWeekendShiftRequest(){
   if (!reason) { alert('A reason is required.'); return; }
 
   const isPharmacist = isPharmacistEmp_(empId);
-  let win = null;
-  if (!isPharmacist) {
-    win = pharmacistWindowForDate_(date, empId);
-    if (!win) { alert('No Pharmacist is rostered that day — add their shift first so there is coverage.'); return; }
-    if (start < win.start || end > win.end) {
-      alert(`The shift time must fall within the Pharmacist's rostered hours (${win.start}–${win.end}).`);
-      return;
-    }
+  const win = isPharmacist ? null : pharmacistWindowForDate_(date, empId);
+  const covered = isPharmacist || (win && start >= win.start && end <= win.end);
+  if (!covered) {
+    const msg = !win
+      ? 'No Pharmacist is rostered that day yet. Send this request anyway? It will show as an at-risk shift on the roster until a Pharmacist is approved for overlapping hours.'
+      : `This falls outside the Pharmacist's rostered hours (${win.start}–${win.end}). Send this request anyway? It will show as an at-risk shift on the roster until that's resolved.`;
+    if (!confirm(msg)) return;
   }
 
   const mgr = getCurrentManager();
@@ -5959,11 +5985,15 @@ function renderWeekendShiftTable(){
     const status = r.status === 'approved' ? '<span class="badge bg">Approved</span>'
       : r.status === 'declined' ? '<span class="badge br">Declined</span>'
       : '<span class="badge ba">Pending</span>';
+    const pharmWin = (r.status !== 'declined' && emp && emp.role !== 'Pharmacist') ? pharmacistWindowForDate_(r.date, r.empId) : null;
+    const atRisk = r.status !== 'declined' && emp && emp.role !== 'Pharmacist' &&
+      !(pharmWin && r.start >= pharmWin.start && r.end <= pharmWin.end);
+    const riskBadge = atRisk ? ' <span class="badge bpk" title="No Pharmacist rostered/requested for overlapping hours yet">⚠ No pharmacist</span>' : '';
     return `<tr>
       <td><strong>${emp ? emp.first + ' ' + emp.last : '?'}</strong></td>
       <td>${FDS(r.date)}</td><td>${r.start}</td><td>${r.end}</td>
       <td style="max-width:160px;white-space:normal">${r.reason || '—'}</td>
-      <td>${status}</td>
+      <td>${status}${riskBadge}</td>
       <td style="max-width:160px;white-space:normal">${r.declineReason || '—'}</td>
       <td style="white-space:nowrap">${r.status === 'pending' ? `<button class="btn btn-sm" onclick="deleteWeekendShiftRequest('${r.id}')" style="color:var(--red);border-color:var(--red)">Cancel</button>` : ''}</td>
     </tr>`;

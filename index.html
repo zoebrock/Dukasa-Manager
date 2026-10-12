@@ -3238,7 +3238,11 @@ function SP(p){
       renderDashboard();updateBadges();
     });
   }
-  else if(p==='roster'){renderRoster();setTimeout(renderRosterAlerts,100);}
+  else if(p==='roster'){
+    DB.refresh(['shifts','staff','leaveRequests','sickDays','otRequests','weekendShiftRequests','staffUnavailability','publicHolidays'],function(){
+      renderRoster();setTimeout(renderRosterAlerts,100);
+    });
+  }
   else if(p==='templates'){
     DB.refresh(['rosterTemplates','staff'],function(){ renderTemplatesPage(); });
   }

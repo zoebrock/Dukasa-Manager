@@ -274,6 +274,7 @@ h3{font-family:var(--font-serif);font-weight:400;font-size:16px;letter-spacing:-
 .chip-anticipated{background:var(--pl);color:var(--purple);border:1px dashed #B7B1E8;cursor:pointer}
 .chip-holiday{background:var(--bl);color:var(--bd);border-color:#B7D8F2}
 .chip-pharm-risk{background:var(--pkl);color:var(--pkd);border-color:#E9A9C2}
+.chip-pending-req{background:var(--al);color:var(--ad);border-color:#FAC775;cursor:default}
 .chip-small{font-size:9px;padding:1px 5px}
 
 /* ── Add-shift button in empty cell ──────────────────────────── */
@@ -3563,16 +3564,26 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
   // Flag it when someone granted the day off is rostered on anyway.
   if(grantedHoliday&&dayShifts.length) content+=`<span class="chip chip-holiday chip-small" style="margin-top:2px" title="Granted public holiday leave but still rostered">🎉 PH — rostered anyway</span>`;
 
+  // Pending request indicators — so the manager can see at a glance that a
+  // request has already gone out and is awaiting the staff member's
+  // response, instead of risking a duplicate. Weekend shift requests show
+  // up here since (unlike OT) nothing lands on the roster until approved,
+  // so there'd otherwise be no trace of them at all on this page.
+  const pendingWeekendReq = (DB.get('weekendShiftRequests')||[]).find(r=>String(r.empId)===String(emp.id)&&r.date===ds&&r.status==='pending');
+  const pendingWeekendBadge = pendingWeekendReq ? `<span class="chip chip-pending-req chip-small" style="margin-top:2px" title="Sent — awaiting the staff member's response">⏳ Weekend shift requested ${escHTML(pendingWeekendReq.start)}–${escHTML(pendingWeekendReq.end)}</span>` : '';
+  const pendingOTReq = (DB.get('otRequests')||[]).find(o=>String(o.empId)===String(emp.id)&&o.date===ds&&(o.approved===null||o.approved===undefined));
+  const pendingOTBadge = pendingOTReq ? `<span class="chip chip-pending-req chip-small" style="margin-top:2px" title="Sent — awaiting the staff member's response">⏳ OT requested ${escHTML(pendingOTReq.start)}–${escHTML(pendingOTReq.end)}</span>` : '';
+
   // Only show + button if no shifts exist for this day. Weekends also get a
   // second button to send a weekend shift request instead of drafting a
   // shift directly — since a weekend day isn't part of anyone's normal
   // roster, the manager may want the staff member's sign-off first.
   const hasShifts=dayShifts.length>0;
   const isWeekendDay = dname==='Sat' || dname==='Sun';
-  const addBtn=!hasShifts?`<div style="display:flex;gap:3px;justify-content:center">
+  const addBtn=!hasShifts?`${pendingWeekendBadge}<div style="display:flex;gap:3px;justify-content:center;margin-top:2px">
     <button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift directly (draft or publish)">+</button>
     ${isWeekendDay ? `<button class="add-btn" onclick="openWeekendShiftModal('${emp.id}','${ds}')" title="Request weekend shift (staff approves/declines)">🗓️</button>` : ''}
-  </div>`:'';
+  </div>`:pendingOTBadge;
 
   return content+addBtn;
 }

@@ -1106,7 +1106,10 @@ function isPublishedShift(shift){
 
       <div class="ph" style="margin-top:28px">
         <h2>Weekend Shift Requests</h2>
-        <button class="btn btn-primary btn-sm" onclick="openWeekendShiftModal()">+ Request weekend shift</button>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm" onclick="openWeekendShiftSuggestionsModal()">💡 Suggest weekend shifts</button>
+          <button class="btn btn-primary btn-sm" onclick="openWeekendShiftModal()">+ Request weekend shift</button>
+        </div>
       </div>
       <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Proposed to a staff member for them to approve or decline (with a reason) — much like an OT request, but for a shift on a day they're not normally rostered. The time must fall within the hours a Pharmacist is rostered that day.</div>
       <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
@@ -1694,6 +1697,18 @@ function isPublishedShift(shift){
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px">
       <button class="btn" onclick="CM('m-ot-suggestions')">Cancel</button>
       <button class="btn btn-primary" id="ot-suggestions-create-btn" onclick="createSuggestedOTRequests()">Create selected requests</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="m-weekend-suggestions">
+  <div class="modal" style="max-width:600px">
+    <div class="mh"><h2>Suggested weekend shifts</h2><button class="xbtn" onclick="CM('m-weekend-suggestions')">×</button></div>
+    <p style="font-size:12px;color:var(--t2);margin-bottom:10px">For Saturdays/Sundays in the next 8 weeks that look high-volume (start or middle of the month, or near a public holiday) and don't yet have minimum coverage (1-2 Pharmacists, 1-2 Technicians, 1+ Logistics/packer). Untick anyone you don't want, then send the rest as weekend shift requests — each still needs the staff member to approve it before it hits the roster.</p>
+    <div id="weekend-suggestions-list" style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto"></div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:14px">
+      <button class="btn" onclick="CM('m-weekend-suggestions')">Cancel</button>
+      <button class="btn btn-primary" id="weekend-suggestions-create-btn" onclick="createSuggestedWeekendShiftRequests()">Send selected requests</button>
     </div>
   </div>
 </div>
@@ -3536,9 +3551,16 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
   // Flag it when someone granted the day off is rostered on anyway.
   if(grantedHoliday&&dayShifts.length) content+=`<span class="chip chip-holiday chip-small" style="margin-top:2px" title="Granted public holiday leave but still rostered">🎉 PH — rostered anyway</span>`;
 
-  // Only show + button if no shifts exist for this day
+  // Only show + button if no shifts exist for this day. Weekends also get a
+  // second button to send a weekend shift request instead of drafting a
+  // shift directly — since a weekend day isn't part of anyone's normal
+  // roster, the manager may want the staff member's sign-off first.
   const hasShifts=dayShifts.length>0;
-  const addBtn=!hasShifts?`<button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift">+</button>`:'';
+  const isWeekendDay = dname==='Sat' || dname==='Sun';
+  const addBtn=!hasShifts?`<div style="display:flex;gap:3px;justify-content:center">
+    <button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift directly (draft or publish)">+</button>
+    ${isWeekendDay ? `<button class="add-btn" onclick="openWeekendShiftModal('${emp.id}','${ds}')" title="Request weekend shift (staff approves/declines)">🗓️</button>` : ''}
+  </div>`:'';
 
   return content+addBtn;
 }
@@ -5834,15 +5856,16 @@ function isPharmacistEmp_(empId){
   return !!emp && emp.role === 'Pharmacist';
 }
 
-function openWeekendShiftModal(){
+function openWeekendShiftModal(prefillEmpId, prefillDate){
   const staff = [...(DB.get('staff') || [])].sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
-  document.getElementById('wknd-emp').innerHTML = staff.map(s => `<option value="${s.id}">${s.first} ${s.last}</option>`).join('');
-  document.getElementById('wknd-date').value = '';
+  document.getElementById('wknd-emp').innerHTML = staff.map(s => `<option value="${s.id}" ${s.id===prefillEmpId?'selected':''}>${s.first} ${s.last}</option>`).join('');
+  document.getElementById('wknd-date').value = prefillDate || '';
   document.getElementById('wknd-start').value = '';
   document.getElementById('wknd-end').value = '';
   document.getElementById('wknd-reason').value = '';
   document.getElementById('wknd-window-hint').style.display = 'none';
   OM('m-weekend-shift');
+  if (prefillDate) updateWeekendShiftWindow();
 }
 
 function updateWeekendShiftWindow(){
@@ -5954,6 +5977,151 @@ async function deleteWeekendShiftRequest(id){
   const result = await DB.set('weekendShiftRequests', reqs);
   if (!result.ok) { alert('Could not cancel the request. Please try again.'); return; }
   renderWeekendShiftTable();
+}
+
+// ── WEEKEND SHIFT SUGGESTIONS ─────────────────────────────────────
+// A Saturday/Sunday is treated as "high volume" if it's near the start or
+// middle of the month (when scripts/refills cluster) or within 3 days of a
+// public holiday (pre/post-holiday rush) — the two patterns the business
+// has flagged as its busiest weekend conditions.
+function isHighVolumeWeekendDate_(dateStr, publicHolidays){
+  const d = new Date(dateStr + 'T00:00:00');
+  const dom = d.getDate();
+  if (dom <= 5) return true;
+  if (dom >= 14 && dom <= 18) return true;
+  return (publicHolidays || []).some(h => {
+    const hd = new Date(h.date + 'T00:00:00');
+    return Math.abs((hd - d) / 86400000) <= 3;
+  });
+}
+
+const WEEKEND_COVERAGE_ROLE_GROUPS = [
+  { label: 'Pharmacist', roles: ['Pharmacist'], min: 1, start: '10:00', end: '16:00' },
+  { label: 'Technician', roles: ['Dispensary Technician', 'Lab Technician', 'Stock Technician'], min: 1, start: '10:00', end: '15:00' },
+  { label: 'Packer (Logistics)', roles: ['Logistics Technician'], min: 1, start: '10:00', end: '14:00' }
+];
+
+// Looks 8 weeks ahead for high-volume weekend days that don't yet have
+// minimum coverage (1-2 Pharmacists, 1-2 Technicians, 1+ Logistics/packer —
+// "1-2" is enforced as a floor of 1 here; the manager can always add more
+// manually), and proposes the first available, not-already-rostered,
+// not-on-leave staff member of the missing role(s) for each gap.
+function computeWeekendShiftSuggestions(){
+  const staff = DB.get('staff') || [];
+  const shifts = DB.get('shifts') || [];
+  const publicHolidays = DB.get('publicHolidays') || [];
+  const unavailList = DB.get('staffUnavailability') || [];
+  const leaveReqs = (DB.get('leaveRequests') || []).filter(l => l.status === 'approved');
+  const existingReqs = DB.get('weekendShiftRequests') || [];
+
+  const suggestions = [];
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+
+  for (let i = 1; i <= 56; i++) {
+    const d = new Date(today); d.setDate(d.getDate() + i);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) continue;
+    const ds = FD(d);
+    if (!isHighVolumeWeekendDate_(ds, publicHolidays)) continue;
+
+    const dayShifts = shifts.filter(s => s.date === ds && s.published && !(s.entryType === 'leave' || s.entry_type === 'leave'));
+    const rosteredIds = new Set(dayShifts.map(s => s.empId));
+    const alreadyRequestedIds = new Set(
+      existingReqs.filter(r => r.date === ds && r.status !== 'declined').map(r => r.empId)
+    );
+
+    WEEKEND_COVERAGE_ROLE_GROUPS.forEach(group => {
+      const coveredCount = dayShifts.filter(s => {
+        const emp = staff.find(e => e.id === s.empId);
+        return emp && group.roles.includes(emp.role);
+      }).length;
+      if (coveredCount >= group.min) return;
+
+      const candidate = staff.find(s =>
+        group.roles.includes(s.role) &&
+        !rosteredIds.has(s.id) &&
+        !alreadyRequestedIds.has(s.id) &&
+        !leaveReqs.some(l => l.empId === s.id && l.from <= ds && l.to >= ds) &&
+        !unavailList.some(u => u.empId === s.id && u.from <= ds && u.to >= ds)
+      );
+      if (!candidate) return;
+
+      suggestions.push({
+        empId: candidate.id,
+        emp: candidate,
+        date: ds,
+        start: group.start,
+        end: group.end,
+        reason: `High-volume weekend coverage (${group.label}) — ${FDS(ds)}`
+      });
+    });
+  }
+
+  return suggestions.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function openWeekendShiftSuggestionsModal(){
+  const suggestions = computeWeekendShiftSuggestions();
+  const listEl = document.getElementById('weekend-suggestions-list');
+  const createBtn = document.getElementById('weekend-suggestions-create-btn');
+  if (!suggestions.length) {
+    listEl.innerHTML = '<p style="font-size:12px;color:var(--t2)">No coverage gaps found for the next 8 weeks\' high-volume weekends — either they\'re already covered, or there\'s no available staff member of the missing role to suggest.</p>';
+    if (createBtn) createBtn.style.display = 'none';
+  } else {
+    if (createBtn) { createBtn.style.display = 'inline-flex'; createBtn.disabled = false; createBtn.textContent = 'Send selected requests'; }
+    listEl.innerHTML = suggestions.map(s => {
+      const dataStr = JSON.stringify({ empId: s.empId, date: s.date, start: s.start, end: s.end, reason: s.reason }).replace(/"/g, '&quot;');
+      return `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rsm);cursor:pointer">
+        <input type="checkbox" class="weekend-suggestion-cb" checked data-suggestion="${dataStr}" style="margin-top:2px;width:15px;height:15px;flex-shrink:0">
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:13px">${escHTML(s.emp.first + ' ' + s.emp.last)} — ${FDS(s.date)}</div>
+          <div style="font-size:11px;color:var(--t2);margin-top:1px">${escHTML(s.reason)}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:1px">Suggested time: ${escHTML(s.start)}–${escHTML(s.end)}</div>
+        </div>
+      </label>`;
+    }).join('');
+  }
+  OM('m-weekend-suggestions');
+}
+
+async function createSuggestedWeekendShiftRequests(){
+  const checked = [...document.querySelectorAll('.weekend-suggestion-cb:checked')];
+  if (!checked.length) { CM('m-weekend-suggestions'); return; }
+
+  const btn = document.getElementById('weekend-suggestions-create-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+
+  const mgr = getCurrentManager();
+  const reqs = DB.get('weekendShiftRequests') || [];
+  const newRequests = [];
+
+  checked.forEach((cb, i) => {
+    const s = JSON.parse(cb.dataset.suggestion);
+    const isPharmacist = isPharmacistEmp_(s.empId);
+    const win = isPharmacist ? null : pharmacistWindowForDate_(s.date, s.empId);
+    const req = {
+      id: 'wknd' + Date.now() + '-' + i,
+      empId: s.empId, date: s.date, start: s.start, end: s.end, reason: s.reason,
+      status: 'pending',
+      declineReason: '',
+      decidedAt: null,
+      pharmacistStart: win ? win.start : s.start,
+      pharmacistEnd: win ? win.end : s.end,
+      createdBy: mgr.username, createdByName: mgr.name, createdByRole: mgr.role,
+      createdAt: new Date().toISOString()
+    };
+    reqs.push(req);
+    newRequests.push(req);
+  });
+
+  const result = await DB.set('weekendShiftRequests', reqs);
+  if (btn) { btn.disabled = false; btn.textContent = 'Send selected requests'; }
+  if (!result.ok) { alert('Could not send the requests. Please try again.'); return; }
+
+  CM('m-weekend-suggestions');
+  renderWeekendShiftTable();
+  updateBadges();
+  toast(`${newRequests.length} weekend shift request${newRequests.length === 1 ? '' : 's'} sent.`, 'success');
 }
 
 // ── PUBLIC HOLIDAY ROSTER AUTO-FILL ─────────────────────────────

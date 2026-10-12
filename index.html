@@ -1669,7 +1669,7 @@ function isPublishedShift(shift){
   <div class="modal">
     <div class="mh"><h2>Request weekend shift</h2><button class="xbtn" onclick="CM('m-weekend-shift')">×</button></div>
     <div class="fg">
-      <div class="fr"><label>Staff member</label><select id="wknd-emp"></select></div>
+      <div class="fr"><label>Staff member</label><select id="wknd-emp" onchange="updateWeekendShiftWindow()"></select></div>
       <div class="fr"><label>Date</label><input type="date" id="wknd-date" onchange="updateWeekendShiftWindow()"></div>
     </div>
     <div id="wknd-window-hint" class="alert ai" style="font-size:12px;display:none"></div>
@@ -5806,18 +5806,32 @@ async function saveOT(){
 // roster) or decline with a required reason. The allowed time window is
 // constrained to whenever a Pharmacist is actually rostered that day,
 // since no one can work without pharmacist supervision/coverage.
-function pharmacistWindowForDate_(dateStr){
+// excludeEmpId lets a Pharmacist's own candidate shift be left out of the
+// window it would otherwise be constrained by — they don't need another
+// pharmacist already rostered to provide their own coverage.
+function pharmacistWindowForDate_(dateStr, excludeEmpId){
   const staff = DB.get('staff') || [];
   const shifts = DB.get('shifts') || [];
   const pharmIds = new Set(staff.filter(s => s.role === 'Pharmacist').map(s => s.id));
   const pharmShifts = shifts.filter(s =>
     s.date === dateStr && s.published && pharmIds.has(s.empId) &&
+    (excludeEmpId == null || String(s.empId) !== String(excludeEmpId)) &&
     !(s.entryType === 'leave' || s.entry_type === 'leave')
   );
   if (!pharmShifts.length) return null;
   const start = pharmShifts.reduce((min, s) => (s.start < min ? s.start : min), pharmShifts[0].start);
   const end = pharmShifts.reduce((max, s) => (s.end > max ? s.end : max), pharmShifts[0].end);
   return { start, end };
+}
+
+// Is this staff member themselves a Pharmacist? If so, no window constraint
+// applies at all — rostering them on IS the pharmacist coverage, so they
+// can be requested for any time, not just within some other pharmacist's
+// already-rostered hours.
+function isPharmacistEmp_(empId){
+  const staff = DB.get('staff') || [];
+  const emp = staff.find(s => String(s.id) === String(empId));
+  return !!emp && emp.role === 'Pharmacist';
 }
 
 function openWeekendShiftModal(){
@@ -5833,17 +5847,21 @@ function openWeekendShiftModal(){
 
 function updateWeekendShiftWindow(){
   const dateStr = document.getElementById('wknd-date').value;
+  const empId = document.getElementById('wknd-emp').value;
   const hint = document.getElementById('wknd-window-hint');
   const startEl = document.getElementById('wknd-start');
   const endEl = document.getElementById('wknd-end');
   if (!dateStr) { hint.style.display = 'none'; startEl.removeAttribute('min'); startEl.removeAttribute('max'); endEl.removeAttribute('min'); endEl.removeAttribute('max'); return; }
 
   const dow = new Date(dateStr + 'T00:00:00').getDay();
-  const win = pharmacistWindowForDate_(dateStr);
+  const isPharmacist = isPharmacistEmp_(empId);
+  const win = isPharmacist ? null : pharmacistWindowForDate_(dateStr, empId);
   hint.style.display = 'block';
-  hint.className = win ? 'alert ai' : 'alert ad';
+  hint.className = (isPharmacist || win) ? 'alert ai' : 'alert ad';
   if (dow !== 0 && dow !== 6) {
     hint.textContent = `Heads up — ${FDS(dateStr)} isn't a Saturday or Sunday.`;
+  } else if (isPharmacist) {
+    hint.textContent = `This staff member is a Pharmacist — rostering them provides their own coverage, so any time is fine.`;
   } else if (!win) {
     hint.textContent = `No Pharmacist is rostered on ${FDS(dateStr)} yet — add their shift first, then this time window will be available.`;
   } else {
@@ -5867,11 +5885,15 @@ async function saveWeekendShiftRequest(){
   if (end <= start) { alert('End time must be after start time.'); return; }
   if (!reason) { alert('A reason is required.'); return; }
 
-  const win = pharmacistWindowForDate_(date);
-  if (!win) { alert('No Pharmacist is rostered that day — add their shift first so there is coverage.'); return; }
-  if (start < win.start || end > win.end) {
-    alert(`The shift time must fall within the Pharmacist's rostered hours (${win.start}–${win.end}).`);
-    return;
+  const isPharmacist = isPharmacistEmp_(empId);
+  let win = null;
+  if (!isPharmacist) {
+    win = pharmacistWindowForDate_(date, empId);
+    if (!win) { alert('No Pharmacist is rostered that day — add their shift first so there is coverage.'); return; }
+    if (start < win.start || end > win.end) {
+      alert(`The shift time must fall within the Pharmacist's rostered hours (${win.start}–${win.end}).`);
+      return;
+    }
   }
 
   const mgr = getCurrentManager();
@@ -5882,8 +5904,8 @@ async function saveWeekendShiftRequest(){
     status: 'pending',
     declineReason: '',
     decidedAt: null,
-    pharmacistStart: win.start,
-    pharmacistEnd: win.end,
+    pharmacistStart: win ? win.start : start,
+    pharmacistEnd: win ? win.end : end,
     createdBy: mgr.username, createdByName: mgr.name, createdByRole: mgr.role,
     createdAt: new Date().toISOString()
   };

@@ -1203,7 +1203,8 @@ function isPublishedShift(shift){
       <div id="ts-summary" style="display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-bottom:14px"></div>
       <!-- Day tabs -->
       <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0;overflow-x:auto" id="ts-day-tabs"></div>
-      <div style="display:flex;justify-content:flex-end;padding:8px 0" id="ts-approve-all-wrap">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:10px 0" id="ts-approve-all-wrap">
+        <div id="ts-selected-date" style="font-family:var(--font-serif);font-size:19px;color:var(--text)"></div>
         <button class="btn btn-sm btn-success" onclick="approveAllForDay()">✓ Approve all for this day</button>
       </div>
       <!-- Per-day card list — one card per employee, essentials up front,
@@ -9887,7 +9888,17 @@ function renderTS(){
     `;
   }).join('');
 
-  renderTSDayBody(days[tsDayIndex] || days[0]);
+  const initialDs = days[tsDayIndex] || days[0];
+  updateTSSelectedDateLabel(initialDs);
+  renderTSDayBody(initialDs);
+}
+
+// Big, unambiguous "which date am I looking at" label above the card list —
+// the day-tab strip alone (small, horizontally-scrolling abbreviations) was
+// too easy to lose track of, especially mid-scroll through a fortnight.
+function updateTSSelectedDateLabel(ds){
+  const el=document.getElementById('ts-selected-date');
+  if(el) el.textContent=FDL(ds);
 }
 
 function selectTSDay(idx){
@@ -9907,9 +9918,11 @@ function selectTSDay(idx){
     days.push(FD(d));
   }
 
-  renderTSDayBody(days[idx]||days[0]);
+  const selectedDs = days[idx]||days[0];
+  updateTSSelectedDateLabel(selectedDs);
+  renderTSDayBody(selectedDs);
 }
-  
+
 // Which timesheet cards have their "Details" section expanded — keyed
 // "empId|date", reset each time a different day's tab is opened (a fresh
 // Set) so cards don't stay stuck open when switching days.
@@ -9956,7 +9969,10 @@ function renderTSDayBody(ds){
     return`<div class="staff-card ts-card ${r.rowCls}${r.otHrs>0?' tr-ot':''}" style="margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:13px 16px">
         <div style="flex:1;min-width:140px">
-          <div style="font-weight:600;font-size:13.5px">${r.emp?r.emp.first+' '+r.emp.last:'?'}</div>
+          <div style="display:flex;align-items:baseline;gap:7px;flex-wrap:wrap">
+            <div style="font-weight:600;font-size:13.5px">${r.emp?r.emp.first+' '+r.emp.last:'?'}</div>
+            <div style="font-size:10.5px;color:var(--purple);font-weight:600" title="Date for this entry">${FDS(dateKey)}</div>
+          </div>
           <div style="margin-top:3px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">
             ${roleBadgeHTML(r.s.role, "font-size:9px")}
             <span class="badge ${SB[r.status]||'bp'}">${r.status}</span>
@@ -9996,6 +10012,7 @@ function renderTSDayBody(ds){
       </div>
 
       <div class="staff-card-body ts-card-detail${isOpen?' open':''}" data-detail-for="${cardKey}">
+        <div style="font-family:var(--font-serif);font-size:14px;color:var(--purple);font-weight:700;margin-bottom:10px;padding-bottom:8px;border-bottom:1px dashed var(--border2)">${FDL(dateKey)}</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px;font-size:12px">
           <div>
             <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Clock in</div>

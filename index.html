@@ -9515,7 +9515,14 @@ if (s.entryType === 'leave' || s.entry_type === 'leave') {
     const co=ce.find(e=>e.empId===s.empId&&e.date===ds&&e.type==='clock-out');
     const breakInfo=breakSessionsForDay(s.empId,ds,ce);
     const isSick=sd.find(sk=>sk.empId===s.empId&&sk.date===ds);
-    const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=ds&&l.to>=ds);
+    // A partial-day leave request must NOT force this row into the full-day
+    // leave branch below — its leave portion is already represented by its
+    // own dedicated entryType==='leave' row (handled earlier in this
+    // forEach, which returns before reaching here). This "normal" shift row
+    // is the real worked remainder of that same day, and needs its actual
+    // hours computed from clock events like any other worked shift — not
+    // overwritten with a full day of contracted leave hours.
+    const isLeave=lr.find(l=>l.empId===s.empId&&l.from<=ds&&l.to>=ds&&(l.requestKind||l.request_kind)!=='partial_day');
     const approvedOT=otReqs.find(o=>o.empId===s.empId&&o.date===ds);
     let actualHrs=null,otHrs=0,status=isSick?'Sick':isLeave?isLeave.type:'Rostered';
     let bActMin=null,flags=[];
@@ -9626,8 +9633,29 @@ const discrepancyReason = hasHoursDiscrepancy
      || `Rostered ${sHrs.toFixed(2)}h vs worked ${effectiveHrs.toFixed(2)}h — reason not captured by clock events, please check manually`)
   : '';
 
+// A partial-leave segment for this same employee/day already accounts for
+// part of the shift's span — without this, that window's hours were being
+// counted twice: once here (as part of the normal shift) and again on the
+// dedicated leave row above. Subtract it, and tighten the displayed
+// start/end to the true remaining work span when the leave sits at either
+// edge of the shift (the common case — leave at the start or end of the
+// day). A leave window in the middle can't be shown as a single clean
+// span without splitting this into two rows, so the full original span is
+// kept and a flag explains the exclusion instead.
+const coLocatedPartialLeave = dayShifts.find(x=>x.empId===s.empId&&(x.entryType==='leave'||x.entry_type==='leave'));
+let displayS = s;
+if(coLocatedPartialLeave && effectiveHrs!==null){
+  const leaveHrs = ROUND30(Math.max(0, MD(coLocatedPartialLeave.start, coLocatedPartialLeave.end)/60));
+  effectiveHrs = Math.max(0, effectiveHrs - leaveHrs);
+  let displayStart=s.start, displayEnd=s.end;
+  if(coLocatedPartialLeave.start===s.start) displayStart=coLocatedPartialLeave.end;
+  else if(coLocatedPartialLeave.end===s.end) displayEnd=coLocatedPartialLeave.start;
+  else flags.push({type:'leave',msg:`${leaveHrs.toFixed(1)}h partial leave (${coLocatedPartialLeave.start}–${coLocatedPartialLeave.end}) excluded from this shift's worked hours`});
+  displayS = {...s, start:displayStart, end:displayEnd};
+}
+
 rows.push({
-  s, emp, sHrs,
+  s: displayS, emp, sHrs,
   actualHrs: effectiveHrs,
   otHrs,
   status,
@@ -10361,6 +10389,16 @@ for(let i = 0; i < 14; i++){
     for(let C = range.s.c; C <= range.e.c; C++){
       const addr = XLSX.utils.encode_cell({r:R,c:C});
       if(!wsSheet[addr]) wsSheet[addr] = { t:'s', v:'' };
+
+      // Start/End ("08:30") must stay literal text. Without an explicit Text
+      // format, Excel/Numbers silently reinterprets a time-only string as a
+      // date+time serial the moment the user clicks into/edits that cell —
+      // stamping in today's date, which is how these columns were ending up
+      // full of "2026-10-19 08:30:00" after a manual edit.
+      if((C === 3 || C === 4) && rowMeta[R] !== 'title' && rowMeta[R] !== 'employee' && rowMeta[R] !== 'header'){
+        wsSheet[addr].t = 's';
+        wsSheet[addr].z = '@';
+      }
 
       const meta = rowMeta[R];
 

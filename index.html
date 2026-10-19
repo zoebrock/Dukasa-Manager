@@ -9695,6 +9695,29 @@ rows.push({
       autoRoundedIn:emp.contractStart||'09:00',autoRoundedOut:emp.contractEnd||'17:00',contractedHrs});
   });
 
+  // Step 2b — add rows for staff marked SICK with no shift today. Mirrors
+  // Step 2 above but for sickDays — previously only leaveRequests was
+  // checked here, so a sick day with no underlying roster shift (e.g. no
+  // shift was ever drafted for that day) silently produced no row at all,
+  // dropping the day from the export entirely instead of showing it as paid
+  // sick leave.
+  staff.forEach(emp=>{
+    if(rows.some(r=>r.emp&&r.emp.id===emp.id)) return;
+    const isSickNoShift=sd.find(sk=>sk.empId===emp.id&&sk.date===ds);
+    if(!isSickNoShift) return;
+    const contractedHrs=getContractedDailyHrs(emp,ds);
+    if(contractedHrs===0) return;
+    const syntheticShift={id:'sk-'+emp.id+'-'+ds,empId:emp.id,date:ds,
+      start:emp.contractStart||'09:00',end:emp.contractEnd||'17:00',
+      breakMin:emp.contractBreak||30,role:emp.role,notes:'',published:true,status:'sick'};
+    const custom=getOrCreateCustom(emp.id,ds,contractedHrs,emp.contractStart||'09:00',emp.contractEnd||'17:00',contractedHrs);
+    rows.push({s:syntheticShift,emp,sHrs:contractedHrs,actualHrs:contractedHrs,otHrs:0,
+      status:'Sick',rowCls:'tr-sick',ci:null,co:null,bs:null,be:null,bActMin:emp.contractBreak||30,
+      flags:[{type:'sick',msg:`Sick — contracted hours (${contractedHrs.toFixed(1)}h)`}],
+      isSick:true,isLeave:null,approvedOT:null,custom,approvedHrs:custom.approved?custom.customHrs:null,
+      autoRoundedIn:emp.contractStart||'09:00',autoRoundedOut:emp.contractEnd||'17:00',contractedHrs});
+  });
+
   // Step 3 — a weekday public holiday counts as a paid Annual Leave day for
   // full-time staff who'd normally work that day and don't already have a
   // shift/leave/sick row for it (a rostered shift or approved leave that

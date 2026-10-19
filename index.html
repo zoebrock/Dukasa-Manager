@@ -306,6 +306,11 @@ h3{font-family:var(--font-serif);font-weight:400;font-size:16px;letter-spacing:-
 .ts-tbl tr:hover td{background:rgba(83,74,183,.03)}
 .ts-tbl tr.tr-sick td{background:#fff5f5}.ts-tbl tr.tr-leave td{background:#fffdf0}.ts-tbl tr.tr-ot td{background:#f0fdf5}
 .ts-tbl tr.tr-discrepancy td{background:#fff3e0;box-shadow:inset 3px 0 0 var(--red)}
+/* Card equivalents of the row-tint classes above, for the Timesheets
+   card layout (same semantic classes, applied to a card instead of a tr). */
+.ts-card.tr-sick{background:#fff5f5}.ts-card.tr-leave{background:#fffdf0}.ts-card.tr-ot{background:#f0fdf5}
+.ts-card.tr-discrepancy{box-shadow:inset 3px 0 0 var(--red)}
+.ts-card .custom-time-input,.ts-card .custom-hrs-input{padding:5px 7px;font-size:12px}
 .ot-val{color:var(--rd);font-weight:600}
 .review-badge{background:var(--rl);color:var(--rd);padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;white-space:normal;display:inline-block;line-height:1.4}
 .ts-day-tab{
@@ -1201,22 +1206,10 @@ function isPublishedShift(shift){
       <div style="display:flex;justify-content:flex-end;padding:8px 0" id="ts-approve-all-wrap">
         <button class="btn btn-sm btn-success" onclick="approveAllForDay()">✓ Approve all for this day</button>
       </div>
-      <!-- Per-day table -->
-      <div class="ts-wrap" style="margin-top:0">
-        <table class="ts-tbl">
-          <thead><tr>
-            <th>Employee</th><th>Status</th><th>Flags</th>
-            <th>Rostered start</th><th>Rostered end</th><th>Rostered hrs</th>
-            <th>Clock in</th><th>Clock out</th><th>Break</th><th>Actual hrs</th>
-            <th title="Late clock-in rounded up to next 30min mark">Auto in</th>
-            <th title="Clock-out capped to rostered end if no approved OT">Auto out</th>
-            <th>Custom start</th><th>Custom end</th><th>Custom hrs</th>
-            <th>OT hrs</th><th>Approved hrs</th><th>Approved</th><th>Edit</th><th>Photo</th><th>Reason</th>
-            <th title="Flags any day where rostered hours don't match worked hours, so it can't be missed">Review</th>
-          </tr></thead>
-          <tbody id="ts-body"></tbody>
-        </table>
-      </div>
+      <!-- Per-day card list — one card per employee, essentials up front,
+           everything else tucked behind a "Details" toggle so this page
+           doesn't force horizontal scrolling through 20-odd columns. -->
+      <div id="ts-body" style="margin-top:0"></div>
     </div>
 
     <!-- TEAM CALENDAR -->
@@ -9899,6 +9892,7 @@ function renderTS(){
 
 function selectTSDay(idx){
   tsDayIndex=idx;
+  tsExpandedCards=new Set(); // don't carry expanded cards over between days
   document.querySelectorAll('.ts-day-tab').forEach((t,i)=>t.classList.toggle('active',i===idx));
 
   const sv=document.getElementById('ts-week').value;
@@ -9916,13 +9910,29 @@ function selectTSDay(idx){
   renderTSDayBody(days[idx]||days[0]);
 }
   
+// Which timesheet cards have their "Details" section expanded — keyed
+// "empId|date", reset each time a different day's tab is opened (a fresh
+// Set) so cards don't stay stuck open when switching days.
+let tsExpandedCards = new Set();
+function toggleTSCardDetail(key){
+  if(tsExpandedCards.has(key)) tsExpandedCards.delete(key);
+  else tsExpandedCards.add(key);
+  const body = document.getElementById('ts-body');
+  const section = body && body.querySelector(`[data-detail-for="${CSS.escape(key)}"]`);
+  const toggleBtn = body && body.querySelector(`[data-toggle-for="${CSS.escape(key)}"]`);
+  if(section) section.classList.toggle('open');
+  if(toggleBtn) toggleBtn.textContent = tsExpandedCards.has(key) ? '▲ Hide details' : '▼ Details';
+}
+
 function renderTSDayBody(ds){
   const rows=buildTSRows(ds);
   const SB={Rostered:'bp',Completed:'bg','In progress':'ba',Sick:'br','Annual Leave':'ba','No clock events':'br','Missing clock out':'ba','Missing clock in':'ba'};
   const body=document.getElementById('ts-body');
-  if(!rows.length){body.innerHTML=`<tr><td colspan="22" style="text-align:center;color:var(--t2);padding:20px;font-size:12px">No shifts on ${FDL(ds)}</td></tr>`;return;}
+  if(!rows.length){body.innerHTML=`<div style="text-align:center;color:var(--t2);padding:24px;font-size:12px">No shifts on ${FDL(ds)}</div>`;return;}
   body.innerHTML=rows.map(r=>{
     const empKey=r.s.empId;const dateKey=r.s.date;
+    const cardKey=`${empKey}|${dateKey}`;
+    const isOpen=tsExpandedCards.has(cardKey);
     // Flags
     const flagsHTML=r.flags.map(f=>{
       if(f.type==='late') return`<span class="late-badge">⏰ ${f.msg}</span>`;
@@ -9934,50 +9944,105 @@ function renderTSDayBody(ds){
       if(f.type==='ot') return`<span class="ot-badge-ts">${f.msg}</span>`;
       if(f.type==='break-over') return`<span style="background:var(--rl);color:var(--rd);padding:1px 5px;border-radius:3px;font-size:9px;font-weight:600">⚠ ${f.msg}</span>`;
       return`<span class="early-badge">${f.msg}</span>`;
-    }).join(' '); // OT already included in flags array — don't append again
+    }).join(' ');
     // Custom start/end inputs
     const cStart=r.custom.customStart||'';const cEnd=r.custom.customEnd||'';
     const hasCustomTime=!!(r.custom.customStart||r.custom.customEnd);
     const approvedHrsDisplay=r.custom.approved?r.custom.customHrs.toFixed(2)+'h':'—';
     // Break display
     const brkDisplay=r.bActMin!==null?r.bActMin+'m':(r.s.breakMin?r.s.breakMin+'m':'—');
-    return`<tr class="${r.rowCls}${r.otHrs>0?' tr-ot':''}">
-      <td style="min-width:130px">
-        <div style="font-weight:600;font-size:13px">${r.emp?r.emp.first+' '+r.emp.last:'?'}</div>
-        ${roleBadgeHTML(r.s.role, "font-size:9px;margin-top:3px;display:inline-block")}
-      </td>
-      <td><span class="badge ${SB[r.status]||'bp'}">${r.status}</span></td>
-      <td style="white-space:nowrap">${flagsHTML||'—'}</td>
-      <td style="color:var(--t2)">${r.s.start}</td>
-      <td style="color:var(--t2)">${r.s.end}</td>
-      <td style="color:var(--t2)">${r.sHrs.toFixed(2)}</td>
-      <td style="font-weight:500">
-        ${r.ci
-          ? `<span style="color:var(--teal);font-weight:700">${r.ci.time}</span>${r.ci.manual?'<span title="Manually entered" style="font-size:9px;background:var(--al);color:var(--ad);border-radius:3px;padding:1px 4px;margin-left:3px">manual</span>':''}`
-          : `<button class="btn btn-sm" style="font-size:10px;padding:2px 7px" onclick="openManualClock('${r.emp?r.emp.id:''}','${r.s.date}','clock-in','${r.s.start}')">+ Add</button>`
-        }
-      </td>
-      <td style="font-weight:500">
-        ${r.co
-          ? `<span style="color:var(--purple);font-weight:700">${r.co.time}</span>${r.co.manual?'<span title="Manually entered" style="font-size:9px;background:var(--al);color:var(--ad);border-radius:3px;padding:1px 4px;margin-left:3px">manual</span>':''}`
-          : `<button class="btn btn-sm" style="font-size:10px;padding:2px 7px" onclick="openManualClock('${r.emp?r.emp.id:''}','${r.s.date}','clock-out','${r.s.end}')">+ Add</button>`
-        }
-      </td>
-      <td>${brkDisplay}</td>
-      <td style="font-weight:600">${r.actualHrs!==null?r.actualHrs.toFixed(2):'—'}</td>
-      <td style="font-size:11px;${r.autoRoundedIn?'color:var(--amber);font-weight:600':'color:var(--t3)'}" title="${r.autoRoundedIn?'Late clock-in rounded up to next 30min mark':'No rounding applied'}">${r.autoRoundedIn||'—'}</td>
-      <td style="font-size:11px;${r.autoRoundedOut?'color:var(--amber);font-weight:600':'color:var(--t3)'}" title="${r.autoRoundedOut?'Capped to rostered end (no approved OT)':'No rounding applied'}">${r.autoRoundedOut||'—'}</td>
-      <td><input type="time" class="custom-time-input${hasCustomTime?' edited':''}" value="${cStart}" onchange="updateCustomTime('${empKey}','${dateKey}','customStart',this.value,'${r.s.id}')" title="Custom clock-in time"></td>
-      <td><input type="time" class="custom-time-input${hasCustomTime?' edited':''}" value="${cEnd}" onchange="updateCustomTime('${empKey}','${dateKey}','customEnd',this.value,'${r.s.id}')" title="Custom clock-out time"></td>
-      <td><input type="number" step="0.25" min="0" class="custom-hrs-input${r.custom.manualEntry?' edited':''}" id="custom-hrs-${empKey}-${dateKey}" value="${r.custom.customHrs.toFixed(2)}" onchange="updateCustomHrs('${empKey}','${dateKey}',this.value)" title="Type an exact hours value directly"></td>
-      <td class="${r.otHrs>0?'ot-val':''}">${r.otHrs>0?r.otHrs.toFixed(2)+'h':'—'}</td>
-      <td id="approved-hrs-${empKey}-${dateKey}" style="font-weight:600;color:var(--td)">${approvedHrsDisplay}</td>
-      <td style="text-align:center"><div class="approved-check ${r.custom.approved?'checked':''}" onclick="toggleApproved('${empKey}','${dateKey}',this)">${r.custom.approved?'✓':''}</div></td>
-      <td><button class="btn btn-sm" onclick="openEditHoursModal('${empKey}','${dateKey}','${r.s.id}')">Edit</button></td>
-      <td>${r.ci?.photo?`<img class="img-thumb" src="${r.ci.photo}" onclick="viewPhoto('${r.ci.photo}','${r.co?.photo||''}')" title="View clock photos">`:'—'}</td>
-      <td style="font-size:10px;color:var(--t2);max-width:100px;white-space:normal">${r.ci?.reason||r.co?.reason||'—'}</td>
-      <td style="max-width:180px">${r.hasHoursDiscrepancy?`<span class="review-badge" title="${escHTML(r.discrepancyReason)}">⚠ ${Math.abs(r.sHrs-r.actualHrs).toFixed(2)}h diff — ${escHTML(r.discrepancyReason)}</span>`:'—'}</td>
-    </tr>`;
+    const discrepancyBadge=r.hasHoursDiscrepancy?`<span class="review-badge" title="${escHTML(r.discrepancyReason)}" style="margin-left:6px">⚠ ${Math.abs(r.sHrs-r.actualHrs).toFixed(2)}h diff</span>`:'';
+
+    return`<div class="staff-card ts-card ${r.rowCls}${r.otHrs>0?' tr-ot':''}" style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:13px 16px">
+        <div style="flex:1;min-width:140px">
+          <div style="font-weight:600;font-size:13.5px">${r.emp?r.emp.first+' '+r.emp.last:'?'}</div>
+          <div style="margin-top:3px;display:flex;gap:5px;flex-wrap:wrap;align-items:center">
+            ${roleBadgeHTML(r.s.role, "font-size:9px")}
+            <span class="badge ${SB[r.status]||'bp'}">${r.status}</span>
+            ${discrepancyBadge}
+          </div>
+        </div>
+
+        <div style="font-size:11px;color:var(--t2);text-align:center;min-width:90px">
+          <div style="text-transform:uppercase;letter-spacing:.04em;font-size:9.5px;color:var(--t3);margin-bottom:2px">Rostered</div>
+          ${r.s.start}–${r.s.end} <span style="color:var(--t3)">(${r.sHrs.toFixed(2)}h)</span>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:5px">
+          <div>
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Start</div>
+            <input type="time" class="custom-time-input${hasCustomTime?' edited':''}" value="${cStart}" onchange="updateCustomTime('${empKey}','${dateKey}','customStart',this.value,'${r.s.id}')" title="Custom clock-in time" style="width:88px">
+          </div>
+          <div>
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">End</div>
+            <input type="time" class="custom-time-input${hasCustomTime?' edited':''}" value="${cEnd}" onchange="updateCustomTime('${empKey}','${dateKey}','customEnd',this.value,'${r.s.id}')" title="Custom clock-out time" style="width:88px">
+          </div>
+        </div>
+
+        <div style="text-align:center;min-width:70px">
+          <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Hours</div>
+          <input type="number" step="0.25" min="0" class="custom-hrs-input${r.custom.manualEntry?' edited':''}" id="custom-hrs-${empKey}-${dateKey}" value="${r.custom.customHrs.toFixed(2)}" onchange="updateCustomHrs('${empKey}','${dateKey}',this.value)" title="Type an exact hours value directly" style="width:66px;font-weight:700;text-align:center">
+          ${r.otHrs>0?`<div class="ot-val" style="font-size:10px;margin-top:2px">+${r.otHrs.toFixed(2)}h OT</div>`:''}
+        </div>
+
+        <div style="text-align:center;min-width:60px">
+          <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Approved</div>
+          <div class="approved-check ${r.custom.approved?'checked':''}" onclick="toggleApproved('${empKey}','${dateKey}',this)" style="margin:0 auto">${r.custom.approved?'✓':''}</div>
+          <div id="approved-hrs-${empKey}-${dateKey}" style="font-size:10px;color:var(--td);font-weight:600;margin-top:2px">${approvedHrsDisplay}</div>
+        </div>
+
+        <button class="btn btn-sm" data-toggle-for="${cardKey}" onclick="toggleTSCardDetail('${cardKey}')">${isOpen?'▲ Hide details':'▼ Details'}</button>
+      </div>
+
+      <div class="staff-card-body ts-card-detail${isOpen?' open':''}" data-detail-for="${cardKey}">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:14px;font-size:12px">
+          <div>
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Clock in</div>
+            ${r.ci
+              ? `<span style="color:var(--teal);font-weight:700">${r.ci.time}</span>${r.ci.manual?'<span title="Manually entered" style="font-size:9px;background:var(--al);color:var(--ad);border-radius:3px;padding:1px 4px;margin-left:3px">manual</span>':''}`
+              : `<button class="btn btn-sm" style="font-size:10px;padding:2px 7px" onclick="openManualClock('${r.emp?r.emp.id:''}','${r.s.date}','clock-in','${r.s.start}')">+ Add</button>`
+            }
+          </div>
+          <div>
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Clock out</div>
+            ${r.co
+              ? `<span style="color:var(--purple);font-weight:700">${r.co.time}</span>${r.co.manual?'<span title="Manually entered" style="font-size:9px;background:var(--al);color:var(--ad);border-radius:3px;padding:1px 4px;margin-left:3px">manual</span>':''}`
+              : `<button class="btn btn-sm" style="font-size:10px;padding:2px 7px" onclick="openManualClock('${r.emp?r.emp.id:''}','${r.s.date}','clock-out','${r.s.end}')">+ Add</button>`
+            }
+          </div>
+          <div>
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Break</div>
+            ${brkDisplay}
+          </div>
+          <div>
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Actual hrs</div>
+            ${r.actualHrs!==null?r.actualHrs.toFixed(2):'—'}
+          </div>
+          <div title="${r.autoRoundedIn?'Late clock-in rounded up to next 30min mark':'No rounding applied'}">
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Auto in</div>
+            <span style="${r.autoRoundedIn?'color:var(--amber);font-weight:600':'color:var(--t3)'}">${r.autoRoundedIn||'—'}</span>
+          </div>
+          <div title="${r.autoRoundedOut?'Capped to rostered end (no approved OT)':'No rounding applied'}">
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Auto out</div>
+            <span style="${r.autoRoundedOut?'color:var(--amber);font-weight:600':'color:var(--t3)'}">${r.autoRoundedOut||'—'}</span>
+          </div>
+          <div>
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Photo</div>
+            ${r.ci?.photo?`<img class="img-thumb" src="${r.ci.photo}" onclick="viewPhoto('${r.ci.photo}','${r.co?.photo||''}')" title="View clock photos">`:'—'}
+          </div>
+          <div>
+            <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Reason</div>
+            <span style="color:var(--t2)">${r.ci?.reason||r.co?.reason||'—'}</span>
+          </div>
+          <div>
+            <button class="btn btn-sm" onclick="openEditHoursModal('${empKey}','${dateKey}','${r.s.id}')">Edit hours</button>
+          </div>
+        </div>
+        ${flagsHTML?`<div style="margin-top:10px;white-space:normal">${flagsHTML}</div>`:''}
+        ${r.hasHoursDiscrepancy?`<div style="margin-top:8px"><span class="review-badge" title="${escHTML(r.discrepancyReason)}">⚠ ${escHTML(r.discrepancyReason)}</span></div>`:''}
+      </div>
+    </div>`;
   }).join('');
 }
 

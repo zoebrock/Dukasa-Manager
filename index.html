@@ -1127,6 +1127,19 @@ function isPublishedShift(shift){
           <tbody id="wknd-body"></tbody>
         </table>
       </div>
+
+      <div class="ph" style="margin-top:28px">
+        <h2>Shift Adjustment Requests</h2>
+      </div>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Requests from staff to change the start/end time of an already-rostered shift (e.g. finishing earlier for an appointment), submitted from the Staff Portal once they've organised cover with the team members affected. Approving overwrites the shift's times on the roster; denying requires a reason.</div>
+      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
+        <table class="tbl" id="shiftadj-tbl">
+          <thead><tr>
+            <th>Staff member</th><th>Date</th><th>Current time</th><th>Requested time</th><th>Reason</th><th>Cover arranged</th><th>Status</th><th>Denial reason</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="shiftadj-body"></tbody>
+        </table>
+      </div>
     </div>
 
     <!-- STAFF -->
@@ -2102,7 +2115,8 @@ const TABLE_MAP = {
   uniformOrders: 'uniform_orders',
   staffUnavailability: 'staff_unavailability',
   publicHolidays: 'public_holidays',
-  weekendShiftRequests: 'weekend_shift_requests'
+  weekendShiftRequests: 'weekend_shift_requests',
+  shiftAdjustmentRequests: 'shift_adjustment_requests'
 };
 
 const CLOCK_TYPE_ALIASES = {
@@ -2444,6 +2458,29 @@ if (key === 'weekendShiftRequests') {
   }));
 }
 
+if (key === 'shiftAdjustmentRequests') {
+  return rows.map(r => ({
+    ...r,
+    empId: r.empId || r.emp_id,
+    shiftId: r.shiftId || r.shift_id,
+    originalStart: r.originalStart || r.original_start,
+    originalEnd: r.originalEnd || r.original_end,
+    requestedStart: r.requestedStart || r.requested_start,
+    requestedEnd: r.requestedEnd || r.requested_end,
+    coverArranged: r.coverArranged ?? r.cover_arranged ?? false,
+    coverNotes: r.coverNotes ?? r.cover_notes ?? '',
+    denialReason: r.denialReason ?? r.denial_reason ?? '',
+    decidedAt: r.decidedAt || r.decided_at || null,
+    decidedBy: r.decidedBy || r.decided_by,
+    decidedByName: r.decidedByName || r.decided_by_name,
+    decidedByRole: r.decidedByRole || r.decided_by_role,
+    createdBy: r.createdBy || r.created_by,
+    createdByName: r.createdByName || r.created_by_name,
+    createdByRole: r.createdByRole || r.created_by_role,
+    createdAt: r.createdAt || r.created_at
+  }));
+}
+
 if (key === 'settings') {
   return rows[0]?.value || {};
 }
@@ -2559,7 +2596,7 @@ if (key === 'shifts') {
       delete x.notifiedAt;
     }
 
-if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours', 'weekendShiftRequests'].includes(key)) {
+if (['leaveRequests', 'otRequests', 'sickDays', 'medCerts', 'customHours', 'weekendShiftRequests', 'shiftAdjustmentRequests'].includes(key)) {
   x.emp_id = x.empId;
 
   if (x.ts && !x.timestamp) {
@@ -2584,6 +2621,42 @@ if (key === 'weekendShiftRequests') {
   delete x.decidedAt;
   delete x.pharmacistStart;
   delete x.pharmacistEnd;
+  delete x.createdBy;
+  delete x.createdByName;
+  delete x.createdByRole;
+  delete x.createdAt;
+}
+
+if (key === 'shiftAdjustmentRequests') {
+  x.shift_id = x.shiftId ?? null;
+  x.original_start = x.originalStart ?? null;
+  x.original_end = x.originalEnd ?? null;
+  x.requested_start = x.requestedStart ?? null;
+  x.requested_end = x.requestedEnd ?? null;
+  x.cover_arranged = x.coverArranged ?? false;
+  x.cover_notes = x.coverNotes ?? null;
+  x.denial_reason = x.denialReason ?? null;
+  x.decided_at = x.decidedAt ?? null;
+  x.decided_by = x.decidedBy ?? null;
+  x.decided_by_name = x.decidedByName ?? null;
+  x.decided_by_role = x.decidedByRole ?? null;
+  x.created_by = x.createdBy ?? null;
+  x.created_by_name = x.createdByName ?? null;
+  x.created_by_role = x.createdByRole ?? null;
+  x.created_at = x.createdAt ?? null;
+
+  delete x.shiftId;
+  delete x.originalStart;
+  delete x.originalEnd;
+  delete x.requestedStart;
+  delete x.requestedEnd;
+  delete x.coverArranged;
+  delete x.coverNotes;
+  delete x.denialReason;
+  delete x.decidedAt;
+  delete x.decidedBy;
+  delete x.decidedByName;
+  delete x.decidedByRole;
   delete x.createdBy;
   delete x.createdByName;
   delete x.createdByRole;
@@ -2878,7 +2951,7 @@ function _setSyncIndicator(state) {
 
 const ALL_KEYS = [
   'staff','shifts','leaveRequests','sickDays',
-  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements','lateReports','uniformOrders','staffUnavailability','publicHolidays','weekendShiftRequests'
+  'medCerts','otRequests','rosterTemplates','customHours','settings','announcements','lateReports','uniformOrders','staffUnavailability','publicHolidays','weekendShiftRequests','shiftAdjustmentRequests'
 ];
 // clockEvents is fetched separately only when needed (timesheets/dashboard)
 // so manual entries aren't wiped by the 10-second smart sync
@@ -3134,19 +3207,21 @@ function updateBadges(){
   const leaveReqs=(DB.get('leaveRequests')||[]).map(normaliseLeaveRequestRow);
   const otReqs=DB.get('otRequests')||[];
   const weekendReqs=DB.get('weekendShiftRequests')||[];
+  const shiftAdjReqs=DB.get('shiftAdjustmentRequests')||[];
   const pendingLR=leaveReqs.filter(l=>l.status==='pending');
   const pendingOT=otReqs.filter(o=>o.approved===null||o.approved===undefined);
   const pendingWeekend=weekendReqs.filter(r=>r.status==='pending');
+  const pendingShiftAdj=shiftAdjReqs.filter(r=>r.status==='pending');
   const pendingLate=allLateReports(getClockEvents()).filter(r=>!r.acknowledged && (!r.date || r.date>=FD(new Date())));
   const lb=document.getElementById('leave-badge');
   if(lb){if(pendingLR.length){lb.textContent=pendingLR.length;lb.style.display='inline-flex';}else lb.style.display='none';}
   const ob=document.getElementById('ot-badge');
-  const otAndWeekendPending=pendingOT.length+pendingWeekend.length;
+  const otAndWeekendPending=pendingOT.length+pendingWeekend.length+pendingShiftAdj.length;
   if(ob){if(otAndWeekendPending){ob.textContent=otAndWeekendPending;ob.style.display='inline-flex';}else ob.style.display='none';}
   const pcb=document.getElementById('pc-badge');
   if(pcb){if(pendingLR.length){pcb.textContent=pendingLR.length;pcb.style.display='inline-flex';}else pcb.style.display='none';}
   const dp=document.getElementById('d-pending');
-  if(dp) dp.textContent=pendingLR.length+pendingOT.length+pendingWeekend.length+pendingLate.length;
+  if(dp) dp.textContent=pendingLR.length+pendingOT.length+pendingWeekend.length+pendingShiftAdj.length+pendingLate.length;
   const uniformOrders=DB.get('uniformOrders')||[];
   const failedUniform=uniformOrders.filter(o=>o.status==='invoice_failed');
   const ub=document.getElementById('uniform-badge');
@@ -3233,7 +3308,7 @@ function SP(p){
     });
   }
   else if(p==='roster'){
-    DB.refresh(['shifts','staff','leaveRequests','sickDays','otRequests','weekendShiftRequests','staffUnavailability','publicHolidays'],function(){
+    DB.refresh(['shifts','staff','leaveRequests','sickDays','otRequests','weekendShiftRequests','shiftAdjustmentRequests','staffUnavailability','publicHolidays'],function(){
       renderRoster();setTimeout(renderRosterAlerts,100);
     });
   }
@@ -3247,7 +3322,7 @@ function SP(p){
     });
   }
   else if(p==='ot'){
-    DB.refresh(['otRequests','weekendShiftRequests','shifts','staff'],function(){renderOT('pending');renderWeekendShiftTable();updateBadges();});
+    DB.refresh(['otRequests','weekendShiftRequests','shiftAdjustmentRequests','shifts','staff'],function(){renderOT('pending');renderWeekendShiftTable();renderShiftAdjustmentTable();updateBadges();});
   }
 else if(p==='timesheets'){
   DB.refresh(['staff','shifts','clockEvents','customHours','leaveRequests','sickDays','otRequests','settings'],function(){
@@ -3571,6 +3646,8 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
   const pendingWeekendBadge = pendingWeekendReq ? `<span class="chip chip-pending-req chip-small" style="margin-top:2px" title="Sent — awaiting the staff member's response">⏳ Weekend shift requested ${escHTML(pendingWeekendReq.start)}–${escHTML(pendingWeekendReq.end)}</span>` : '';
   const pendingOTReq = (DB.get('otRequests')||[]).find(o=>String(o.empId)===String(emp.id)&&o.date===ds&&(o.approved===null||o.approved===undefined));
   const pendingOTBadge = pendingOTReq ? `<span class="chip chip-pending-req chip-small" style="margin-top:2px" title="Sent — awaiting the staff member's response">⏳ OT requested ${escHTML(pendingOTReq.start)}–${escHTML(pendingOTReq.end)}</span>` : '';
+  const pendingShiftAdjReq = (DB.get('shiftAdjustmentRequests')||[]).find(r=>String(r.empId)===String(emp.id)&&r.date===ds&&r.status==='pending');
+  const pendingShiftAdjBadge = pendingShiftAdjReq ? `<span class="chip chip-pending-req chip-small" style="margin-top:2px" title="Staff requested a time change — needs your approval/denial in the OT Tracker page">⏳ Time change requested ${escHTML(pendingShiftAdjReq.requestedStart)}–${escHTML(pendingShiftAdjReq.requestedEnd)}</span>` : '';
 
   // Only show + button if no shifts exist for this day. Weekends also get a
   // second button to send a weekend shift request instead of drafting a
@@ -3581,7 +3658,7 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
   const addBtn=!hasShifts?`${pendingWeekendBadge}<div style="display:flex;gap:3px;justify-content:center;margin-top:2px">
     <button class="add-btn" onclick="openAddShiftForED('${emp.id}','${ds}')" title="Add shift directly (draft or publish)">+</button>
     ${isWeekendDay ? `<button class="add-btn" onclick="openWeekendShiftModal('${emp.id}','${ds}')" title="Request weekend shift (staff approves/declines)">🗓️</button>` : ''}
-  </div>`:pendingOTBadge;
+  </div>`:`${pendingOTBadge}${pendingShiftAdjBadge}`;
 
   return content+addBtn;
 }
@@ -6016,6 +6093,128 @@ async function deleteWeekendShiftRequest(id){
   const result = await DB.set('weekendShiftRequests', reqs);
   if (!result.ok) { alert('Could not cancel the request. Please try again.'); return; }
   renderWeekendShiftTable();
+}
+
+// ── SHIFT ADJUSTMENT REQUESTS ─────────────────────────────────────
+// Staff-initiated requests to change the start/end time of an already-
+// rostered shift (e.g. finishing 1hr early for an appointment, having
+// already organised cover with the team members affected). Submitted from
+// the Staff Portal against a specific shiftId; the manager approves (which
+// overwrites the shift's start/end directly on the roster, remembering the
+// original times so it can be reversed) or denies (reason required).
+function renderShiftAdjustmentTable(){
+  const tbody = document.getElementById('shiftadj-body');
+  if (!tbody) return;
+  const reqs = [...(DB.get('shiftAdjustmentRequests') || [])].sort((a,b) => (b.date||'').localeCompare(a.date||'') || (b.createdAt||'').localeCompare(a.createdAt||''));
+  const staff = DB.get('staff') || [];
+
+  tbody.innerHTML = reqs.length ? reqs.map(r => {
+    const emp = staff.find(s => s.id === r.empId);
+    const status = r.status === 'approved' ? '<span class="badge bg">Approved</span>'
+      : r.status === 'denied' ? '<span class="badge br">Denied</span>'
+      : '<span class="badge ba">Pending</span>';
+    return `<tr>
+      <td><strong>${emp ? emp.first + ' ' + emp.last : '?'}</strong></td>
+      <td>${FDS(r.date)}</td>
+      <td>${r.originalStart || '?'}–${r.originalEnd || '?'}</td>
+      <td><strong>${r.requestedStart || '?'}–${r.requestedEnd || '?'}</strong></td>
+      <td style="max-width:160px;white-space:normal">${r.reason || '—'}</td>
+      <td>${r.coverArranged ? '<span class="badge bg">✓ Yes</span>' : '<span class="badge bpk">Not confirmed</span>'}${r.coverNotes ? `<div style="font-size:10.5px;color:var(--t2);margin-top:2px">${r.coverNotes}</div>` : ''}</td>
+      <td>${status}${decisionAuditHTML(r)}</td>
+      <td style="max-width:160px;white-space:normal">${r.denialReason || '—'}</td>
+      <td style="white-space:nowrap">${r.status === 'pending' ? `
+        <button class="btn btn-sm btn-success" onclick="approveShiftAdjustment('${r.id}')">Approve</button>
+        <button class="btn btn-sm" onclick="denyShiftAdjustment('${r.id}')" style="color:var(--red);border-color:var(--red)">Deny</button>
+      ` : ''}</td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="9" style="text-align:center;color:var(--t2);padding:20px;font-size:12px">No shift adjustment requests yet.</td></tr>`;
+}
+
+async function approveShiftAdjustment(id){
+  try{
+    const reqs = DB.get('shiftAdjustmentRequests') || [];
+    const idx = reqs.findIndex(x => x.id === id);
+    if (idx < 0) return;
+    const r = reqs[idx];
+
+    const shifts = DB.get('shifts') || [];
+    const shift = shifts.find(s => s.id === r.shiftId);
+    if (!shift){
+      alert('Could not find the original shift on the roster — it may have been deleted or changed since this request was made. Please check the roster and adjust manually if needed.');
+      return;
+    }
+
+    shift.adjOriginalStart = shift.adjOriginalStart || shift.start;
+    shift.adjOriginalEnd = shift.adjOriginalEnd || shift.end;
+    shift.start = r.requestedStart;
+    shift.end = r.requestedEnd;
+    const shiftSaveResult = await upsertSupabaseRow('shifts', shift);
+    if (!shiftSaveResult.ok){
+      alert('Could not update the shift on the roster: ' + (shiftSaveResult.error?.message || 'unknown error') + '. Please retry the approval.');
+      return;
+    }
+    CACHE['rx3_shifts'] = shifts;
+
+    r.status = 'approved';
+    r.denialReason = '';
+    stampManagerDecision(r, 'approved');
+    const saveResult = await DB.set('shiftAdjustmentRequests', reqs);
+    if (!saveResult.ok){
+      alert('The shift was updated, but the request record could not be saved. Please refresh and check this request\'s status.');
+    }
+
+    renderShiftAdjustmentTable(); renderRoster(); renderDashboard();
+    notify('shift_adjustment_decision', {
+      sendToStaff: true,
+      ...staffPayload(r.empId),
+      decision: 'approved',
+      approved: true,
+      date: r.date,
+      originalStart: r.originalStart,
+      originalEnd: r.originalEnd,
+      start: r.requestedStart,
+      end: r.requestedEnd,
+      notes: r.reason || ''
+    });
+  } catch(err){
+    console.error('Approve shift adjustment failed:', err);
+    alert('Could not approve this shift adjustment request: ' + (err.message || err));
+  }
+}
+
+async function denyShiftAdjustment(id){
+  const reason = prompt('Please provide a reason for denying this shift adjustment request:');
+  if (reason === null) return;
+  if (!reason.trim()){ alert('A reason is required to deny a shift adjustment request.'); return; }
+
+  try{
+    const reqs = DB.get('shiftAdjustmentRequests') || [];
+    const idx = reqs.findIndex(x => x.id === id);
+    if (idx < 0) return;
+    const r = reqs[idx];
+    r.status = 'denied';
+    r.denialReason = reason.trim();
+    stampManagerDecision(r, 'denied');
+    const saveResult = await DB.set('shiftAdjustmentRequests', reqs);
+    if (!saveResult.ok){
+      alert('Could not deny this request — the change was not saved. Please try again.');
+      return;
+    }
+    renderShiftAdjustmentTable();
+    notify('shift_adjustment_decision', {
+      sendToStaff: true,
+      ...staffPayload(r.empId),
+      decision: 'denied',
+      approved: false,
+      date: r.date,
+      start: r.requestedStart,
+      end: r.requestedEnd,
+      notes: reason.trim()
+    });
+  } catch(err){
+    console.error('Deny shift adjustment failed:', err);
+    alert('Could not deny this shift adjustment request: ' + (err.message || err));
+  }
 }
 
 // ── WEEKEND SHIFT SUGGESTIONS ─────────────────────────────────────
@@ -11076,7 +11275,7 @@ function renderActiveManagerPage(){
   if (pid === 'dashboard') { renderDashboard(); updateBadges(); }
   else if (pid === 'roster') { renderRoster(); setTimeout(renderRosterAlerts, 100); }
   else if (pid === 'leave') { renderLeave(currentLeaveFilter); updateBadges(); }
-  else if (pid === 'ot') { renderOT(); updateBadges(); }
+  else if (pid === 'ot') { renderOT(); renderWeekendShiftTable(); renderShiftAdjustmentTable(); updateBadges(); }
   else if (pid === 'timesheets') renderTS();
   else if (pid === 'staff') renderStaff();
 }
@@ -11123,7 +11322,8 @@ const REALTIME_TABLE_TO_KEY = {
   uniform_orders: 'uniformOrders',
   staff_unavailability: 'staffUnavailability',
   public_holidays: 'publicHolidays',
-  weekend_shift_requests: 'weekendShiftRequests'
+  weekend_shift_requests: 'weekendShiftRequests',
+  shift_adjustment_requests: 'shiftAdjustmentRequests'
 };
 
 function queueRealtimeRefresh(key) {

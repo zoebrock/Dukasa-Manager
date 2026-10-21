@@ -1108,6 +1108,7 @@ function isPublishedShift(shift){
             <button class="btn btn-sm" onclick="filterOT('approved',this)">Approved</button>
           </div>
           <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" onclick="openOTSuggestionsModal()">💡 Suggest OT</button>
             <button class="btn btn-sm" onclick="openAddOTModal(null)">+ Add OT request</button>
             <button class="btn btn-primary btn-sm" onclick="openBulkOTModal()">+ Bulk add OT</button>
           </div>
@@ -1725,6 +1726,18 @@ function isPublishedShift(shift){
     <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
       <button class="btn" onclick="CM('m-al-forecast')">Cancel</button>
       <button class="btn btn-primary" id="al-forecast-send-btn" onclick="sendALForecastEmail()">Send forecast email</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="m-al-forecast-reminder">
+  <div class="modal" style="max-width:480px;text-align:center;padding:36px 32px">
+    <div style="font-size:42px;margin-bottom:10px">📧</div>
+    <h2 style="font-size:20px;margin-bottom:10px">Send this week's AL Forecast</h2>
+    <div style="font-size:13px;color:var(--t2);margin-bottom:22px;line-height:1.5">It's Monday morning — the Weekly Annual Leave Forecast for next week hasn't been sent yet. Helena, Antigone, Valerie and the Pharmacist inbox are expecting it.</div>
+    <div style="display:flex;gap:8px;justify-content:center">
+      <button class="btn" onclick="dismissALForecastReminder()">Remind me later</button>
+      <button class="btn btn-primary" onclick="CM('m-al-forecast-reminder');openALForecastModal()">Open AL Forecast</button>
     </div>
   </div>
 </div>
@@ -3284,6 +3297,7 @@ function launchManagerApp(){
     renderDashboard();
     updateBadges();
     checkForNewMCUploads();
+    checkALForecastReminder();
   });
 }
 function doLogin(){
@@ -6416,7 +6430,13 @@ async function sendALForecastEmail(){
         totalOnLeave
       }
     });
+
+    const settings = DB.get('settings') || {};
+    settings.lastALForecastSentWeek = weekStartDs;
+    await DB.set('settings', settings);
+
     CM('m-al-forecast');
+    CM('m-al-forecast-reminder');
     toast('Weekly AL Forecast sent.', 'success');
   } catch (err) {
     console.error('AL forecast email failed:', err);
@@ -6425,6 +6445,35 @@ async function sendALForecastEmail(){
     if (btn) { btn.disabled = false; btn.textContent = 'Send forecast email'; }
   }
 }
+
+// Prompts with a large pop-up every Monday from 8am onward if that week's
+// forecast (covering the week starting the Monday after) hasn't been sent
+// yet — checked on login and periodically while the app stays open, so it
+// isn't missed just because nobody happened to be on the Leave page.
+function checkALForecastReminder(){
+  const now = new Date();
+  if (now.getDay() !== 1 || now.getHours() < 8) return;
+
+  const upcomingWeekStart = defaultALForecastWeekStart_();
+  const settings = DB.get('settings') || {};
+  if (settings.lastALForecastSentWeek === upcomingWeekStart) return;
+
+  const modal = document.getElementById('m-al-forecast-reminder');
+  if (modal && !modal.classList.contains('open')) OM('m-al-forecast-reminder');
+}
+
+function dismissALForecastReminder(){
+  CM('m-al-forecast-reminder');
+  alForecastReminderDismissedAt = Date.now();
+}
+
+let alForecastReminderDismissedAt = 0;
+setInterval(function(){
+  // Don't re-pop within 15 minutes of a manual dismiss, so "Remind me
+  // later" actually means later rather than immediately again.
+  if (Date.now() - alForecastReminderDismissedAt < 15 * 60000) return;
+  if (typeof DB !== 'undefined' && DB.get('settings') !== undefined) checkALForecastReminder();
+}, 5 * 60000);
 
 // ── WEEKEND SHIFT SUGGESTIONS ─────────────────────────────────────
 // A Saturday/Sunday is treated as "high volume" if it's near the start or
@@ -6787,22 +6836,115 @@ function computeOTSuggestions(){
   }).sort((a,b)=>a.date.localeCompare(b.date)||a.emp.first.localeCompare(b.emp.first));
 }
 
+// Drafts OT requests ahead of time to cover approved Annual Leave — for
+// each upcoming day someone's on AL, checks whether another staff member of
+// the same role is already rostered across those hours; if not, suggests
+// OT for an available same-role colleague (not themselves on leave, not
+// already rostered that day, not already mid-way through another OT
+// request) covering the on-leave person's normal (or partial-leave) hours.
+function computeALCoverageOTSuggestions(){
+  const staff = DB.get('staff')||[];
+  const shifts = DB.get('shifts')||[];
+  const leaveReqs = (DB.get('leaveRequests')||[]).map(normaliseLeaveRequestRow);
+  const otAll = DB.get('otRequests')||[];
+  const today = FD(new Date());
+  const lookaheadEnd = FD(new Date(Date.now()+14*86400000));
+
+  const busyEmpIds = new Set(
+    otAll.filter(o => o.approved === true || o.approved === null || o.approved === undefined)
+         .map(o => String(o.empId))
+  );
+  const existingOTKey = new Set(otAll.map(o=>o.empId+'|'+o.date));
+
+  const upcomingLeave = leaveReqs.filter(l=>
+    l.type==='Annual Leave' && l.status==='approved' && l.from && l.to && l.to>=today && l.from<=lookaheadEnd
+  );
+
+  const suggestions = [];
+
+  upcomingLeave.forEach(l=>{
+    const onLeaveEmp = staff.find(s=>s.id===l.empId);
+    if(!onLeaveEmp) return;
+
+    dateRangeInclusiveDates_(l.from, l.to).filter(ds=>ds>=today && ds<=lookaheadEnd).forEach(ds=>{
+      if(!isContractedWorkDay_(onLeaveEmp, ds)) return;
+
+      const isPartial = l.requestKind==='partial_day' && l.partialStart && l.partialEnd;
+      const { start: normalStart, end: normalEnd } = getContractedStartEnd_(onLeaveEmp, ds);
+      const coverStart = isPartial ? l.partialStart : normalStart;
+      const coverEnd = isPartial ? l.partialEnd : normalEnd;
+      if(!coverStart || !coverEnd || coverEnd<=coverStart) return;
+
+      // Already covered if another same-role staffer is rostered across the
+      // whole window being vacated.
+      const dayShifts = shifts.filter(s=>s.date===ds && s.published && !(s.entryType==='leave'||s.entry_type==='leave') && String(s.empId)!==String(l.empId));
+      const roleCovered = dayShifts.some(s=>{
+        const e = staff.find(st=>st.id===s.empId);
+        return e && e.role===onLeaveEmp.role && s.start<=coverStart && s.end>=coverEnd;
+      });
+      if(roleCovered) return;
+
+      if(existingOTKey.has(onLeaveEmp.id+'|'+ds)) return; // shouldn't normally hit, guards duplicate keying
+
+      const candidates = staff.filter(s=>{
+        if(String(s.id)===String(l.empId)) return false;
+        if(s.role !== onLeaveEmp.role) return false;
+        if(busyEmpIds.has(String(s.id))) return false;
+        if(existingOTKey.has(s.id+'|'+ds)) return false;
+        const theyAreOnLeave = leaveReqs.some(ol=>
+          String(ol.empId)===String(s.id) && ol.status==='approved' && ol.from<=ds && ol.to>=ds && ol.requestKind!=='partial_day'
+        );
+        if(theyAreOnLeave) return false;
+        const alreadyShift = shifts.some(sh=>String(sh.empId)===String(s.id) && sh.date===ds && sh.published && !(sh.entryType==='leave'||sh.entry_type==='leave'));
+        if(alreadyShift) return false;
+        return true;
+      }).sort((a,b)=>a.first.localeCompare(b.first));
+
+      if(!candidates.length) return;
+      const candidate = candidates[0];
+
+      suggestions.push({
+        empId: candidate.id, date: ds, emp: candidate,
+        segments: [{ start: coverStart, end: coverEnd }],
+        reason: `Covering ${onLeaveEmp.first} ${onLeaveEmp.last} (${onLeaveEmp.role}) — on approved annual leave${isPartial?' (partial day)':''}`
+      });
+    });
+  });
+
+  const seen=new Set();
+  return suggestions.filter(s=>{
+    const key=s.empId+'|'+s.date;
+    if(seen.has(key)) return false;
+    seen.add(key); return true;
+  }).sort((a,b)=>a.date.localeCompare(b.date)||a.emp.first.localeCompare(b.emp.first));
+}
+
 function openOTSuggestionsModal(){
-  const suggestions = computeOTSuggestions();
+  // AL-coverage suggestions first — covering someone's approved leave is
+  // more time-sensitive than a historical month-start/public-holiday
+  // pattern, so those surface at the top. De-duped by empId+date across
+  // both sources in case a pattern-based and coverage-based suggestion
+  // land on the same person/day.
+  const alCoverage = computeALCoverageOTSuggestions().map(s=>({...s, isALCoverage:true}));
+  const patternBased = computeOTSuggestions();
+  const seenKeys = new Set(alCoverage.map(s=>s.empId+'|'+s.date));
+  const suggestions = [...alCoverage, ...patternBased.filter(s=>!seenKeys.has(s.empId+'|'+s.date))];
+
   const listEl = document.getElementById('ot-suggestions-list');
   const createBtn = document.getElementById('ot-suggestions-create-btn');
   if(!suggestions.length){
-    listEl.innerHTML = '<p style="font-size:12px;color:var(--t2)">No consistent OT pattern found yet for the upcoming public holiday(s) or month-start dates — add OT manually as usual, and suggestions will start appearing here once there\'s history to learn from.</p>';
+    listEl.innerHTML = '<p style="font-size:12px;color:var(--t2)">No coverage gaps from upcoming annual leave, and no consistent OT pattern found yet for the upcoming public holiday(s) or month-start dates — add OT manually as usual, and suggestions will start appearing here once there\'s history to learn from.</p>';
     if(createBtn) createBtn.style.display='none';
   } else {
     if(createBtn){ createBtn.style.display='inline-flex'; createBtn.disabled=false; createBtn.textContent='Create selected requests'; }
     listEl.innerHTML = suggestions.map(s=>{
       const dataStr = JSON.stringify({empId:s.empId,date:s.date,segments:s.segments,reason:s.reason}).replace(/"/g,'&quot;');
       const timesLabel = s.segments.map(seg=>`${escHTML(seg.start)}–${escHTML(seg.end)}`).join(' and ');
+      const alBadge = s.isALCoverage ? '<span class="badge bpk" style="margin-left:6px">AL cover</span>' : '';
       return `<label style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--rsm);cursor:pointer">
         <input type="checkbox" class="ot-suggestion-cb" checked data-suggestion="${dataStr}" style="margin-top:2px;width:15px;height:15px;flex-shrink:0">
         <div style="flex:1">
-          <div style="font-weight:600;font-size:13px">${escHTML(s.emp.first+' '+s.emp.last)} — ${FDS(s.date)}</div>
+          <div style="font-weight:600;font-size:13px">${escHTML(s.emp.first+' '+s.emp.last)} — ${FDS(s.date)}${alBadge}</div>
           <div style="font-size:11px;color:var(--t2);margin-top:1px">${escHTML(s.reason)}</div>
           <div style="font-size:11px;color:var(--t3);margin-top:1px">Suggested OT time${s.segments.length>1?'s':''}: ${timesLabel}</div>
         </div>

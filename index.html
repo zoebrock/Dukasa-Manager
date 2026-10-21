@@ -1092,53 +1092,66 @@ function isPublishedShift(shift){
     <!-- OT TRACKER -->
     <div class="pg" id="pg-ot">
       <div class="ph">
-        <h2>OT Tracker</h2>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-sm" onclick="filterOT('all',this)">All</button>
-          <button class="btn btn-sm active-filter" id="ot-filter-pending" onclick="filterOT('pending',this)">Pending</button>
-          <button class="btn btn-sm" onclick="filterOT('approved',this)">Approved</button>
-          <button class="btn btn-sm" onclick="openAddOTModal(null)">+ Add OT request</button>
-          <button class="btn btn-primary btn-sm" onclick="openBulkOTModal()">+ Bulk add OT</button>
-        </div>
+        <h2>Requests</h2>
       </div>
-      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
-        <table class="tbl" id="ot-tbl">
-          <thead><tr>
-            <th>Staff member</th><th>Date</th><th>OT start</th><th>OT end</th><th>Duration</th>
-            <th>Reason / justification</th><th>Task</th><th>Availability</th><th>Requested by</th><th>Status</th><th>Actions</th>
-          </tr></thead>
-          <tbody id="ot-body"></tbody>
-        </table>
+      <div class="tabs" id="ot-tabs">
+        <div class="tab active" onclick="selectOTTab('overtime',this)">Overtime <span id="ot-tab-badge" class="badge br" style="display:none;margin-left:3px"></span></div>
+        <div class="tab" onclick="selectOTTab('weekend',this)">Weekend Shifts <span id="wknd-tab-badge" class="badge br" style="display:none;margin-left:3px"></span></div>
+        <div class="tab" onclick="selectOTTab('shiftadj',this)">Shift Adjustments <span id="shiftadj-tab-badge" class="badge br" style="display:none;margin-left:3px"></span></div>
       </div>
 
-      <div class="ph" style="margin-top:28px">
-        <h2>Weekend Shift Requests</h2>
-        <div style="display:flex;gap:6px">
-          <button class="btn btn-sm" onclick="openWeekendShiftSuggestionsModal()">💡 Suggest weekend shifts</button>
-          <button class="btn btn-primary btn-sm" onclick="openWeekendShiftModal()">+ Request weekend shift</button>
+      <div id="ot-section-overtime" class="ot-tab-section">
+        <div class="ph" style="margin-top:14px">
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" onclick="filterOT('all',this)">All</button>
+            <button class="btn btn-sm active-filter" id="ot-filter-pending" onclick="filterOT('pending',this)">Pending</button>
+            <button class="btn btn-sm" onclick="filterOT('approved',this)">Approved</button>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" onclick="openAddOTModal(null)">+ Add OT request</button>
+            <button class="btn btn-primary btn-sm" onclick="openBulkOTModal()">+ Bulk add OT</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
+          <table class="tbl" id="ot-tbl">
+            <thead><tr>
+              <th>Staff member</th><th>Date</th><th>OT start</th><th>OT end</th><th>Duration</th>
+              <th>Reason / justification</th><th>Task</th><th>Availability</th><th>Requested by</th><th>Status</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="ot-body"></tbody>
+          </table>
         </div>
       </div>
-      <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Proposed to a staff member for them to approve or decline (with a reason) — much like an OT request, but for a shift on a day they're not normally rostered. The time must fall within the hours a Pharmacist is rostered that day.</div>
-      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
-        <table class="tbl" id="wknd-tbl">
-          <thead><tr>
-            <th>Staff member</th><th>Date</th><th>Start</th><th>End</th><th>Reason</th><th>Status</th><th>Decline reason</th><th>Actions</th>
-          </tr></thead>
-          <tbody id="wknd-body"></tbody>
-        </table>
+
+      <div id="ot-section-weekend" class="ot-tab-section" style="display:none">
+        <div class="ph" style="margin-top:14px">
+          <div></div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm" onclick="openWeekendShiftSuggestionsModal()">💡 Suggest weekend shifts</button>
+            <button class="btn btn-primary btn-sm" onclick="openWeekendShiftModal()">+ Request weekend shift</button>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Proposed to a staff member for them to approve or decline (with a reason) — much like an OT request, but for a shift on a day they're not normally rostered. The time must fall within the hours a Pharmacist is rostered that day.</div>
+        <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
+          <table class="tbl" id="wknd-tbl">
+            <thead><tr>
+              <th>Staff member</th><th>Date</th><th>Start</th><th>End</th><th>Reason</th><th>Status</th><th>Decline reason</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="wknd-body"></tbody>
+          </table>
+        </div>
       </div>
 
-      <div class="ph" style="margin-top:28px">
-        <h2>Shift Adjustment Requests</h2>
-      </div>
-      <div style="font-size:11px;color:var(--t3);margin-bottom:10px">Requests from staff to change the start/end time of an already-rostered shift (e.g. finishing earlier for an appointment), submitted from the Staff Portal once they've organised cover with the team members affected. Approving overwrites the shift's times on the roster; denying requires a reason.</div>
-      <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
-        <table class="tbl" id="shiftadj-tbl">
-          <thead><tr>
-            <th>Staff member</th><th>Date</th><th>Current time</th><th>Requested time</th><th>Reason</th><th>Cover arranged</th><th>Status</th><th>Denial reason</th><th>Actions</th>
-          </tr></thead>
-          <tbody id="shiftadj-body"></tbody>
-        </table>
+      <div id="ot-section-shiftadj" class="ot-tab-section" style="display:none">
+        <div style="font-size:11px;color:var(--t3);margin:14px 0 10px">Requests from staff to change the start/end time of an already-rostered shift (e.g. finishing earlier for an appointment), submitted from the Staff Portal once they've organised cover with the team members affected. Approving overwrites the shift's times on the roster; denying requires a reason.</div>
+        <div style="overflow-x:auto;border:1px solid var(--border);border-radius:var(--r)">
+          <table class="tbl" id="shiftadj-tbl">
+            <thead><tr>
+              <th>Staff member</th><th>Date</th><th>Current time</th><th>Requested time</th><th>Reason</th><th>Cover arranged</th><th>Status</th><th>Denial reason</th><th>Actions</th>
+            </tr></thead>
+            <tbody id="shiftadj-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -3218,6 +3231,12 @@ function updateBadges(){
   const ob=document.getElementById('ot-badge');
   const otAndWeekendPending=pendingOT.length+pendingWeekend.length+pendingShiftAdj.length;
   if(ob){if(otAndWeekendPending){ob.textContent=otAndWeekendPending;ob.style.display='inline-flex';}else ob.style.display='none';}
+  const otTb=document.getElementById('ot-tab-badge');
+  if(otTb){if(pendingOT.length){otTb.textContent=pendingOT.length;otTb.style.display='inline-flex';}else otTb.style.display='none';}
+  const wkndTb=document.getElementById('wknd-tab-badge');
+  if(wkndTb){if(pendingWeekend.length){wkndTb.textContent=pendingWeekend.length;wkndTb.style.display='inline-flex';}else wkndTb.style.display='none';}
+  const shiftadjTb=document.getElementById('shiftadj-tab-badge');
+  if(shiftadjTb){if(pendingShiftAdj.length){shiftadjTb.textContent=pendingShiftAdj.length;shiftadjTb.style.display='inline-flex';}else shiftadjTb.style.display='none';}
   const pcb=document.getElementById('pc-badge');
   if(pcb){if(pendingLR.length){pcb.textContent=pendingLR.length;pcb.style.display='inline-flex';}else pcb.style.display='none';}
   const dp=document.getElementById('d-pending');
@@ -8542,6 +8561,14 @@ function renderLeave(filter){
   document.getElementById('leave-list').innerHTML=html||'<p style="color:var(--t2);font-size:12px;padding-top:4px">No records.</p>';
 }
 function filterLeave(f,el){document.querySelectorAll('#pg-leave .tab').forEach(t=>t.classList.remove('active'));el.classList.add('active');renderLeave(f);}
+
+function selectOTTab(tab,el){
+  document.querySelectorAll('#ot-tabs .tab').forEach(t=>t.classList.remove('active'));
+  if(el) el.classList.add('active');
+  document.querySelectorAll('.ot-tab-section').forEach(s=>s.style.display='none');
+  const section=document.getElementById('ot-section-'+tab);
+  if(section) section.style.display='';
+}
 function openLeaveReview(id){
   reviewingLeaveId=id;
   const leaveReqs=(DB.get('leaveRequests')||[]).map(normaliseLeaveRequestRow);const staff=DB.get('staff')||[];const shifts=DB.get('shifts')||[];

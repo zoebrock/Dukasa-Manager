@@ -1548,9 +1548,12 @@ function isPublishedShift(shift){
         <div class="fr"><label>4-digit PIN</label><input type="number" id="sf-pin" maxlength="4" placeholder="1234"></div>
       </div>
       <div class="fg">
-
-
+        <div class="fr"><label>Team <span style="font-weight:400;color:var(--t3)">(optional — narrows who covers whom)</span></label>
+          <input type="text" id="sf-team" list="sf-team-options" placeholder="e.g. Dispensary - Private, Dispensary - Fulfillment">
+          <datalist id="sf-team-options"></datalist>
+        </div>
       </div>
+      <div style="font-size:11px;color:var(--t3);margin-bottom:10px">When set, OT coverage suggestions only match staff on the <strong>same team</strong> (e.g. Fulfillment covers Fulfillment, Private covers Private) rather than anyone sharing the same role. Leave blank for roles where any same-role colleague can cover.</div>
     </div>
     <div id="staff-tab-availability" style="display:none">
       <p style="font-size:11px;color:var(--t2);margin-bottom:8px">Toggle which days this staff member is generally available.</p>
@@ -2350,7 +2353,8 @@ function mapFromSupabase(key, rows) {
       contractPerDay: r.contract_per_day,
       contractedHrsPerWeek: r.contracted_hrs_per_week,
       autoShift: r.auto_shift,
-      secondaryRole: r.secondary_role ?? r.secondaryRole ?? null
+      secondaryRole: r.secondary_role ?? r.secondaryRole ?? null,
+      team: r.team ?? null
     }));
   }
 
@@ -6836,12 +6840,54 @@ function computeOTSuggestions(){
   }).sort((a,b)=>a.date.localeCompare(b.date)||a.emp.first.localeCompare(b.emp.first));
 }
 
-// Drafts OT requests ahead of time to cover approved Annual Leave — for
-// each upcoming day someone's on AL, checks whether another staff member of
-// the same role is already rostered across those hours; if not, suggests
-// OT for an available same-role colleague (not themselves on leave, not
-// already rostered that day, not already mid-way through another OT
-// request) covering the on-leave person's normal (or partial-leave) hours.
+// Who's eligible to cover whom. When a staff member has a `team` set (e.g.
+// "Dispensary - Private" vs "Dispensary - Fulfillment"), coverage is scoped
+// to that exact team, NOT just the shared role — two people with the same
+// job title but different teams don't do each other's work. Without a team
+// set, falls back to matching on primary or secondary role, so a
+// Dispensary + Logistics cross-trained staffer can still be suggested.
+function eligibleCoverCandidates_(onLeaveEmp, staff){
+  if(onLeaveEmp.team){
+    return staff.filter(s=>String(s.id)!==String(onLeaveEmp.id) && s.team===onLeaveEmp.team);
+  }
+  return staff.filter(s=>{
+    if(String(s.id)===String(onLeaveEmp.id)) return false;
+    return s.role===onLeaveEmp.role || s.secondaryRole===onLeaveEmp.role;
+  });
+}
+
+// Learns "who covers whom" from history: every time an OT request was
+// approved on a date where someone else had approved Annual Leave, counts
+// that as one instance of the OT person covering the on-leave person. Used
+// to rank candidates so a repeat pairing (e.g. Sarah always covers
+// Antigone) is suggested ahead of an equally-eligible colleague with no
+// track record of covering that specific person.
+function analyzeCoverageHistory_(){
+  const otAll = (DB.get('otRequests')||[]).filter(o=>o.approved===true);
+  const leaveReqs = (DB.get('leaveRequests')||[]).map(normaliseLeaveRequestRow)
+    .filter(l=>l.type==='Annual Leave' && l.status==='approved' && l.from && l.to);
+
+  const affinity = {}; // { [onLeaveEmpId]: { [coveringEmpId]: count } }
+  otAll.forEach(o=>{
+    leaveReqs.forEach(l=>{
+      if(String(l.empId)===String(o.empId)) return;
+      if(l.from<=o.date && l.to>=o.date){
+        if(!affinity[l.empId]) affinity[l.empId]={};
+        affinity[l.empId][o.empId] = (affinity[l.empId][o.empId]||0)+1;
+      }
+    });
+  });
+  return affinity;
+}
+
+// Drafts OT requests ahead of time to cover approved Annual Leave. For each
+// upcoming day someone's on AL: scopes coverage to their team (if set) or
+// role/secondary-role otherwise; prefers a colleague already rostered that
+// day and suggests OT only for the gap outside their own shift (the usual
+// case — e.g. an 8am-9am opening gap for someone whose own shift starts at
+// 9) rather than a full extra shift; only falls back to a free colleague
+// for the whole window if nobody eligible is already working that day.
+// Candidates are ranked by past history of covering that specific person.
 function computeALCoverageOTSuggestions(){
   const staff = DB.get('staff')||[];
   const shifts = DB.get('shifts')||[];
@@ -6849,6 +6895,7 @@ function computeALCoverageOTSuggestions(){
   const otAll = DB.get('otRequests')||[];
   const today = FD(new Date());
   const lookaheadEnd = FD(new Date(Date.now()+14*86400000));
+  const affinity = analyzeCoverageHistory_();
 
   const busyEmpIds = new Set(
     otAll.filter(o => o.approved === true || o.approved === null || o.approved === undefined)
@@ -6875,38 +6922,53 @@ function computeALCoverageOTSuggestions(){
       const coverEnd = isPartial ? l.partialEnd : normalEnd;
       if(!coverStart || !coverEnd || coverEnd<=coverStart) return;
 
-      // Already covered if another same-role staffer is rostered across the
-      // whole window being vacated.
-      const dayShifts = shifts.filter(s=>s.date===ds && s.published && !(s.entryType==='leave'||s.entry_type==='leave') && String(s.empId)!==String(l.empId));
-      const roleCovered = dayShifts.some(s=>{
-        const e = staff.find(st=>st.id===s.empId);
-        return e && e.role===onLeaveEmp.role && s.start<=coverStart && s.end>=coverEnd;
-      });
-      if(roleCovered) return;
-
-      if(existingOTKey.has(onLeaveEmp.id+'|'+ds)) return; // shouldn't normally hit, guards duplicate keying
-
-      const candidates = staff.filter(s=>{
-        if(String(s.id)===String(l.empId)) return false;
-        if(s.role !== onLeaveEmp.role) return false;
+      const eligible = eligibleCoverCandidates_(onLeaveEmp, staff).filter(s=>{
         if(busyEmpIds.has(String(s.id))) return false;
         if(existingOTKey.has(s.id+'|'+ds)) return false;
         const theyAreOnLeave = leaveReqs.some(ol=>
           String(ol.empId)===String(s.id) && ol.status==='approved' && ol.from<=ds && ol.to>=ds && ol.requestKind!=='partial_day'
         );
-        if(theyAreOnLeave) return false;
-        const alreadyShift = shifts.some(sh=>String(sh.empId)===String(s.id) && sh.date===ds && sh.published && !(sh.entryType==='leave'||sh.entry_type==='leave'));
-        if(alreadyShift) return false;
-        return true;
-      }).sort((a,b)=>a.first.localeCompare(b.first));
+        return !theyAreOnLeave;
+      });
+      if(!eligible.length) return;
 
-      if(!candidates.length) return;
-      const candidate = candidates[0];
+      const dayShifts = shifts.filter(s=>s.date===ds && s.published && !(s.entryType==='leave'||s.entry_type==='leave'));
+      const rosteredEligible = eligible
+        .map(s=>({ emp:s, shift: dayShifts.find(sh=>String(sh.empId)===String(s.id)) }))
+        .filter(x=>x.shift);
+      const freeEligible = eligible.filter(s=>!dayShifts.some(sh=>String(sh.empId)===String(s.id)));
+
+      const affinityScore = empId => (affinity[onLeaveEmp.id] && affinity[onLeaveEmp.id][empId]) || 0;
+
+      let chosen=null, segments=null, historyNote='';
+
+      if(rosteredEligible.length){
+        // Already fully covered by an eligible colleague's own shift — no OT needed.
+        if(rosteredEligible.some(x=>x.shift.start<=coverStart && x.shift.end>=coverEnd)) return;
+
+        rosteredEligible.sort((a,b)=>affinityScore(b.emp.id)-affinityScore(a.emp.id) || a.emp.first.localeCompare(b.emp.first));
+        const pick = rosteredEligible[0];
+        const segs = [];
+        if(pick.shift.start>coverStart) segs.push({ start: coverStart, end: pick.shift.start });
+        if(pick.shift.end<coverEnd) segs.push({ start: pick.shift.end, end: coverEnd });
+        if(!segs.length) return;
+        chosen = pick.emp; segments = segs;
+        historyNote = affinityScore(chosen.id)>0 ? ` — has covered them before (${affinityScore(chosen.id)}×)` : '';
+      } else if(freeEligible.length){
+        freeEligible.sort((a,b)=>affinityScore(b.id)-affinityScore(a.id) || a.first.localeCompare(b.first));
+        chosen = freeEligible[0];
+        segments = [{ start: coverStart, end: coverEnd }];
+        historyNote = affinityScore(chosen.id)>0
+          ? ` — has covered them before (${affinityScore(chosen.id)}×)`
+          : ' — no one from their team is already rostered that day, confirm this full-day cover is actually needed';
+      } else {
+        return;
+      }
 
       suggestions.push({
-        empId: candidate.id, date: ds, emp: candidate,
-        segments: [{ start: coverStart, end: coverEnd }],
-        reason: `Covering ${onLeaveEmp.first} ${onLeaveEmp.last} (${onLeaveEmp.role}) — on approved annual leave${isPartial?' (partial day)':''}`
+        empId: chosen.id, date: ds, emp: chosen,
+        segments,
+        reason: `Covering ${onLeaveEmp.first} ${onLeaveEmp.last}${onLeaveEmp.team?' ('+onLeaveEmp.team+')':' ('+onLeaveEmp.role+')'} — on approved annual leave${isPartial?' (partial day)':''}${historyNote}`
       });
     });
   });
@@ -7510,6 +7572,7 @@ function staffInfoHTML(emp){
   return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-top:4px">
   <div><span style="color:var(--t2)">Primary role:</span> ${roleBadgeHTML(emp.role)}</div>
   <div><span style="color:var(--t2)">Secondary role:</span> ${emp.secondaryRole?roleBadgeHTML(emp.secondaryRole):'—'}</div>
+  <div><span style="color:var(--t2)">Team:</span> ${emp.team?escHTML(emp.team):'—'}</div>
   <div><span style="color:var(--t2)">Email:</span> ${emp.email||'—'}</div>
   <div><span style="color:var(--t2)">Phone:</span> ${emp.phone||'—'}</div>
   <div><span style="color:var(--t2)">DOB:</span> ${emp.dob?new Date(emp.dob+'T00:00:00').toLocaleDateString('en-AU'):'—'}</div>
@@ -7902,13 +7965,21 @@ function populateRoleSelects(primaryValue, secondaryValue){
     secondaryEl.value = secondaryValue || '';
   }
 }
-function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';populateRoleSelects();const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildModalBreakSchedule({});buildContractDaysTable(null);renderStaffUnavailabilityList(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
+function populateTeamOptions_(){
+  const dl=document.getElementById('sf-team-options');
+  if(!dl)return;
+  const teams=[...new Set((DB.get('staff')||[]).map(s=>s.team).filter(Boolean))].sort();
+  dl.innerHTML=teams.map(t=>`<option value="${escHTML(t)}"></option>`).join('');
+}
+function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes','sf-team'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';populateRoleSelects();populateTeamOptions_();const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildModalBreakSchedule({});buildContractDaysTable(null);renderStaffUnavailabilityList(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
 function editStaff(id){
   editingStaffId=id;const staff=DB.get('staff')||[];const emp=staff.find(s=>s.id===id);if(!emp)return;
   document.getElementById('staff-modal-title').textContent='Edit: '+emp.first+' '+emp.last;
   document.getElementById('sf-first').value=emp.first;document.getElementById('sf-last').value=emp.last;
   document.getElementById('sf-email').value=emp.email||'';document.getElementById('sf-phone').value=emp.phone||'';
   document.getElementById('sf-dob').value=emp.dob||'';populateRoleSelects(emp.role, emp.secondaryRole);
+  populateTeamOptions_();
+  document.getElementById('sf-team').value=emp.team||'';
   document.getElementById('sf-pin').value=emp.pin||'';
   document.getElementById('sf-avail-notes').value=emp.availNotes||'';
   const tog=document.getElementById('tog-auto-shift');if(tog) tog.classList.toggle('on',!!emp.autoShift);
@@ -8140,6 +8211,7 @@ function saveStaff(){
     dob:document.getElementById('sf-dob').value,
     role:document.getElementById('sf-role').value,
     secondaryRole:document.getElementById('sf-role2')?.value || null,
+    team:document.getElementById('sf-team')?.value.trim() || null,
     pin:String(document.getElementById('sf-pin').value).trim(),
     availNotes:document.getElementById('sf-avail-notes').value,
     availability:avail,

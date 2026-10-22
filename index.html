@@ -1106,6 +1106,7 @@ function isPublishedShift(shift){
             <button class="btn btn-sm" onclick="filterOT('all',this)">All</button>
             <button class="btn btn-sm active-filter" id="ot-filter-pending" onclick="filterOT('pending',this)">Pending</button>
             <button class="btn btn-sm" onclick="filterOT('approved',this)">Approved</button>
+            <button class="btn btn-sm" onclick="filterOT('declined',this)">Declined</button>
           </div>
           <div style="display:flex;gap:6px">
             <button class="btn btn-sm" onclick="openOTSuggestionsModal()">💡 Suggest OT</button>
@@ -5616,7 +5617,12 @@ function renderOT(filter){
   reconcileManagerOTDecisions();
   otFilter=filter||otFilter;
   const otReqs=DB.get('otRequests')||[];const staff=DB.get('staff')||[];
-  const filtered=(otFilter==='all'?otReqs:otReqs.filter(o=>(o.approved===null||o.approved===undefined)&&otFilter==='pending'?true:o.approved===true&&otFilter==='approved'?true:false))
+  const filtered=(otFilter==='all'?otReqs:otReqs.filter(o=>{
+      if(otFilter==='pending') return o.approved===null||o.approved===undefined;
+      if(otFilter==='approved') return o.approved===true;
+      if(otFilter==='declined') return o.approved===false;
+      return false;
+    }))
     .sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.submitted||'').localeCompare(a.submitted||''));
   const pending=otReqs.filter(o=>o.approved===null||o.approved===undefined);
   const ob=document.getElementById('ot-badge');

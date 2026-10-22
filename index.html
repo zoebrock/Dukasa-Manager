@@ -2487,7 +2487,9 @@ if (key === 'otRequests') {
     createdBy: r.createdBy || r.created_by,
     createdByName: r.createdByName || r.created_by_name,
     createdByRole: r.createdByRole || r.created_by_role,
-    lastNudgedAt: r.lastNudgedAt || r.last_nudged_at || null
+    lastNudgedAt: r.lastNudgedAt || r.last_nudged_at || null,
+    staffDenialReason: r.staffDenialReason ?? r.staff_denial_reason ?? '',
+    denialReason: r.denialReason ?? r.denial_reason ?? ''
   }));
 }
 
@@ -2771,11 +2773,15 @@ if (key === 'otRequests') {
   x.staff_read = x.staffRead;
   x.avail_confirmed = x.availConfirmed;
   x.staff_confirmed = x.staffConfirmed;
+  x.staff_denial_reason = x.staffDenialReason || null;
+  x.denial_reason = x.denialReason || null;
 
   delete x.requestedBy;
   delete x.staffRead;
   delete x.availConfirmed;
   delete x.staffConfirmed;
+  delete x.staffDenialReason;
+  delete x.denialReason;
 }
 
 // These fields are added to the browser-side normalised objects for leave
@@ -3192,15 +3198,20 @@ function renderDashboard(){
   if(dLeaveList) dLeaveList.innerHTML=allLeave.length?allLeave.slice(0,8).map(l=>{
     const emp=staff.find(s=>s.id===l.empId);
     const bc={pending:'ba',approved:'bg',declined:'br'}[l.status]||'ba';
-    return`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><span>${emp?emp.first+' '+emp.last:'?'} — ${l.type}</span><div style="display:flex;gap:4px;align-items:center"><span style="color:var(--t2)">${FDS(l.from)}</span><span class="badge ${bc}">${l.status}</span>${decisionAuditHTML(l)}${l.status==='pending'?`<button class="btn btn-sm" onclick="SP('leave')">Review</button>`:''}</div></div>`;
+    const reasonLine=(l.status==='declined'&&l.denialReason)?`<div style="font-size:10px;color:var(--rd);margin-top:1px">${escHTML(l.denialReason)}</div>`:'';
+    return`<div style="padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><div style="display:flex;align-items:center;justify-content:space-between"><span>${emp?emp.first+' '+emp.last:'?'} — ${l.type}</span><div style="display:flex;gap:4px;align-items:center"><span style="color:var(--t2)">${FDS(l.from)}</span><span class="badge ${bc}">${l.status}</span>${decisionAuditHTML(l)}${l.status==='pending'?`<button class="btn btn-sm" onclick="SP('leave')">Review</button>`:''}</div></div>${reasonLine}</div>`;
   }).join(''):'<p style="color:var(--t2);font-size:11px">No leave requests.</p>';
 
   // OT requests list
   const dOTList=document.getElementById('d-ot-list');
   if(dOTList) dOTList.innerHTML=otReqs.length?otReqs.slice(-8).reverse().map(o=>{
     const emp=staff.find(s=>s.id===o.empId);
-    const status=o.approved===true?'<span class="badge bg">Approved</span>'+decisionAuditHTML(o):o.approved===false?'<span class="badge br">Denied</span>'+decisionAuditHTML(o):'<span class="badge ba">Pending</span>';
-    return`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><span>${emp?emp.first+' '+emp.last:'?'} · ${FDS(o.date)} ${o.start}–${o.end}</span><div style="display:flex;gap:4px;align-items:center">${status}${o.approved===null||o.approved===undefined?`<button class="btn btn-sm" onclick="SP('ot')">Review</button>`:''}</div></div>`;
+    const declinedByStaff = o.approved===false && o.staffConfirmed===false;
+    const status=o.approved===true?'<span class="badge bg">Approved</span>'+decisionAuditHTML(o)
+      :o.approved===false?(declinedByStaff?'<span class="badge br">Declined by staff</span>':'<span class="badge br">Denied by manager</span>'+decisionAuditHTML(o))
+      :'<span class="badge ba">Pending</span>';
+    const reasonLine = o.approved===false ? `<div style="font-size:10px;color:var(--rd);margin-top:1px">${escHTML((declinedByStaff?o.staffDenialReason:o.denialReason)||'—')}</div>` : '';
+    return`<div style="padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><div style="display:flex;align-items:center;justify-content:space-between"><span>${emp?emp.first+' '+emp.last:'?'} · ${FDS(o.date)} ${o.start}–${o.end}</span><div style="display:flex;gap:4px;align-items:center">${status}${o.approved===null||o.approved===undefined?`<button class="btn btn-sm" onclick="SP('ot')">Review</button>`:''}</div></div>${reasonLine}</div>`;
   }).join(''):'<p style="color:var(--t2);font-size:11px">No OT requests.</p>';
 
   // Today's roster list
@@ -5614,7 +5625,13 @@ function renderOT(filter){
     const emp=staff.find(s=>s.id===o.empId);
     const dur=o.start&&o.end?FMINS(MD(o.start,o.end)):'—';
     const waitingForManagerStaff = o.requestedBy === 'manager' && !o.availConfirmed && o.staffConfirmed !== true;
-    const status=o.approved===true?'<span class="badge bg">Approved</span>'+decisionAuditHTML(o):o.approved===false?'<span class="badge br">Denied</span>'+decisionAuditHTML(o):'<span class="badge ba">Pending</span>';
+    const declinedByStaff = o.approved===false && o.staffConfirmed===false;
+    const status=o.approved===true?'<span class="badge bg">Approved</span>'+decisionAuditHTML(o)
+      :o.approved===false?(declinedByStaff?'<span class="badge br">Declined by staff</span>':'<span class="badge br">Denied by manager</span>'+decisionAuditHTML(o))
+      :'<span class="badge ba">Pending</span>';
+    const denialReasonHTML = o.approved===false
+      ? `<div style="font-size:11px;color:var(--rd);margin-top:3px;max-width:160px;white-space:normal">${escHTML((declinedByStaff?o.staffDenialReason:o.denialReason)||'—')}</div>`
+      : '';
     const rowCls=o.approved===true?'ot-row-approved':o.approved===false?'ot-row-denied':'ot-row-pending';
     const availability = o.staffConfirmed===true
       ? '<span class="badge bg">Staff confirmed</span>'
@@ -5635,7 +5652,7 @@ function renderOT(filter){
       <td style="max-width:120px;white-space:normal">${o.task||'—'}</td>
       <td>${availability}</td>
       <td>${o.requestedBy==='staff'?'Staff':(o.createdByName || 'Manager')}</td>
-      <td>${status}</td>
+      <td>${status}${denialReasonHTML}</td>
       <td style="white-space:nowrap">${pendingActions} <button class="btn btn-sm" onclick="openAddOTModal('${o.id}')">Edit</button> <button class="btn btn-sm" onclick="deleteOT('${o.id}')" style="color:var(--red);border-color:var(--red)">Delete</button></td>
     </tr>`;
   }).join(''):`<tr><td colspan="11" style="text-align:center;color:var(--t2);padding:20px;font-size:12px">No OT requests ${otFilter!=='all'?'('+otFilter+')':''}.</td></tr>`;
@@ -7263,8 +7280,17 @@ async function denyOT(id, opts = {}){
   const reqs=DB.get('otRequests')||[];
   const idx=reqs.findIndex(x=>x.id===id);
   if(idx<0)return;
+
+  let denialReason = opts.denialReason;
+  if(!opts.fromReconcile && denialReason===undefined){
+    denialReason = prompt('Please provide a reason for denying this OT request:');
+    if(denialReason===null) return;
+    if(!denialReason.trim()){ alert('A reason is required to deny an OT request.'); return; }
+  }
+
   const wasApproved=reqs[idx].approved===true;
   reqs[idx].approved=false;
+  reqs[idx].denialReason = (denialReason||'').trim();
   stampManagerDecision(reqs[idx], 'denied');
   const saveResult = await DB.set('otRequests',reqs);
   if(!saveResult.ok){
@@ -7284,7 +7310,7 @@ async function denyOT(id, opts = {}){
     date: o.date,
     start: o.start,
     end: o.end,
-    notes: o.reason || ''
+    notes: o.denialReason || o.reason || ''
   });
  } catch(err){
   console.error('Deny OT failed:', err);
@@ -8955,6 +8981,7 @@ function renderLeave(filter){
         </div>
         ${conflictNote}
         ${lr.notes?`<div style="font-size:11px;color:var(--t2);margin-bottom:5px">${lr.notes}</div>`:''}
+        ${lr.status==='declined'&&lr.denialReason?`<div style="font-size:11px;color:var(--rd);margin-bottom:5px;padding:6px 8px;background:var(--rl);border-radius:var(--rsm)">Declined — reason given: ${escHTML(lr.denialReason)}</div>`:''}
         <div style="display:flex;gap:5px;flex-wrap:wrap">
           ${lr.status==='pending'?`<button class="btn btn-sm btn-primary" onclick="openLeaveReview('${lr.id}')">Review &amp; process</button>`:''}
           ${lr.status==='approved'?'<span style="font-size:10px;color:var(--td)">✓ Synced to roster &amp; leave tracker</span>':''}${decisionAuditHTML(lr)}

@@ -1740,7 +1740,7 @@ function isPublishedShift(shift){
     <h2 style="font-size:20px;margin-bottom:10px">Send this week's AL Forecast</h2>
     <div style="font-size:13px;color:var(--t2);margin-bottom:22px;line-height:1.5">It's Monday morning — the Weekly Annual Leave Forecast for next week hasn't been sent yet. Helena, Antigone, Valerie and the Pharmacist inbox are expecting it.</div>
     <div style="display:flex;gap:8px;justify-content:center">
-      <button class="btn" onclick="dismissALForecastReminder()">Remind me later</button>
+      <button class="btn" onclick="dismissALForecastReminder()">Dismiss for this week</button>
       <button class="btn btn-primary" onclick="CM('m-al-forecast-reminder');openALForecastModal()">Open AL Forecast</button>
     </div>
   </div>
@@ -6484,21 +6484,20 @@ function checkALForecastReminder(){
   const upcomingWeekStart = defaultALForecastWeekStart_();
   const settings = DB.get('settings') || {};
   if (settings.lastALForecastSentWeek === upcomingWeekStart) return;
+  if (settings.lastALForecastDismissedWeek === upcomingWeekStart) return;
 
   const modal = document.getElementById('m-al-forecast-reminder');
   if (modal && !modal.classList.contains('open')) OM('m-al-forecast-reminder');
 }
 
-function dismissALForecastReminder(){
+async function dismissALForecastReminder(){
   CM('m-al-forecast-reminder');
-  alForecastReminderDismissedAt = Date.now();
+  const settings = DB.get('settings') || {};
+  settings.lastALForecastDismissedWeek = defaultALForecastWeekStart_();
+  await DB.set('settings', settings);
 }
 
-let alForecastReminderDismissedAt = 0;
 setInterval(function(){
-  // Don't re-pop within 15 minutes of a manual dismiss, so "Remind me
-  // later" actually means later rather than immediately again.
-  if (Date.now() - alForecastReminderDismissedAt < 15 * 60000) return;
   if (typeof DB !== 'undefined' && DB.get('settings') !== undefined) checkALForecastReminder();
 }, 5 * 60000);
 

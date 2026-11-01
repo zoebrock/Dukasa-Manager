@@ -3644,9 +3644,15 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
 
     // A leave segment can never carry OT — otherwise a same-day OT request for
     // the person's actual working portion would incorrectly tag this chip too.
+    // The hasOT fallback (any approved OT exists for this emp/day, regardless
+    // of which shift it actually merged into) only applies when there's a
+    // single shift that day — with two or more shift rows for the same
+    // emp/date (a genuine split shift, or a leftover duplicate row), relying
+    // on it mislabels every one of them as "OT added" even though only the
+    // shift carrying its own otAnnotations was actually extended.
     const hasApprovedOT =
       !isPartialLeave &&
-      ((s.otAnnotations && s.otAnnotations.length) || hasOT.length);
+      ((s.otAnnotations && s.otAnnotations.length) || (dayShifts.length === 1 && hasOT.length));
 
     // Weekend shift with no Pharmacist covering the same hours — flagged so
     // it's visually obvious which shifts still need a Pharmacist request
@@ -3667,7 +3673,7 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
       : hasApprovedOT
         ? `${s.start}–${s.end} · OT added`
         : `${s.start}–${s.end}`;
-    const otAnns=isPartialLeave?[]:((s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:hasOT);
+    const otAnns=isPartialLeave?[]:((s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:(dayShifts.length===1?hasOT:[]));
     const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
     const availabilityConflict=!isShiftWithinAvailability(emp,dname,s.start,s.end);
     const availabilityBadge=availabilityConflict?`<span class="chip chip-unavail chip-small" style="margin-top:2px">Outside availability</span>`:'';

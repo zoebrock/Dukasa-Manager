@@ -781,6 +781,18 @@ function isRosterInteractionActive(){
     isModalOpen('m-template') || isModalOpen('m-shift-detail');
 }
 
+// True while a manager is actively focused on a custom-hours/time input in
+// the Timesheets table. A background refresh (the periodic poll, or a
+// realtime echo of the manager's own just-saved edit to a DIFFERENT row)
+// used to re-render the whole table unconditionally, replacing every
+// <input> in it — including whichever one currently had focus and
+// uncommitted keystrokes — which is why custom-hours edits felt
+// "unreliable" when editing several staff members' rows in a row.
+function isTimesheetInteractionActive(){
+  const el = document.activeElement;
+  return !!(el && el.closest && el.closest('#ts-body'));
+}
+
 function isPublishedShift(shift){
   if(!shift) return false;
   if(shift.published === true || shift.published === 1 || String(shift.published).toLowerCase() === 'true') return true;
@@ -9745,10 +9757,11 @@ function getOrCreateCustom(empId,date,actualHrs,autoRoundedIn,autoRoundedOut,eff
   return existing;
 }
 
-function updateCustomTime(empId,date,field,val,shiftId){
+async function updateCustomTime(empId,date,field,val,shiftId){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
   if(idx<0)return;
+  const previousVal=ch[idx][field];
   ch[idx][field]=val||null;
   ch[idx].manualEntry=true; // manager has manually typed a time
   // Recalculate custom hrs from custom start/end if both set
@@ -9758,12 +9771,44 @@ function updateCustomTime(empId,date,field,val,shiftId){
 ch[idx].customHrs=paidHrsFromTimes(cStart,cEnd);
     ch[idx].autoRounded=false;
   }
-  DB.set('customHours',ch);
+  const saveResult = await DB.set('customHours',ch);
+  if(!saveResult.ok){
+    // DB.set already toasts the error and rolls back its own cache — undo
+    // the input's displayed value too so it doesn't look saved when it isn't.
+    if(typeof event!=='undefined' && event && event.target) event.target.value=previousVal||'';
+    return;
+  }
   // Update the custom hrs display
   const hrsEl=document.getElementById(`custom-hrs-${empId}-${date}`);
   if(hrsEl) hrsEl.textContent=ch[idx].customHrs.toFixed(2)+'h';
   // Update approved hrs
   updateApprovedHrsDisplay(empId,date);
+}
+
+// Recomputes just the "Approved X/Y" summary tile at the top of Timesheets
+// without re-rendering the whole table — so toggling approval or editing a
+// custom hours value for one person updates that count immediately instead
+// of only showing correctly after switching days/weeks (or waiting for a
+// full re-render, which would otherwise wipe out focus on other inputs
+// still being edited — see isTimesheetInteractionActive()).
+function updateTSApprovedSummaryCount(){
+  const sv = document.getElementById('ts-week')?.value;
+  if(!sv) return;
+  const wkS = new Date(sv);
+  const wkE = new Date(wkS); wkE.setDate(wkE.getDate()+13);
+  const ws = FD(wkS), we = FD(wkE);
+  const shifts = getCleanTSShiftsForRange(ws, we);
+  const staff = DB.get('staff')||[];
+  const ch = DB.get('customHours')||[];
+  const wShifts = shifts.filter(s=>s.date>=ws&&s.date<=we&&!s.isOT&&staff.some(e=>String(e.id)===String(s.empId)));
+  let totApproved=0, totCount=0;
+  wShifts.forEach(s=>{
+    const c=ch.find(x=>String(x.empId)===String(s.empId)&&x.date===s.date);
+    if(c&&c.approved) totApproved++;
+    totCount++;
+  });
+  const el=document.getElementById('ts-approved-summary');
+  if(el) el.textContent = totApproved+'/'+totCount;
 }
 
 function updateApprovedHrsDisplay(empId,date){
@@ -9776,11 +9821,21 @@ function updateApprovedHrsDisplay(empId,date){
   el.textContent=ROUND30(c.customHrs).toFixed(1)+'h';
 }
 
-function updateCustomHrs(empId,date,val){
+async function updateCustomHrs(empId,date,val){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
-  if(idx>=0){ch[idx].customHrs=ROUND30(parseFloat(val)||0);ch[idx].autoRounded=false;ch[idx].manualEntry=true;DB.set('customHours',ch);}
+  if(idx<0) return;
+  const previousVal=ch[idx].customHrs;
+  ch[idx].customHrs=ROUND30(parseFloat(val)||0);
+  ch[idx].autoRounded=false;
+  ch[idx].manualEntry=true;
+  const saveResult = await DB.set('customHours',ch);
+  if(!saveResult.ok){
+    if(typeof event!=='undefined' && event && event.target) event.target.value=previousVal.toFixed(2);
+    return;
+  }
   updateApprovedHrsDisplay(empId,date);
+  updateTSApprovedSummaryCount();
 }
 
 async function toggleApproved(empId,date,btn){
@@ -9806,6 +9861,7 @@ async function toggleApproved(empId,date,btn){
   try{
     await DB.set('customHours',ch);
     updateApprovedHrsDisplay(empId,date);
+    updateTSApprovedSummaryCount();
   }catch(e){
     toast('Could not save approval: '+e.message,'error');
   }
@@ -9844,6 +9900,7 @@ async function approveAllForDay(){
   try{
     await DB.set('customHours',ch);
     renderTSDayBody(ds);
+    updateTSApprovedSummaryCount();
     toast(`Approved hours for ${count} staff member${count>1?'s':''}.`,'success');
   }catch(e){
     toast('Could not approve: '+e.message,'error');
@@ -10511,7 +10568,7 @@ function renderTS(){
     <div class="sc"><div class="sl">Worked hrs</div><div class="sv">${totW.toFixed(1)}</div></div>
     <div class="sc"><div class="sl">OT hrs</div><div class="sv" style="color:var(--rd)">${totOT.toFixed(1)}</div></div>
     <div class="sc"><div class="sl">Diff</div><div class="sv" style="font-size:16px;color:${totW - totR < 0 ? 'var(--amber)' : 'var(--td)'}">${totW - totR >= 0 ? '+' : ''}${(totW - totR).toFixed(1)}h</div></div>
-    <div class="sc"><div class="sl">Approved</div><div class="sv">${totApproved}/${totCount}</div></div>
+    <div class="sc"><div class="sl">Approved</div><div class="sv" id="ts-approved-summary">${totApproved}/${totCount}</div></div>
   `;
 
   // Build day tabs
@@ -11739,7 +11796,7 @@ function renderActiveManagerPage(){
   else if (pid === 'roster') { renderRoster(); setTimeout(renderRosterAlerts, 100); }
   else if (pid === 'leave') { renderLeave(currentLeaveFilter); updateBadges(); }
   else if (pid === 'ot') { renderOT(); renderWeekendShiftTable(); renderShiftAdjustmentTable(); updateBadges(); }
-  else if (pid === 'timesheets') renderTS();
+  else if (pid === 'timesheets') { if (!isTimesheetInteractionActive()) renderTS(); }
   else if (pid === 'staff') renderStaff();
 }
 

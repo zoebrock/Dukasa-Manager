@@ -3799,7 +3799,15 @@ function openShiftPopup(event, shiftId) {
   const leaveReqs=DB.get('leaveRequests')||[];
   const alreadySick=sickDays.find(sk=>sk.empId===s.empId&&sk.date===s.date);
   const activeLeave=leaveReqs.find(l=>l.empId===s.empId&&l.status==='approved'&&l.from<=s.date&&l.to>=s.date);
-  const otReqs=(DB.get('otRequests')||[]).filter(o=>o.empId===s.empId&&o.date===s.date&&o.approved);
+  const otReqsRaw=(DB.get('otRequests')||[]).filter(o=>o.empId===s.empId&&o.date===s.date&&o.approved);
+  // Dedupe by exact start+end — a stray duplicate OT request (same time
+  // range saved twice) shouldn't show as two identical chips.
+  const seenOTTimes=new Set();
+  const otReqs=otReqsRaw.filter(o=>{
+    const key=o.start+'-'+o.end;
+    if(seenOTTimes.has(key)) return false;
+    seenOTTimes.add(key); return true;
+  });
   const empName=emp?emp.first+' '+emp.last:'Unknown staff member';
   const hrs=SH(s).toFixed(1);
   const dow=new Date(s.date+'T00:00:00').toLocaleDateString('en-AU',{weekday:'long'});
@@ -5950,13 +5958,31 @@ async function saveOT(){
     if (idx >= 0) reqs[idx] = updated;
     newRequests.push(updated);
   } else {
+    // Guard against accidentally creating an exact duplicate — e.g. clicking
+    // "Add or manage overtime" opened an existing request for EDIT (which
+    // only ever lets you change that one slot, with no way to add another
+    // alongside it), so it looked like nothing happened and a second,
+    // separate "+ Add OT request" was used instead for the same time.
+    const exactDuplicates = [];
     dates.forEach((date, di) => {
       slots.forEach((slot, si) => {
+        const dupe = reqs.find(x =>
+          String(x.empId) === String(empId) && x.date === date &&
+          x.start === slot.start && x.end === slot.end
+        );
+        if (dupe) { exactDuplicates.push({ date, slot, dupe }); return; }
         const req = buildRequest('ot' + Date.now() + '-' + di + '-' + si, date, slot, {});
         reqs.push(req);
         newRequests.push(req);
       });
     });
+    if (exactDuplicates.length && !newRequests.length) {
+      alert('An OT request for ' + FDS(exactDuplicates[0].date) + ' ' + exactDuplicates[0].slot.start + '–' + exactDuplicates[0].slot.end + ' already exists for this staff member (status: ' + (exactDuplicates[0].dupe.approved === true ? 'approved' : exactDuplicates[0].dupe.approved === false ? 'denied' : 'pending') + '). Edit that one from the OT Tracker instead of creating a duplicate.');
+      return;
+    } else if (exactDuplicates.length) {
+      const skippedLabel = exactDuplicates.map(d => d.slot.start + '–' + d.slot.end).join(', ');
+      toast('Skipped ' + exactDuplicates.length + ' slot(s) that already existed (' + skippedLabel + ') — the rest were saved.', 'info', 6000);
+    }
   }
 
   const saveResult = await DB.set('otRequests', reqs);

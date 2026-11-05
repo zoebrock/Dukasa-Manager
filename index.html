@@ -3031,6 +3031,10 @@ const ALL_KEYS_WITH_CLOCK = [...ALL_KEYS, 'clockEvents'];
 
 function FD(d){if(!(d instanceof Date))return d;const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const dy=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+dy;}
 function FDS(s){if(!s)return'—';const d=new Date(s+'T00:00:00');return d.toLocaleDateString('en-AU',{day:'numeric',month:'short'})}
+// Same short format as FDS but with the year included — used for leave
+// request dates specifically, since leave can be requested/reviewed well
+// ahead of time and "6 Oct" alone is ambiguous about which year it's for.
+function FDSY(s){if(!s)return'—';const d=new Date(s+'T00:00:00');return d.toLocaleDateString('en-AU',{day:'numeric',month:'short',year:'numeric'})}
 function FDL(s){if(!s)return'—';const d=new Date(s+'T00:00:00');return d.toLocaleDateString('en-AU',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}
 function FDISP(d){return d.toLocaleDateString('en-AU',{weekday:'short',day:'numeric',month:'short'})}
 function INI(e){return(e.first[0]+e.last[0]).toUpperCase()}
@@ -3217,7 +3221,7 @@ function renderDashboard(){
     const emp=staff.find(s=>s.id===l.empId);
     const bc={pending:'ba',approved:'bg',declined:'br'}[l.status]||'ba';
     const reasonLine=(l.status==='declined'&&l.denialReason)?`<div style="font-size:10px;color:var(--rd);margin-top:1px">${escHTML(l.denialReason)}</div>`:'';
-    return`<div style="padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><div style="display:flex;align-items:center;justify-content:space-between"><span>${emp?emp.first+' '+emp.last:'?'} — ${l.type}</span><div style="display:flex;gap:4px;align-items:center"><span style="color:var(--t2)">${FDS(l.from)}</span><span class="badge ${bc}">${l.status}</span>${decisionAuditHTML(l)}${l.status==='pending'?`<button class="btn btn-sm" onclick="SP('leave')">Review</button>`:''}</div></div>${reasonLine}</div>`;
+    return`<div style="padding:5px 0;border-bottom:1px solid var(--border);font-size:11px"><div style="display:flex;align-items:center;justify-content:space-between"><span>${emp?emp.first+' '+emp.last:'?'} — ${l.type}</span><div style="display:flex;gap:4px;align-items:center"><span style="color:var(--t2)">${FDSY(l.from)}</span><span class="badge ${bc}">${l.status}</span>${decisionAuditHTML(l)}${l.status==='pending'?`<button class="btn btn-sm" onclick="SP('leave')">Review</button>`:''}</div></div>${reasonLine}</div>`;
   }).join(''):'<p style="color:var(--t2);font-size:11px">No leave requests.</p>';
 
   // OT requests list
@@ -4205,7 +4209,7 @@ function openLeavePopup(event, leaveId) {
     </div>
     <div class="shift-popup-info">
       <div style="font-size:12px;font-weight:600">${lr.type}</div>
-      <div style="font-size:11px;color:var(--t2);margin-top:2px">${FDS(lr.from)} – ${FDS(lr.to)}</div>
+      <div style="font-size:11px;color:var(--t2);margin-top:2px">${FDSY(lr.from)} – ${FDSY(lr.to)}</div>
       <div style="margin-top:5px"><span class="badge ${bc}" style="font-size:9px">${lr.status}</span></div>
       ${lr.notes?`<div style="margin-top:5px;font-size:11px;color:var(--t2);font-style:italic">${lr.notes}</div>`:''}
     </div>
@@ -7736,8 +7740,8 @@ function staffLeaveHTML(empId){
   let html=staffLeaveSummaryHTML(empId);
   const pending=leaveReqs.filter(l=>l.status==='pending');
   const archived=leaveReqs.filter(l=>l.status!=='pending');
-  if(pending.length){html+='<div style="font-size:10px;font-weight:600;color:var(--t2);margin-bottom:5px">PENDING — ACTION REQUIRED</div>';html+=pending.map(lr=>`<div class="lcard"><div class="lcard-h"><div><strong>${lr.type}</strong> · ${FDS(lr.from)}–${FDS(lr.to)}</div><div style="display:flex;gap:4px"><span class="badge ba">Pending</span><button class="btn btn-sm" onclick="openEditLeaveModal('${lr.id}')">Edit</button></div></div>${lr.notes?`<div style="font-size:11px;color:var(--t2)">${lr.notes}</div>`:''}<button class="btn btn-sm btn-primary" style="margin-top:5px" onclick="openLeaveReview('${lr.id}')">Review</button></div>`).join('');}
-  if(archived.length){html+='<div style="font-size:10px;font-weight:600;color:var(--t2);margin:8px 0 5px">ARCHIVED</div>';html+=archived.map(lr=>{const bc={approved:'bg',declined:'br'}[lr.status]||'ba';return`<div class="lcard"><div class="lcard-h"><div>${lr.type} · ${FDS(lr.from)}–${FDS(lr.to)}</div><div style="display:flex;gap:4px"><span class="badge ${bc}">${lr.status}</span><button class="btn btn-sm" onclick="openEditLeaveModal('${lr.id}')">Edit</button></div></div>${lr.status==='approved'?'<div style="font-size:10px;color:var(--td)">✓ Synced to roster &amp; leave tracker</div>':''}</div>`;}).join('');}
+  if(pending.length){html+='<div style="font-size:10px;font-weight:600;color:var(--t2);margin-bottom:5px">PENDING — ACTION REQUIRED</div>';html+=pending.map(lr=>`<div class="lcard"><div class="lcard-h"><div><strong>${lr.type}</strong> · ${FDSY(lr.from)}–${FDSY(lr.to)}</div><div style="display:flex;gap:4px"><span class="badge ba">Pending</span><button class="btn btn-sm" onclick="openEditLeaveModal('${lr.id}')">Edit</button></div></div>${lr.notes?`<div style="font-size:11px;color:var(--t2)">${lr.notes}</div>`:''}<button class="btn btn-sm btn-primary" style="margin-top:5px" onclick="openLeaveReview('${lr.id}')">Review</button></div>`).join('');}
+  if(archived.length){html+='<div style="font-size:10px;font-weight:600;color:var(--t2);margin:8px 0 5px">ARCHIVED</div>';html+=archived.map(lr=>{const bc={approved:'bg',declined:'br'}[lr.status]||'ba';return`<div class="lcard"><div class="lcard-h"><div>${lr.type} · ${FDSY(lr.from)}–${FDSY(lr.to)}</div><div style="display:flex;gap:4px"><span class="badge ${bc}">${lr.status}</span><button class="btn btn-sm" onclick="openEditLeaveModal('${lr.id}')">Edit</button></div></div>${lr.status==='approved'?'<div style="font-size:10px;color:var(--td)">✓ Synced to roster &amp; leave tracker</div>':''}</div>`;}).join('');}
   if(!leaveReqs.length&&!sickDays.length) html+='<p style="color:var(--t2);font-size:12px">No leave history.</p>';
   return html;
 }
@@ -8865,7 +8869,7 @@ function openLeaveQueryModal(id){
   const emp = (DB.get('staff')||[]).find(s => s.id === lr.empId);
   queryingLeaveId = id;
   document.getElementById('lq-summary').innerHTML =
-    `<strong>${emp?emp.first+' '+emp.last:'?'}</strong> — ${leaveBadge(lr.type)} ${FDS(lr.from)} – ${FDS(lr.to)}
+    `<strong>${emp?emp.first+' '+emp.last:'?'}</strong> — ${leaveBadge(lr.type)} ${FDSY(lr.from)} – ${FDSY(lr.to)}
      <span class="badge ${{pending:'ba',approved:'bg',declined:'br'}[lr.status]||'ba'}" style="margin-left:4px">${lr.status}</span>`;
   document.getElementById('lq-message').value = '';
   OM('m-leave-query');
@@ -9044,7 +9048,7 @@ function renderLeave(filter){
       let conflictNote=hasConflict?`<div style="font-size:11px;color:var(--rd);margin-bottom:5px;padding:6px 8px;background:var(--rl);border-radius:var(--rsm)">⚠ Overlaps with ${conflictNames} (same role: ${emp?.role||'?'}). ${isFirst?'This request was submitted first.':'This request was submitted after '+conflictNames+'.'}</div>`:'';
       return`<div class="${cardCls}">
         <div class="lcard-h">
-          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><strong>${emp?emp.first+' '+emp.last:'?'}</strong>${leaveBadge(lr.type)}<span style="color:var(--t2);font-size:12px">${FDS(lr.from)} – ${FDS(lr.to)}${lr.requestKind==='partial_day'&&lr.partialStart&&lr.partialEnd?` · Partial day ${lr.partialStart}–${lr.partialEnd}`:''}</span></div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap"><strong>${emp?emp.first+' '+emp.last:'?'}</strong>${leaveBadge(lr.type)}<span style="color:var(--t2);font-size:12px">${FDSY(lr.from)} – ${FDSY(lr.to)}${lr.requestKind==='partial_day'&&lr.partialStart&&lr.partialEnd?` · Partial day ${lr.partialStart}–${lr.partialEnd}`:''}</span></div>
           <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">${badges}<button class="btn btn-sm" onclick="openLeaveQueryModal('${lr.id}')" title="Message the staff member about this leave request">Query</button><button class="btn btn-sm" onclick="openEditLeaveModal('${lr.id}')">Edit</button></div>
         </div>
         ${conflictNote}
@@ -9117,7 +9121,7 @@ function openLeaveReview(id){
     ${emp?staffLeaveSummaryHTML(emp.id):''}
     <div style="background:var(--s2);border-radius:var(--rsm);padding:11px;margin-bottom:10px;font-size:12px">
       <div style="margin-bottom:4px"><strong>${emp?emp.first+' '+emp.last:'?'}</strong> — ${lr.type}</div>
-      <div style="color:var(--t2)">${FDS(lr.from)} – ${FDS(lr.to)}</div>
+      <div style="color:var(--t2)">${FDSY(lr.from)} – ${FDSY(lr.to)}</div>
       ${lr.requestKind==='partial_day'&&lr.partialStart&&lr.partialEnd?`<div style="margin-top:4px;font-weight:600;color:var(--cd)">Partial day: ${lr.partialStart}–${lr.partialEnd}</div>`:''}
       ${lr.notes?`<div style="margin-top:5px;color:var(--t2)">${lr.notes}</div>`:''}
       <div style="margin-top:6px;font-size:10px;color:var(--t3)">Submitted: ${lr.submitted?new Date(lr.submitted).toLocaleString('en-AU'):'Unknown'}</div>

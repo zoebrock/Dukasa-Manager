@@ -6201,6 +6201,16 @@ async function saveWeekendShiftRequest(){
   CM('m-weekend-shift');
   renderWeekendShiftTable();
   toast('Weekend shift request sent — the staff member can approve or decline it from the Staff Portal.', 'success');
+
+  notify('weekend_shift_request', {
+    sendToStaff: true,
+    ...staffPayload(empId),
+    date, start, end,
+    reason,
+    source: 'Manager Portal'
+  })
+  .then(r => console.log('Weekend shift request notification sent', r))
+  .catch(err => console.warn('Weekend shift request notification failed:', err));
 }
 
 function renderWeekendShiftTable(){
@@ -6711,6 +6721,18 @@ async function createSuggestedWeekendShiftRequests(){
   renderWeekendShiftTable();
   updateBadges();
   toast(`${newRequests.length} weekend shift request${newRequests.length === 1 ? '' : 's'} sent.`, 'success');
+
+  newRequests.forEach(req => {
+    notify('weekend_shift_request', {
+      sendToStaff: true,
+      ...staffPayload(req.empId),
+      date: req.date, start: req.start, end: req.end,
+      reason: req.reason,
+      source: 'Manager Portal'
+    })
+    .then(r => console.log('Weekend shift request notification sent', r))
+    .catch(err => console.warn('Weekend shift request notification failed for ' + req.date + ': ' + err.message));
+  });
 }
 
 // ── PUBLIC HOLIDAY ROSTER AUTO-FILL ─────────────────────────────
@@ -12158,7 +12180,8 @@ const SMS_NOTIFY_TYPES = new Set([
   'announcement',
   'staff_late_warning',
   'leave_decision',
-  'leave_updated'
+  'leave_updated',
+  'weekend_shift_request'
 ]);
 
 function normalisePhoneForSMS(phone){
@@ -12190,6 +12213,7 @@ function fmt12h(t){
 const DEFAULT_SMS_TEMPLATES = {
   roster_published: `Hi {{first_name}}, your roster for {{week_label}} has been published. Check the Staff Portal for your shifts: {{link}}`,
   manager_ot_request: `Hey {{first_name}}! There is a new OT request - {{date_time}} - awaiting your approval. Please confirm your availability via the Staff Portal: {{link}} Thanks!`,
+  weekend_shift_request: `Hey {{first_name}}! You've been asked to pick up a weekend shift - {{date_time}} - awaiting your approval. Please confirm via the Staff Portal: {{link}} Thanks!`,
   ot_decision: `Hi {{first_name}}, your overtime request for {{date_time}} was {{decision}}. Check the Staff Portal for details: {{link}}`,
   announcement: `Announcement: {{title}}{{date_suffix}}{{location_suffix}}. Check the Staff Portal for details: {{link}}`,
   staff_late_warning: `Hi {{first_name}}, please check your email for a note from management regarding your recent punctuality record. Staff Portal: {{link}}`,
@@ -12203,6 +12227,7 @@ const DEFAULT_SMS_TEMPLATES = {
 const SMS_TEMPLATE_LABELS = {
   roster_published: 'Roster published',
   manager_ot_request: 'New OT request (needs staff confirmation)',
+  weekend_shift_request: 'New weekend shift request (needs staff confirmation)',
   ot_decision: 'OT request approved / declined',
   announcement: 'New announcement',
   staff_late_warning: 'Late-punctuality warning',
@@ -12216,6 +12241,7 @@ const SMS_TEMPLATE_LABELS = {
 const SMS_TEMPLATE_TOKENS = {
   roster_published: ['first_name','week_label','link'],
   manager_ot_request: ['first_name','date_time','link'],
+  weekend_shift_request: ['first_name','date_time','link'],
   ot_decision: ['first_name','date_time','decision','link'],
   announcement: ['title','date_suffix','location_suffix','link'],
   staff_late_warning: ['first_name','link'],
@@ -12251,6 +12277,10 @@ function smsMessageForType(type, payload){
       });
     case 'manager_ot_request':
       return renderSmsTemplate_(templates.manager_ot_request, {
+        first_name: name, date_time: dateTimeLabel, link: STAFF_PORTAL_URL
+      });
+    case 'weekend_shift_request':
+      return renderSmsTemplate_(templates.weekend_shift_request, {
         first_name: name, date_time: dateTimeLabel, link: STAFF_PORTAL_URL
       });
     case 'ot_decision':
@@ -12326,7 +12356,8 @@ const EMAIL_FN_FOR_TYPE = {
   leave_decision: 'sendLeaveDecisionEmail',
   ot_decision: 'sendOTDecisionEmail',
   manager_ot_request: 'sendManagerOTRequestToStaff',
-  shift_updated: 'sendShiftUpdateEmail'
+  shift_updated: 'sendShiftUpdateEmail',
+  weekend_shift_request: 'sendManagerWeekendShiftRequestToStaff'
 };
 
 async function notify(type, payload = {}){

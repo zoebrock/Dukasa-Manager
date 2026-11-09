@@ -5772,7 +5772,13 @@ function openAddOTModal(id, prefillEmpId, prefillDate){
     document.getElementById('ot-date-to').value='';
     document.getElementById('ot-emp').value=o.empId;document.getElementById('ot-date').value=o.date;
     addOTSlotRow(o.label||'', o.start, o.end);
-    addSlotBtn.style.display='none';
+    // Still allow adding further slots while editing — the first slot updates
+    // this request, and any additional ones become new, separate OT requests
+    // for the same staff member/date (e.g. adding an evening slot alongside
+    // an already-approved morning one). Previously hiding this button here
+    // was the only way to add OT, so there was no way to add a second slot
+    // without it looking like nothing happened.
+    addSlotBtn.style.display='inline-block';
     document.getElementById('ot-reason').value=o.reason||'';document.getElementById('ot-task').value=o.task||'';
     document.getElementById('tog-ot-avail').classList.toggle('on',o.availConfirmed);
   } else {
@@ -5978,6 +5984,25 @@ async function saveOT(){
     const updated = buildRequest(editingOTId, fromDate, slots[0], existing);
     if (idx >= 0) reqs[idx] = updated;
     newRequests.push(updated);
+
+    // Any slots added beyond the first become new, separate OT requests for
+    // the same staff member/date — e.g. adding an evening slot alongside the
+    // morning one being edited — rather than being silently dropped.
+    const extraDuplicates = [];
+    slots.slice(1).forEach((slot, si) => {
+      const dupe = reqs.find(x =>
+        x.id !== editingOTId && String(x.empId) === String(empId) && x.date === fromDate &&
+        x.start === slot.start && x.end === slot.end
+      );
+      if (dupe) { extraDuplicates.push({ slot, dupe }); return; }
+      const req = buildRequest('ot' + Date.now() + '-extra-' + si, fromDate, slot, {});
+      reqs.push(req);
+      newRequests.push(req);
+    });
+    if (extraDuplicates.length) {
+      const skippedLabel = extraDuplicates.map(d => d.slot.start + '–' + d.slot.end).join(', ');
+      toast('Skipped ' + extraDuplicates.length + ' slot(s) that already existed (' + skippedLabel + ').', 'info', 6000);
+    }
   } else {
     // Guard against accidentally creating an exact duplicate — e.g. clicking
     // "Add or manage overtime" opened an existing request for EDIT (which

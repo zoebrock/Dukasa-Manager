@@ -2002,6 +2002,18 @@ function isPublishedShift(shift){
   </div>
 </div>
 
+<div class="modal-overlay" id="m-late-clockin-notify">
+  <div class="modal">
+    <div class="mh"><h2>⏰ Late clock-in</h2><button class="xbtn" onclick="dismissLateClockInNotify()">×</button></div>
+    <div id="late-clockin-notify-body" style="font-size:13px"></div>
+    <div style="font-size:11px;color:var(--t3);margin-top:10px">Sent to: aspa@dukasa.com.au, kosta@dukasa.com.au, helena@dukasa.com.au</div>
+    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="dismissLateClockInNotify()">Dismiss</button>
+      <button class="btn btn-primary btn-sm" id="late-clockin-notify-send-btn">Send email</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="m-photo-view">
   <div class="modal">
     <div class="mh"><h2>Clock photo</h2><button class="xbtn" onclick="CM('m-photo-view')">×</button></div>
@@ -3068,6 +3080,145 @@ function initDefaults() {
 function lateReportsFromSettings(){
   const settings = DB.get('settings') || {};
   return (settings.lateReports || settings.runningLateReports || []).map(normaliseLateReport);
+}
+
+// ── LATE CLOCK-IN DETECTION ────────────────────────────────────
+// Distinct from the Staff Portal's "I'm running late" PRE-shift heads-up
+// (lateReportsFromClockEvents above, keyed off event type/reason containing
+// "late") — this instead looks at actual clock-in events against the
+// rostered shift start time, the same grace period used throughout the app,
+// catching anyone who simply clocked in late without pre-warning anyone.
+// The Dukasa Clock app already requires a reason once someone is outside
+// the grace period, so every record here always has one.
+const LATE_CLOCKIN_RECIPIENTS = ['aspa@dukasa.com.au', 'kosta@dukasa.com.au', 'helena@dukasa.com.au'];
+
+function computeLateClockIns(){
+  const clockEvents = getClockEvents() || [];
+  const shifts = DB.get('shifts') || [];
+  const settings = DB.get('settings') || {};
+  const grace = parseInt(settings.gracePeriod) || 5;
+
+  return clockEvents
+    .filter(e => e.type === 'clock-in' && e.empId && e.date && e.time)
+    .map(e => {
+      const shift = shifts.find(s => String(s.empId) === String(e.empId) && s.date === e.date && !(s.entryType === 'leave' || s.entry_type === 'leave'));
+      if (!shift || !shift.start) return null;
+      const minutesLate = MD(shift.start, e.time);
+      if (minutesLate === null || minutesLate <= grace) return null;
+      return {
+        id: e.id,
+        empId: e.empId,
+        date: e.date,
+        time: e.time,
+        shiftStart: shift.start,
+        minutesLate,
+        reason: e.reason || ''
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+}
+
+const LATE_CLOCKIN_POPUP_SEEN_KEY = 'rx3_late_clockin_popup_seen';
+let lateClockInPopupSeenIds = null;
+let lateClockInPopupSeenInitialised = false;
+let lateClockInNotifyQueue = [];
+
+function loadLateClockInPopupSeenIds(){
+  if(lateClockInPopupSeenIds) return lateClockInPopupSeenIds;
+  try{
+    lateClockInPopupSeenIds = new Set(JSON.parse(localStorage.getItem(LATE_CLOCKIN_POPUP_SEEN_KEY) || '[]'));
+  } catch(e){
+    lateClockInPopupSeenIds = new Set();
+  }
+  return lateClockInPopupSeenIds;
+}
+function saveLateClockInPopupSeenIds(){
+  try{ localStorage.setItem(LATE_CLOCKIN_POPUP_SEEN_KEY, JSON.stringify([...loadLateClockInPopupSeenIds()])); }
+  catch(e){ /* localStorage unavailable — popups will just re-show on next load */ }
+}
+
+function checkForNewLateClockIns(){
+  const lateEvents = computeLateClockIns();
+  const seen = loadLateClockInPopupSeenIds();
+
+  if(!lateClockInPopupSeenInitialised){
+    lateEvents.forEach(l => seen.add(String(l.id)));
+    lateClockInPopupSeenInitialised = true;
+    saveLateClockInPopupSeenIds();
+    return;
+  }
+
+  const fresh = lateEvents.filter(l => l.id != null && !seen.has(String(l.id)));
+  if(!fresh.length) return;
+
+  fresh.forEach(l => seen.add(String(l.id)));
+  saveLateClockInPopupSeenIds();
+
+  lateClockInNotifyQueue.push(...fresh);
+  if(!document.getElementById('m-late-clockin-notify').classList.contains('open')) showNextLateClockInNotify();
+}
+
+function showNextLateClockInNotify(){
+  const l = lateClockInNotifyQueue.shift();
+  if(!l){ CM('m-late-clockin-notify'); return; }
+
+  const staff = DB.get('staff') || [];
+  const emp = staff.find(s => s.id === l.empId);
+  const empName = emp ? `${emp.first} ${emp.last}` : 'A staff member';
+
+  const lateCountToDate = computeLateClockIns().filter(x => String(x.empId) === String(l.empId)).length;
+
+  document.getElementById('late-clockin-notify-body').innerHTML = `
+    <div style="font-size:15px;font-weight:600;margin-bottom:8px">${escHTML(empName)} clocked in late</div>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:13px">
+      <span style="color:var(--t2)">Date:</span><span>${FDS(l.date)}</span>
+      <span style="color:var(--t2)">Rostered start:</span><span>${escHTML(l.shiftStart)}</span>
+      <span style="color:var(--t2)">Clocked in:</span><span>${escHTML(l.time)}</span>
+      <span style="color:var(--t2)">Late by:</span><span style="color:var(--rd);font-weight:600">${l.minutesLate} min</span>
+      <span style="color:var(--t2)">Reason given:</span><span>${l.reason ? escHTML(l.reason) : '—'}</span>
+      <span style="color:var(--t2)">Late to date:</span><span>${lateCountToDate} time${lateCountToDate===1?'':'s'}</span>
+    </div>
+  `;
+
+  const sendBtn = document.getElementById('late-clockin-notify-send-btn');
+  sendBtn.disabled = false;
+  sendBtn.textContent = 'Send email';
+  sendBtn.onclick = () => sendLateClockInEmail(l, empName, lateCountToDate);
+
+  OM('m-late-clockin-notify');
+}
+
+function dismissLateClockInNotify(){
+  CM('m-late-clockin-notify');
+  if(lateClockInNotifyQueue.length) setTimeout(showNextLateClockInNotify, 300);
+}
+
+async function sendLateClockInEmail(l, empName, lateCountToDate){
+  const sendBtn = document.getElementById('late-clockin-notify-send-btn');
+  if(sendBtn){ sendBtn.disabled = true; sendBtn.textContent = 'Sending…'; }
+  try{
+    await _gasPost({
+      action: 'sendEmail',
+      fn: 'sendLateClockInNotification',
+      payload: {
+        recipients: LATE_CLOCKIN_RECIPIENTS,
+        empName,
+        date: l.date,
+        shiftStart: l.shiftStart,
+        time: l.time,
+        minutesLate: l.minutesLate,
+        reason: l.reason || '',
+        lateCountToDate
+      }
+    });
+    toast('Late clock-in email sent.', 'success');
+    dismissLateClockInNotify();
+  } catch(err){
+    console.error('Late clock-in email failed:', err);
+    alert('Could not send the email: ' + (err.message || err));
+    if(sendBtn){ sendBtn.disabled = false; sendBtn.textContent = 'Send email'; }
+  }
 }
 
 function lateReportsFromClockEvents(clockEvents){
@@ -11933,6 +12084,7 @@ async function runManagerRefresh({ manual = false } = {}) {
     const results = await DB.refresh(keys);
     renderActiveManagerPage();
     if(results && results.medCerts) checkForNewMCUploads();
+    if(results && results.clockEvents) checkForNewLateClockIns();
     return Object.values(results || {}).every(Boolean);
   } catch (e) {
     console.error('Sync failed', e);
@@ -11980,6 +12132,7 @@ function queueRealtimeRefresh(key) {
       if (results && results[key]) {
         renderActiveManagerPage();
         if (key === 'medCerts') checkForNewMCUploads();
+        if (key === 'clockEvents') checkForNewLateClockIns();
       }
     } catch (e) {
       console.error('Realtime refresh failed for', key, e);

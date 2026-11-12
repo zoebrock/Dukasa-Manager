@@ -1941,6 +1941,15 @@ function isPublishedShift(shift){
       <div class="fr"><label>From date</label><input type="date" id="al-from"></div>
       <div class="fr"><label>To date</label><input type="date" id="al-to"></div>
     </div>
+    <div class="fr" style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="al-partial" onchange="toggleALPartialFields()" style="width:16px;height:16px">
+      <label for="al-partial" style="margin:0;font-weight:500;cursor:pointer">Partial day only (specific hours, not the whole shift)</label>
+    </div>
+    <div class="fg" id="al-partial-times" style="display:none">
+      <div class="fr"><label>Leave start time</label><input type="time" id="al-partial-start"></div>
+      <div class="fr"><label>Leave end time</label><input type="time" id="al-partial-end"></div>
+    </div>
+    <div style="font-size:11px;color:var(--t3);margin:-8px 0 12px;display:none" id="al-partial-hint">Partial-day leave applies to one date only, and needs an existing rostered shift for that employee on that day to shorten.</div>
     <div class="fr"><label>Status</label>
       <select id="al-status">
         <option value="pending">Pending</option>
@@ -8646,6 +8655,20 @@ function staffTab(t,el){if(!el)return;el.closest('.tabs').querySelectorAll('.tab
 // ── ADD / EDIT LEAVE ──────────────────────────────────────────
 let editingLeaveId = null;
 
+function toggleALPartialFields(){
+  const checked = document.getElementById('al-partial').checked;
+  document.getElementById('al-partial-times').style.display = checked ? 'grid' : 'none';
+  document.getElementById('al-partial-hint').style.display = checked ? 'block' : 'none';
+  const toEl = document.getElementById('al-to');
+  if(checked){
+    // Partial-day leave applies to a single date only — lock "to" to "from".
+    toEl.value = document.getElementById('al-from').value;
+    toEl.disabled = true;
+  } else {
+    toEl.disabled = false;
+  }
+}
+
 function openAddLeaveModal(){
   try{
     editingLeaveId = null;
@@ -8664,10 +8687,17 @@ function openAddLeaveModal(){
     document.getElementById('al-to').value = FD(new Date());
     document.getElementById('al-status').value = 'pending';
     document.getElementById('al-notes').value = '';
+    document.getElementById('al-partial').checked = false;
+    document.getElementById('al-partial-start').value = '';
+    document.getElementById('al-partial-end').value = '';
+    toggleALPartialFields();
 
     document.getElementById('al-conflict-warn').style.display = 'none';
 
-    document.getElementById('al-from').onchange = checkLeaveConflictsModal;
+    document.getElementById('al-from').onchange = () => {
+      checkLeaveConflictsModal();
+      if(document.getElementById('al-partial').checked) document.getElementById('al-to').value = document.getElementById('al-from').value;
+    };
     document.getElementById('al-to').onchange = checkLeaveConflictsModal;
 
     OM('m-add-leave');
@@ -8703,10 +8733,18 @@ function openEditLeaveModal(id){
     document.getElementById('al-to').value = lr.to || '';
     document.getElementById('al-status').value = lr.status || 'pending';
     document.getElementById('al-notes').value = lr.notes || '';
+    const isPartial = lr.requestKind === 'partial_day';
+    document.getElementById('al-partial').checked = isPartial;
+    document.getElementById('al-partial-start').value = isPartial ? (lr.partialStart || '') : '';
+    document.getElementById('al-partial-end').value = isPartial ? (lr.partialEnd || '') : '';
+    toggleALPartialFields();
 
     document.getElementById('al-conflict-warn').style.display = 'none';
 
-    document.getElementById('al-from').onchange = checkLeaveConflictsModal;
+    document.getElementById('al-from').onchange = () => {
+      checkLeaveConflictsModal();
+      if(document.getElementById('al-partial').checked) document.getElementById('al-to').value = document.getElementById('al-from').value;
+    };
     document.getElementById('al-to').onchange = checkLeaveConflictsModal;
 
     OM('m-add-leave');
@@ -8898,11 +8936,18 @@ async function saveLeaveRequest(){
   const to = document.getElementById('al-to')?.value || '';
   const status = document.getElementById('al-status')?.value || 'pending';
   const notes = document.getElementById('al-notes')?.value || '';
+  const isPartial = document.getElementById('al-partial')?.checked || false;
+  const partialStart = isPartial ? (document.getElementById('al-partial-start')?.value || '') : '';
+  const partialEnd = isPartial ? (document.getElementById('al-partial-end')?.value || '') : '';
   const saveBtn = document.querySelector('#m-add-leave .btn-primary');
 
   if(!empId || !from || !to || from > to){
     alert('Please enter valid leave details.');
     return;
+  }
+  if(isPartial){
+    if(from !== to){ alert('Partial-day leave must be for a single date — set "From date" and "To date" to the same day.'); return; }
+    if(!partialStart || !partialEnd || partialStart >= partialEnd){ alert('Please enter a valid partial-day start and end time.'); return; }
   }
 
   let reqs = DB.get('leaveRequests') || [];
@@ -8920,6 +8965,9 @@ async function saveLeaveRequest(){
     to,
     status,
     notes,
+    requestKind: isPartial ? 'partial_day' : 'full_day',
+    partialStart: isPartial ? partialStart : null,
+    partialEnd: isPartial ? partialEnd : null,
     submitted: existing?.submitted || now,
     processedAt: status === 'approved' ? (existing?.processedAt || now) : null,
     syncedToRoster: status === 'approved',
@@ -8932,6 +8980,17 @@ async function saveLeaveRequest(){
   }
 
   try {
+    // Shrink the employee's rostered shift to reflect the partial-leave hours
+    // before saving the request itself — mirrors the Review & Process flow
+    // (processLeave) so a manager lodging and auto-approving a partial-day
+    // request here behaves identically to approving a staff-submitted one.
+    // Requires an existing, unadjusted rostered shift for that employee on
+    // that date — applyApprovedPartialLeaveToRoster throws a clear error
+    // otherwise, caught below.
+    if(status === 'approved' && isPartial){
+      await applyApprovedPartialLeaveToRoster(row);
+    }
+
     const saved = await upsertOneLeaveRequest(row);
 
     if(editingLeaveId){
@@ -8964,6 +9023,9 @@ async function saveLeaveRequest(){
         type,
         from,
         to,
+        requestKind: row.requestKind,
+        partialStart: row.partialStart,
+        partialEnd: row.partialEnd,
         notes,
         denialReason: status === 'declined' ? (row.denialReason || '') : ''
       });
@@ -8974,6 +9036,9 @@ async function saveLeaveRequest(){
         type,
         from,
         to,
+        requestKind: row.requestKind,
+        partialStart: row.partialStart,
+        partialEnd: row.partialEnd,
         notes,
         status
       });

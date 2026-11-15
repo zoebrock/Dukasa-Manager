@@ -11957,7 +11957,7 @@ wkE.setDate(wkE.getDate() + 13);
     const ordinary = empRows.filter(r=>r.summaryType === 'Ordinary').reduce((t,r)=>t+Number(r.hrs||0),0);
     const weekend = empRows.filter(r=>r.summaryType === 'Weekend').reduce((t,r)=>t+Number(r.hrs||0),0);
     const ot = empRows.filter(r=>r.summaryType === 'OT').reduce((t,r)=>t+Number(r.hrs||0),0);
-    const leave = empRows.filter(r=>['Annual Leave','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.summaryType)).reduce((t,r)=>t+Number(r.hrs||0),0);
+    const leave = empRows.filter(r=>['Annual Leave','Annual Leave (Public Holiday)','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.summaryType)).reduce((t,r)=>t+Number(r.hrs||0),0);
     const total = ordinary + weekend + ot + leave;
 
     const discrepancyCount = empRows.filter(r => r.hasHoursDiscrepancy).length;

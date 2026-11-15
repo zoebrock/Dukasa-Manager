@@ -10646,9 +10646,28 @@ if (s.entryType === 'leave' || s.entry_type === 'leave') {
     // ordinary hours stay capped at the rostered end (ordinaryCapOut above) and
     // the overrun is surfaced via the 'late-out' flag already pushed above for
     // manual review, instead of being silently exported as unapproved OT pay.
+    //
+    // Approval is a ceiling, not a guarantee — if the OT wasn't actually needed
+    // and the employee clocked out at/before their ordinary rostered end (never
+    // touched the OT window), or left partway through it, paid OT is clamped to
+    // whatever was actually clocked rather than the full approved window.
     if(approvedOT){
-      otHrs=Math.max(0,(MD(approvedOT.start,approvedOT.end)||0)/60);
-      rowCls='tr-ot';flags.push({type:'ot',msg:`OT ${approvedOT.start}–${approvedOT.end} (${otHrs.toFixed(1)}h)`});
+      const actualOutTime=co?co.time:null;
+      if(actualOutTime){
+        // Whichever is earlier: the actual clock-out or the approved OT end.
+        const otEndCap=MD(actualOutTime,approvedOT.end)>0?actualOutTime:approvedOT.end;
+        otHrs=Math.max(0,(MD(approvedOT.start,otEndCap)||0)/60);
+      } else {
+        // No clock-out recorded at all — can't know what was actually worked,
+        // so fall back to the full approved window as before.
+        otHrs=Math.max(0,(MD(approvedOT.start,approvedOT.end)||0)/60);
+      }
+      if(otHrs>0){
+        const otActualEnd=actualOutTime&&MD(actualOutTime,approvedOT.end)>0?actualOutTime:approvedOT.end;
+        rowCls='tr-ot';flags.push({type:'ot',msg:`OT ${approvedOT.start}–${otActualEnd} (${otHrs.toFixed(1)}h)${otActualEnd!==approvedOT.end?` — approved to ${approvedOT.end}, clocked out early`:''}`});
+      } else {
+        flags.push({type:'ot',msg:`OT approved ${approvedOT.start}–${approvedOT.end} but not worked — clocked out at ${actualOutTime||'rostered end'}, before OT started`});
+      }
     }
 
 let effectiveHrs=actualHrs;

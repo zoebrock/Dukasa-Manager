@@ -10169,6 +10169,69 @@ function updateApprovedHrsDisplay(empId,date){
   el.textContent=ROUND30(c.customHrs).toFixed(1)+'h';
 }
 
+// Manual override for OT hours on a given employee/day — independent of
+// updateCustomHrs (which only covers ordinary hours). Passing null/empty
+// clears the override and reverts to the automatic approved-OT calculation
+// (approved-only, clamped to the actual clock-out). Unlike updateCustomHrs,
+// this creates the customHours record if one doesn't exist yet, since a
+// pure-OT day with no rostered shift may never have gone through
+// getOrCreateCustom() during a render.
+async function updateOTOverride(empId,date,val){
+  let ch=DB.get('customHours')||[];
+  let idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
+  if(idx<0){
+    ch=[...ch,{id:'ch'+Date.now()+Math.random(),empId,date,
+      customStart:null,customEnd:null,customHrs:0,autoHrs:0,
+      autoRounded:false,manualEntry:false,approved:false,otOverride:null}];
+    idx=ch.length-1;
+  }
+  const previousVal=ch[idx].otOverride;
+  const trimmed=(val===''||val===null||val===undefined)?null:ROUND30(parseFloat(val)||0);
+  ch[idx]={...ch[idx],otOverride:trimmed};
+  const saveResult=await DB.set('customHours',ch);
+  if(!saveResult.ok){
+    if(typeof event!=='undefined'&&event&&event.target) event.target.value=(previousVal!==null&&previousVal!==undefined)?previousVal.toFixed(2):'';
+    return;
+  }
+  if(tsViewMode==='employee') renderTSByEmpSection(empId);
+  else renderTSDayBody(date);
+}
+
+// Deletes an employee's entire timesheet day — the underlying shift(s),
+// clock events, OT request and custom-hours override for that empId/date.
+// Real "shifts" rows are deleted straight from Supabase via DB.set's own
+// removed-row diffing; synthetic sick/public-holiday rows (ids prefixed
+// 'sk-'/'ph-') never reach here — the UI routes those to their own pages
+// instead, since there's no underlying shift row to delete for them.
+async function deleteTimesheetDay(empId,date,empName){
+  if(!confirm(`Delete ${empName}'s entire timesheet entry for ${FDL(date)}?\n\nThis removes the shift, its clock events, any OT request and custom hours for that day. This cannot be undone.`)) return;
+
+  try{
+    _setSyncIndicator('saving');
+
+    const shifts=(DB.get('shifts')||[]).filter(s=>!(String(s.empId)===String(empId)&&String(s.date)===String(date)));
+    await DB.set('shifts',shifts);
+
+    const ce=(DB.get('clockEvents')||[]).filter(e=>!(String(e.empId)===String(empId)&&String(e.date)===String(date)));
+    await DB.set('clockEvents',ce);
+
+    const ot=(DB.get('otRequests')||[]).filter(o=>!(String(o.empId)===String(empId)&&String(o.date)===String(date)));
+    await DB.set('otRequests',ot);
+
+    const ch=(DB.get('customHours')||[]).filter(c=>!(String(c.empId)===String(empId)&&String(c.date)===String(date)));
+    await DB.set('customHours',ch);
+
+    _setSyncIndicator('saved');
+    toast('Timesheet day deleted','success');
+
+    renderTS();
+  }catch(err){
+    console.error('[DELETE TS DAY] error:',err);
+    alert('Could not delete: '+err.message);
+    _setSyncIndicator('error');
+  }
+}
+
 async function updateCustomHrs(empId,date,val){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
@@ -10693,6 +10756,22 @@ const custom=getOrCreateCustom(
 
 const approvedHrs=custom.approved ? custom.customHrs : null;
 
+// Manager can directly override the computed OT value (e.g. correcting it
+// without touching the underlying OT request/clock events). Takes priority
+// over everything above — approved-OT clamping, the no-approval-no-pay rule,
+// all of it. Clearing the override (null/undefined) reverts to automatic.
+if(custom.otOverride!==null && custom.otOverride!==undefined){
+  otHrs=ROUND30(Number(custom.otOverride)||0);
+  flags=flags.filter(f=>f.type!=='ot');
+  rowCls=rowCls.replace('tr-ot','').trim();
+  if(otHrs>0){
+    rowCls=(rowCls?rowCls+' ':'')+'tr-ot';
+    flags.push({type:'ot',msg:`OT manually set to ${otHrs.toFixed(1)}h`});
+  } else {
+    flags.push({type:'ot',msg:'OT manually set to 0h'});
+  }
+}
+
 // Flag any day where rostered hours don't match what the system actually computed
 // as worked — e.g. a late clock-in (tech issue, forgot to tap on) quietly shrinks
 // effectiveHrs below sHrs with no visible highlight today; it only shows as a small
@@ -11012,6 +11091,7 @@ function currentTSRange(){
 
 function tsByEmpSectionHTML(emp, empRows){
   const empId = String(emp.id);
+  const empName = `${emp.first||''} ${emp.last||''}`.trim();
   const rows = empRows.slice().sort((a,b)=>(a.date||'').localeCompare(b.date||'') || (a.start||'').localeCompare(b.start||''));
 
   const rowsHTML = rows.map(r => {
@@ -11021,6 +11101,9 @@ function tsByEmpSectionHTML(emp, empRows){
     const discBadge = r.hasHoursDiscrepancy
       ? `<span class="review-badge" title="${escHTML(r.discrepancyReason||'')}" style="margin-left:6px">⚠</span>`
       : '';
+    const otCell = r.summaryType === 'OT'
+      ? `<input type="number" step="0.25" min="0" class="custom-hrs-input" style="width:60px;text-align:center;color:var(--rd)" value="${Number(r.hrs||0).toFixed(2)}" onchange="updateOTOverride('${empId}','${r.date}',this.value)" title="Override OT hours directly for this day">`
+      : '—';
     return `<tr style="${r.hasHoursDiscrepancy?'background:var(--rl)':''}">
       <td style="padding:5px 8px">${r.date}</td>
       <td style="padding:5px 8px">${r.day}</td>
@@ -11029,7 +11112,9 @@ function tsByEmpSectionHTML(emp, empRows){
       <td style="padding:5px 8px">${r.end||'—'}</td>
       <td style="padding:5px 8px;text-align:center">${r.rosteredHrs!==undefined?Number(r.rosteredHrs).toFixed(2):'—'}</td>
       <td style="padding:5px 8px;text-align:center">${hoursCell}${discBadge}</td>
+      <td style="padding:5px 8px;text-align:center">${otCell}</td>
       <td style="padding:5px 8px;font-size:11px;color:var(--t2)">${escHTML(r.notes||'')}</td>
+      <td style="padding:5px 8px;text-align:center"><button class="btn btn-sm btn-danger" style="font-size:9px;padding:2px 6px" onclick="deleteTimesheetDay('${empId}','${r.date}','${escHTML(empName)}')" title="Delete this entire day for this employee">🗑</button></td>
     </tr>`;
   }).join('');
 
@@ -11054,7 +11139,9 @@ function tsByEmpSectionHTML(emp, empRows){
             <th style="padding:6px 8px">End</th>
             <th style="padding:6px 8px;text-align:center">Rostered Hrs</th>
             <th style="padding:6px 8px;text-align:center">Hours</th>
+            <th style="padding:6px 8px;text-align:center">OT</th>
             <th style="padding:6px 8px">Notes</th>
+            <th style="padding:6px 8px;text-align:center">Actions</th>
           </tr>
         </thead>
         <tbody>${rowsHTML}</tbody>
@@ -11065,7 +11152,8 @@ function tsByEmpSectionHTML(emp, empRows){
             <td style="font-weight:600;font-size:11px" colspan="3">Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${ot.toFixed(2)}h | Leave ${leave.toFixed(2)}h</td>
             <td></td>
             <td style="text-align:center" id="ts-byemp-total-${empId}">${total.toFixed(2)}</td>
-            <td style="font-size:11px;color:var(--rd)">${discrepancyCount?`⚠ ${discrepancyCount} day${discrepancyCount>1?'s':''} to review`:''}</td>
+            <td></td>
+            <td style="font-size:11px;color:var(--rd)" colspan="2">${discrepancyCount?`⚠ ${discrepancyCount} day${discrepancyCount>1?'s':''} to review`:''}</td>
           </tr>
         </tfoot>
       </table>
@@ -11212,7 +11300,12 @@ function renderTSDayBody(ds){
         <div style="text-align:center;min-width:70px">
           <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Hours</div>
           <input type="number" step="0.25" min="0" class="custom-hrs-input${r.custom.manualEntry?' edited':''}" id="custom-hrs-${empKey}-${dateKey}" value="${r.custom.customHrs.toFixed(2)}" onchange="updateCustomHrs('${empKey}','${dateKey}',this.value)" title="Type an exact hours value directly" style="width:66px;font-weight:700;text-align:center">
-          ${r.otHrs>0?`<div class="ot-val" style="font-size:10px;margin-top:2px">+${r.otHrs.toFixed(2)}h OT</div>`:''}
+        </div>
+
+        <div style="text-align:center;min-width:70px">
+          <div style="font-size:9.5px;color:var(--t3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">OT (manual)</div>
+          <input type="number" step="0.25" min="0" class="custom-hrs-input${r.custom.otOverride!==null&&r.custom.otOverride!==undefined?' edited':''}" value="${r.custom.otOverride!==null&&r.custom.otOverride!==undefined?Number(r.custom.otOverride).toFixed(2):r.otHrs.toFixed(2)}" onchange="updateOTOverride('${empKey}','${dateKey}',this.value)" title="Override OT hours directly — leave blank/0 and this reverts to the automatic approved-OT calculation" style="width:66px;font-weight:700;text-align:center;color:var(--rd)">
+          ${r.custom.otOverride!==null&&r.custom.otOverride!==undefined?`<button class="btn btn-sm" style="font-size:9px;padding:1px 5px;margin-top:3px" onclick="updateOTOverride('${empKey}','${dateKey}',null)">Clear</button>`:''}
         </div>
 
         <div style="text-align:center;min-width:60px">
@@ -11267,6 +11360,14 @@ function renderTSDayBody(ds){
           </div>
           <div>
             <button class="btn btn-sm" onclick="openEditHoursModal('${empKey}','${dateKey}','${r.s.id}')">Edit hours</button>
+          </div>
+          <div>
+            ${String(r.s.id).startsWith('ph-')
+              ? `<span style="font-size:10px;color:var(--t3)">Public holiday — manage via Settings</span>`
+              : String(r.s.id).startsWith('sk-')
+                ? `<span style="font-size:10px;color:var(--t3)">Sick day — manage via Sick Days</span>`
+                : `<button class="btn btn-sm btn-danger" onclick="deleteTimesheetDay('${empKey}','${dateKey}','${escHTML((r.emp?r.emp.first+' '+r.emp.last:'this employee'))}')">🗑 Delete day</button>`
+            }
           </div>
         </div>
         ${flagsHTML?`<div style="margin-top:10px;white-space:normal">${flagsHTML}</div>`:''}
@@ -11427,6 +11528,13 @@ function buildTSEmployeeRows(ws, we){
     byEmp[String(emp.id)] = [];
   });
 
+  // Dates where OT has already been accounted for from buildTSRows' own
+  // (approved + clamped-to-actual-clock-out + manager-override) otHrs value,
+  // so the getApprovedTSOTsForRange fallback below — which only exists for
+  // OT with no rostered shift that day to attach to — never double-counts
+  // the same approved OT twice with two different (possibly diverging) hours.
+  const otAccountedFor = new Set();
+
   // Use the same cleaned rows as the on-screen timesheet.
   days.forEach(ds => {
     const rows = buildTSRows(ds);
@@ -11434,6 +11542,27 @@ function buildTSEmployeeRows(ws, we){
     rows.forEach(r => {
       const empId = String(r.emp?.id || r.s?.empId || '');
       if(!empId || !byEmp[empId]) return;
+
+      // OT line — reuse buildTSRows' own otHrs (already approved-only,
+      // clamped to the actual clock-out, and manager-override aware) rather
+      // than re-deriving it from the raw OT request window, so this table
+      // and the export can never show different OT hours than the Timesheets
+      // day view for the exact same day.
+      if(r.otHrs > 0){
+        otAccountedFor.add(empId + '|' + ds);
+        const otStart = r.approvedOT?.start || r.s?.end || '';
+        const otEnd = otStart ? addMinutesToTimeStr(otStart, r.otHrs * 60) : (r.approvedOT?.end || '');
+        byEmp[empId].push({
+          date: ds,
+          day: dayLabel(ds),
+          type: 'OT',
+          summaryType: 'OT',
+          start: otStart,
+          end: otEnd,
+          hrs: ROUND30(r.otHrs),
+          notes: (r.custom && r.custom.otOverride !== null && r.custom.otOverride !== undefined) ? 'OT manually set by manager' : ''
+        });
+      }
 
       const isPartialLeave = tsIsPartialLeave(r.s);
       const baseType = isPartialLeave
@@ -11540,10 +11669,13 @@ function buildTSEmployeeRows(ws, we){
     });
   });
 
-  // Add approved OT as its own separate payroll line.
+  // Add approved OT as its own separate payroll line — but only for OT with
+  // no rostered shift that day for buildTSRows to have already accounted for
+  // above (e.g. called in purely for OT on an otherwise rostered-off day).
   getApprovedTSOTsForRange(ws, we).forEach(o => {
     const empId = String(o.empId || '');
     if(!byEmp[empId]) return;
+    if(otAccountedFor.has(empId + '|' + o.date)) return;
 
     const hrs = ROUND30(Math.max(0, MD(o.start, o.end) / 60));
     if(hrs <= 0) return;

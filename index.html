@@ -1612,6 +1612,10 @@ function isPublishedShift(shift){
         <span style="font-size:12px">Add auto-shift to weekly roster</span>
         <button class="toggle" id="tog-auto-shift" onclick="this.classList.toggle('on')"></button>
       </div>
+      <div class="nr" style="margin-bottom:12px">
+        <span style="font-size:12px">Exclude from timesheets <span style="color:var(--t3);font-weight:400">(e.g. owner — never rostered, no hours to track)</span></span>
+        <button class="toggle" id="tog-exclude-ts" onclick="this.classList.toggle('on')"></button>
+      </div>
       <div style="font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--t3);margin-bottom:8px">Contracted hours per day</div>
       <div style="border:1px solid var(--border);border-radius:var(--rsm);overflow:hidden;margin-bottom:12px">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -8287,7 +8291,7 @@ function populateTeamOptions_(){
   const teams=[...new Set((DB.get('staff')||[]).map(s=>s.team).filter(Boolean))].sort();
   dl.innerHTML=teams.map(t=>`<option value="${escHTML(t)}"></option>`).join('');
 }
-function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes','sf-team'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';populateRoleSelects();populateTeamOptions_();const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';buildModalAvailGrid({});buildModalBreakSchedule({});buildContractDaysTable(null);renderStaffUnavailabilityList(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
+function openAddStaffModal(){editingStaffId=null;document.getElementById('staff-modal-title').textContent='Add staff member';['sf-first','sf-last','sf-email','sf-phone','sf-pin','sf-avail-notes','sf-team'].forEach(id=>document.getElementById(id).value='');document.getElementById('sf-dob').value='';populateRoleSelects();populateTeamOptions_();const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value='';document.getElementById('tog-auto-shift')?.classList.remove('on');document.getElementById('tog-exclude-ts')?.classList.remove('on');buildModalAvailGrid({});buildModalBreakSchedule({});buildContractDaysTable(null);renderStaffUnavailabilityList(null);staffTab('info',document.querySelector('#staff-modal-tabs .tab'));OM('m-staff');}
 function editStaff(id){
   editingStaffId=id;const staff=DB.get('staff')||[];const emp=staff.find(s=>s.id===id);if(!emp)return;
   document.getElementById('staff-modal-title').textContent='Edit: '+emp.first+' '+emp.last;
@@ -8299,6 +8303,7 @@ function editStaff(id){
   document.getElementById('sf-pin').value=emp.pin||'';
   document.getElementById('sf-avail-notes').value=emp.availNotes||'';
   const tog=document.getElementById('tog-auto-shift');if(tog) tog.classList.toggle('on',!!emp.autoShift);
+  const togExTS=document.getElementById('tog-exclude-ts');if(togExTS) togExTS.classList.toggle('on',!!emp.excludeFromTimesheets);
   const contractHrsEl=document.getElementById('sf-contracted-hrs');if(contractHrsEl)contractHrsEl.value=emp.contractedHrsPerWeek||'';
   buildModalAvailGrid(emp.availability||{});
   buildModalBreakSchedule(emp.breakSchedule||{});
@@ -8535,7 +8540,8 @@ function saveStaff(){
     color:EMP_COLORS[staff.length%EMP_COLORS.length],
     contractStart:cStart,contractEnd:cEnd,contractBreak:cBreak,
     contractDays,contractPerDay,contractedHrsPerWeek,
-    autoShift:document.getElementById('tog-auto-shift').classList.contains('on')
+    autoShift:document.getElementById('tog-auto-shift').classList.contains('on'),
+    excludeFromTimesheets:document.getElementById('tog-exclude-ts')?.classList.contains('on')||false
   };
   if(editingStaffId){const idx=staff.findIndex(s=>s.id===editingStaffId);if(idx>=0){ne.color=staff[idx].color;staff[idx]=ne;}}else staff.push(ne);
   DB.set('staff',staff);CM('m-staff');renderStaff();editingStaffId=null;
@@ -10533,6 +10539,7 @@ function getApprovedTSOTsForRange(startDs, endDs){
 
 function buildTSRows(dayDate){
   const staff = [...(DB.get('staff') || [])]
+    .filter(e => !e.excludeFromTimesheets)
     .sort((a,b) => a.first.localeCompare(b.first) || a.last.localeCompare(b.last));
 
   const ce = getClockEvents();
@@ -10929,7 +10936,7 @@ function renderTS(){
   const lr = (DB.get('leaveRequests') || []).filter(l => l.status === 'approved');
   const sd = DB.get('sickDays') || [];
   const settings = DB.get('settings') || { dailyOT:true, dailyOTHours:8, gracePeriod:5 };
-  const staff = DB.get('staff') || [];
+  const staff = (DB.get('staff') || []).filter(e => !e.excludeFromTimesheets);
 
   const wShifts = shifts.filter(s =>
     s.date >= ws &&
@@ -11089,6 +11096,28 @@ function currentTSRange(){
   return { ws: FD(wkS), we: FD(wkE) };
 }
 
+// Fixed column widths shared by the header, body and footer so every
+// column lines up exactly regardless of content length — the previous
+// version let each row's content size its own cells, so numbers landed at
+// different x-positions row to row.
+const TS_BYEMP_COLS = [
+  { w: 92,  align: 'left'   }, // Date
+  { w: 92,  align: 'left'   }, // Day
+  { w: 150, align: 'left'   }, // Type
+  { w: 74,  align: 'center' }, // Start
+  { w: 74,  align: 'center' }, // End
+  { w: 92,  align: 'center' }, // Rostered Hrs
+  { w: 92,  align: 'center' }, // Hours
+  { w: 80,  align: 'center' }, // OT
+  { w: 220, align: 'left'   }, // Notes
+  { w: 64,  align: 'center' }  // Actions
+];
+const TS_BYEMP_CELL_PAD = '7px 10px';
+
+function tsByEmpColgroupHTML(){
+  return `<colgroup>${TS_BYEMP_COLS.map(c=>`<col style="width:${c.w}px">`).join('')}</colgroup>`;
+}
+
 function tsByEmpSectionHTML(emp, empRows){
   const empId = String(emp.id);
   const empName = `${emp.first||''} ${emp.last||''}`.trim();
@@ -11096,25 +11125,31 @@ function tsByEmpSectionHTML(emp, empRows){
 
   const rowsHTML = rows.map(r => {
     const hoursCell = r.editable
-      ? `<input type="number" step="0.25" min="0" class="custom-hrs-input" style="width:64px;font-weight:700;text-align:center" value="${Number(r.hrs||0).toFixed(2)}" onchange="updateTSByEmpHours('${empId}','${r.date}',this.value)" title="Type an exact hours value directly">`
+      ? `<input type="number" step="0.25" min="0" class="custom-hrs-input" style="width:100%;box-sizing:border-box;font-weight:700;text-align:center" value="${Number(r.hrs||0).toFixed(2)}" onchange="updateTSByEmpHours('${empId}','${r.date}',this.value)" title="Type an exact hours value directly">`
       : `<span style="font-weight:700">${Number(r.hrs||0).toFixed(2)}</span>`;
     const discBadge = r.hasHoursDiscrepancy
       ? `<span class="review-badge" title="${escHTML(r.discrepancyReason||'')}" style="margin-left:6px">⚠</span>`
       : '';
     const otCell = r.summaryType === 'OT'
-      ? `<input type="number" step="0.25" min="0" class="custom-hrs-input" style="width:60px;text-align:center;color:var(--rd)" value="${Number(r.hrs||0).toFixed(2)}" onchange="updateOTOverride('${empId}','${r.date}',this.value)" title="Override OT hours directly for this day">`
-      : '—';
+      ? `<input type="number" step="0.25" min="0" class="custom-hrs-input" style="width:100%;box-sizing:border-box;text-align:center;color:var(--rd)" value="${Number(r.hrs||0).toFixed(2)}" onchange="updateOTOverride('${empId}','${r.date}',this.value)" title="Override OT hours directly for this day">`
+      : '<span style="color:var(--t3)">—</span>';
+    const startCell = r.editable
+      ? `<input type="time" class="custom-time-input" style="width:100%;box-sizing:border-box" value="${r.start||''}" onchange="updateTSByEmpTime('${empId}','${r.date}','customStart',this.value,'${r.shiftId||''}')" title="Custom start time">`
+      : (r.start || '—');
+    const endCell = r.editable
+      ? `<input type="time" class="custom-time-input" style="width:100%;box-sizing:border-box" value="${r.end||''}" onchange="updateTSByEmpTime('${empId}','${r.date}','customEnd',this.value,'${r.shiftId||''}')" title="Custom end time">`
+      : (r.end || '—');
     return `<tr style="${r.hasHoursDiscrepancy?'background:var(--rl)':''}">
-      <td style="padding:5px 8px">${r.date}</td>
-      <td style="padding:5px 8px">${r.day}</td>
-      <td style="padding:5px 8px">${r.type}</td>
-      <td style="padding:5px 8px">${r.start||'—'}</td>
-      <td style="padding:5px 8px">${r.end||'—'}</td>
-      <td style="padding:5px 8px;text-align:center">${r.rosteredHrs!==undefined?Number(r.rosteredHrs).toFixed(2):'—'}</td>
-      <td style="padding:5px 8px;text-align:center">${hoursCell}${discBadge}</td>
-      <td style="padding:5px 8px;text-align:center">${otCell}</td>
-      <td style="padding:5px 8px;font-size:11px;color:var(--t2)">${escHTML(r.notes||'')}</td>
-      <td style="padding:5px 8px;text-align:center"><button class="btn btn-sm btn-danger" style="font-size:9px;padding:2px 6px" onclick="deleteTimesheetDay('${empId}','${r.date}','${escHTML(empName)}')" title="Delete this entire day for this employee">🗑</button></td>
+      <td style="padding:${TS_BYEMP_CELL_PAD}">${r.date}</td>
+      <td style="padding:${TS_BYEMP_CELL_PAD}">${r.day}</td>
+      <td style="padding:${TS_BYEMP_CELL_PAD}">${r.type}</td>
+      <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center">${startCell}</td>
+      <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center">${endCell}</td>
+      <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center">${r.rosteredHrs!==undefined?Number(r.rosteredHrs).toFixed(2):'—'}</td>
+      <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center">${hoursCell}${discBadge}</td>
+      <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center">${otCell}</td>
+      <td style="padding:${TS_BYEMP_CELL_PAD};font-size:11px;color:var(--t2)">${escHTML(r.notes||'')}</td>
+      <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center"><button class="btn btn-sm btn-danger" style="font-size:9px;padding:2px 6px" onclick="deleteTimesheetDay('${empId}','${r.date}','${escHTML(empName)}')" title="Delete this entire day for this employee">🗑</button></td>
     </tr>`;
   }).join('');
 
@@ -11129,34 +11164,37 @@ function tsByEmpSectionHTML(emp, empRows){
     <div class="staff-card" style="margin-bottom:14px;overflow:hidden">
       <div style="padding:10px 14px;font-weight:700;font-size:14px;background:var(--s2);border-bottom:1px solid var(--border)">${emp.first} ${emp.last}</div>
       ${rows.length ? `
-      <table class="ts-byemp-table" style="width:100%;border-collapse:collapse;font-size:12px">
+      <div style="overflow-x:auto">
+      <table class="ts-byemp-table" style="width:100%;min-width:980px;border-collapse:collapse;font-size:12px;table-layout:fixed">
+        ${tsByEmpColgroupHTML()}
         <thead>
           <tr style="background:var(--s1);text-align:left">
-            <th style="padding:6px 8px">Date</th>
-            <th style="padding:6px 8px">Day</th>
-            <th style="padding:6px 8px">Type</th>
-            <th style="padding:6px 8px">Start</th>
-            <th style="padding:6px 8px">End</th>
-            <th style="padding:6px 8px;text-align:center">Rostered Hrs</th>
-            <th style="padding:6px 8px;text-align:center">Hours</th>
-            <th style="padding:6px 8px;text-align:center">OT</th>
-            <th style="padding:6px 8px">Notes</th>
-            <th style="padding:6px 8px;text-align:center">Actions</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD}">Date</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD}">Day</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD}">Type</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD};text-align:center">Start</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD};text-align:center">End</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD};text-align:center">Rostered Hrs</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD};text-align:center">Hours</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD};text-align:center">OT</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD}">Notes</th>
+            <th style="padding:${TS_BYEMP_CELL_PAD};text-align:center">Actions</th>
           </tr>
         </thead>
         <tbody>${rowsHTML}</tbody>
         <tfoot>
           <tr style="background:var(--s2);font-weight:700">
-            <td style="padding:6px 8px">TOTAL</td>
-            <td></td>
-            <td style="font-weight:600;font-size:11px" colspan="3">Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${ot.toFixed(2)}h | Leave ${leave.toFixed(2)}h</td>
-            <td></td>
-            <td style="text-align:center" id="ts-byemp-total-${empId}">${total.toFixed(2)}</td>
-            <td></td>
-            <td style="font-size:11px;color:var(--rd)" colspan="2">${discrepancyCount?`⚠ ${discrepancyCount} day${discrepancyCount>1?'s':''} to review`:''}</td>
+            <td style="padding:${TS_BYEMP_CELL_PAD}">TOTAL</td>
+            <td style="padding:${TS_BYEMP_CELL_PAD}"></td>
+            <td style="padding:${TS_BYEMP_CELL_PAD};font-weight:600;font-size:11px" colspan="3">Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${ot.toFixed(2)}h | Leave ${leave.toFixed(2)}h</td>
+            <td style="padding:${TS_BYEMP_CELL_PAD}"></td>
+            <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center" id="ts-byemp-total-${empId}">${total.toFixed(2)}</td>
+            <td style="padding:${TS_BYEMP_CELL_PAD}"></td>
+            <td style="padding:${TS_BYEMP_CELL_PAD};font-size:11px;color:var(--rd)" colspan="2">${discrepancyCount?`⚠ ${discrepancyCount} day${discrepancyCount>1?'s':''} to review`:''}</td>
           </tr>
         </tfoot>
       </table>
+      </div>
       ` : `<div style="padding:16px;color:var(--t2);font-size:12px">No shifts this fortnight.</div>`}
     </div>
   `;
@@ -11191,6 +11229,15 @@ function renderTSByEmpSection(empId){
 
 async function updateTSByEmpHours(empId, date, val){
   await updateCustomHrs(empId, date, val);
+  renderTSByEmpSection(empId);
+}
+
+// Editing a Start/End time in the By Employee table recalculates that row's
+// hours (via updateCustomTime, same as the Day view) and then re-renders
+// this employee's whole section so the row, the TOTAL, and the Ordinary/
+// Weekend/OT/Leave breakdown all reflect the corrected time immediately.
+async function updateTSByEmpTime(empId, date, field, val, shiftId){
+  await updateCustomTime(empId, date, field, val, shiftId);
   renderTSByEmpSection(empId);
 }
 
@@ -11492,7 +11539,7 @@ function buildTSEmployeeRows(ws, we){
   };
 
   const staffAll = (DB.get('staff') || [])
-    .slice()
+    .filter(e => !e.excludeFromTimesheets)
     .sort((a,b)=>((a.first||'')+' '+(a.last||'')).localeCompare((b.first||'')+' '+(b.last||'')));
 
   const staffById = {};
@@ -11576,11 +11623,13 @@ function buildTSEmployeeRows(ws, we){
               : 'Ordinary';
       const type = isPartialLeave ? `${baseType} - Partial Leave` : baseType;
 
+      // A manager's manually-typed hours or custom start/end take effect
+      // immediately — they don't wait on the separate "Approved" sign-off
+      // toggle, otherwise an edit here would silently revert back to the
+      // auto-computed value on the very next render (the bug being fixed).
       const rawHrs = ROUND30(Number(
-        r.approvedHrs ??
-        r.actualHrs ??
-        r.sHrs ??
-        0
+        (r.custom && r.custom.manualEntry) ? r.custom.customHrs :
+        (r.approvedHrs ?? r.actualHrs ?? r.sHrs ?? 0)
       ));
 
       if(rawHrs <= 0) return;
@@ -11656,13 +11705,16 @@ function buildTSEmployeeRows(ws, we){
         day: dayLabel(ds),
         type,
         summaryType: baseType,
-        start: r.s?.start || '',
-        end: r.s?.end || '',
+        start: r.custom?.customStart || r.s?.start || '',
+        end: r.custom?.customEnd || r.s?.end || '',
         hrs: rawHrs,
         rosteredHrs: ROUND30(Number(r.sHrs || 0)),
         notes,
         editable: true,
         empId,
+        shiftId: r.s?.id || '',
+        customStart: r.custom?.customStart || '',
+        customEnd: r.custom?.customEnd || '',
         hasHoursDiscrepancy: !!r.hasHoursDiscrepancy,
         discrepancyReason: r.discrepancyReason || ''
       });

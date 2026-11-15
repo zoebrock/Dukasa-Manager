@@ -10628,22 +10628,15 @@ if (s.entryType === 'leave' || s.entry_type === 'leave') {
       status='Completed';
     }
 
-    // OT — approved OT takes priority; otherwise vs contracted hours
+    // OT — paid OT hours come ONLY from a staff-approved OT request (approvedOT,
+    // already filtered to approved===true above). Working past the rostered/
+    // contracted end with no approved OT request is never auto-paid as OT here —
+    // ordinary hours stay capped at the rostered end (ordinaryCapOut above) and
+    // the overrun is surfaced via the 'late-out' flag already pushed above for
+    // manual review, instead of being silently exported as unapproved OT pay.
     if(approvedOT){
       otHrs=Math.max(0,(MD(approvedOT.start,approvedOT.end)||0)/60);
       rowCls='tr-ot';flags.push({type:'ot',msg:`OT ${approvedOT.start}–${approvedOT.end} (${otHrs.toFixed(1)}h)`});
-    } else if(actualHrs!==null&&!isLeave&&!isSick){
-      const effIn=autoRoundedIn||(ci&&ci.time)||s.start;
-      const effOut=autoRoundedOut||(co&&co.time)||s.end;
-      const effBreak=bActMin!==null?bActMin:s.breakMin;
-      const effectiveWorkedHrs=Math.max(0,MD(effIn,effOut)-effBreak)/60;
-      // Compare vs contracted daily hours if set, else vs dailyOT threshold
-      const otThreshold=contractedHrs>0?contractedHrs:parseFloat(settings.dailyOTHours)||8;
-      if(effectiveWorkedHrs>otThreshold){
-        otHrs=parseFloat((effectiveWorkedHrs-otThreshold).toFixed(2));
-        rowCls='tr-ot';
-        if(contractedHrs>0) flags.push({type:'ot',msg:`Above contracted ${contractedHrs.toFixed(1)}h — ${effectiveWorkedHrs.toFixed(1)}h worked`});
-      }
     }
 
 let effectiveHrs=actualHrs;

@@ -10274,6 +10274,38 @@ async function deleteTimesheetDay(empId,date,empName){
   }
 }
 
+// Cancels an OT row on the By Employee table — reuses the same deleteOT()
+// the OT Tracker uses (confirms, reverses the shift if it was already
+// approved, notifies the staff member, deletes the request), then refreshes
+// just this employee's section so the row and TOTAL update immediately.
+async function deleteTSByEmpOT(otRequestId, empId){
+  await deleteOT(otRequestId);
+  renderTSByEmpSection(empId);
+}
+
+// Cancels a full-day approved leave row on the By Employee table. These
+// rows have no underlying "shifts" record at all (buildTSRows synthesizes
+// them from the leave request directly), so deleteTimesheetDay is a no-op
+// for them — the actual record to remove is the leave request itself.
+async function deleteTSByEmpLeave(leaveRequestId, empId){
+  if(!confirm('Cancel this approved leave request? This will remove it from Leave & Sick, the roster, timesheets and the staff portal. This cannot be undone.')) return;
+  try{
+    _setSyncIndicator('saving');
+    await deleteLeaveRequestById(leaveRequestId);
+    CACHE['rx3_leaveRequests'] = (DB.get('leaveRequests') || [])
+      .filter(l => String(l.id) !== String(leaveRequestId));
+    bumpDataVersion('leaveRequests');
+    _setSyncIndicator('saved');
+    toast('Leave request cancelled','success');
+    if(tsViewMode==='employee') renderTSByEmpSection(empId);
+    else renderTS();
+  }catch(err){
+    console.error('[DELETE TS BYEMP LEAVE] error:',err);
+    alert('Could not cancel leave request: '+err.message);
+    _setSyncIndicator('error');
+  }
+}
+
 async function updateCustomHrs(empId,date,val){
   let ch=DB.get('customHours')||[];
   const idx=ch.findIndex(x=>x.empId===empId&&x.date===date);
@@ -11175,6 +11207,30 @@ function tsByEmpSectionHTML(emp, empRows){
     const endCell = r.editable
       ? `<input type="time" class="custom-time-input" style="width:100%;box-sizing:border-box" value="${r.end||''}" onchange="updateTSByEmpTime('${empId}','${r.date}','customEnd',this.value,'${r.shiftId||''}')" title="Custom end time">`
       : (r.end || '—');
+
+    // Which delete action (if any) actually removes this row depends on
+    // what's really backing it — a real roster shift, an OT request, an
+    // approved leave request, or nothing per-employee at all (a sick day
+    // with no shift, or an auto-applied public holiday).
+    let actionCell;
+    if(r.rowKind === 'shift'){
+      actionCell = `<button class="btn btn-sm btn-danger" style="font-size:9px;padding:2px 6px" onclick="deleteTimesheetDay('${empId}','${r.date}','${escHTML(empName)}')" title="Delete this entire day for this employee">🗑</button>`;
+    } else if(r.rowKind === 'ot'){
+      actionCell = r.otRequestId
+        ? `<button class="btn btn-sm btn-danger" style="font-size:9px;padding:2px 6px" onclick="deleteTSByEmpOT('${r.otRequestId}','${empId}')" title="Cancel this OT request">🗑</button>`
+        : `<span style="font-size:9px;color:var(--t3)">—</span>`;
+    } else if(r.rowKind === 'leave-request'){
+      actionCell = r.leaveRequestId
+        ? `<button class="btn btn-sm btn-danger" style="font-size:9px;padding:2px 6px" onclick="deleteTSByEmpLeave('${r.leaveRequestId}','${empId}')" title="Cancel this leave request">🗑</button>`
+        : `<span style="font-size:9px;color:var(--t3)">—</span>`;
+    } else if(r.rowKind === 'sick-noshift'){
+      actionCell = `<span style="font-size:9.5px;color:var(--t3)">Manage via Sick Days</span>`;
+    } else if(r.rowKind === 'public-holiday'){
+      actionCell = `<span style="font-size:9.5px;color:var(--t3)">Manage via Settings</span>`;
+    } else {
+      actionCell = `<span style="font-size:9px;color:var(--t3)">—</span>`;
+    }
+
     return `<tr style="${r.hasHoursDiscrepancy?'background:var(--rl)':''}">
       <td style="padding:${TS_BYEMP_CELL_PAD}">${r.date}</td>
       <td style="padding:${TS_BYEMP_CELL_PAD}">${r.day}</td>
@@ -11185,7 +11241,7 @@ function tsByEmpSectionHTML(emp, empRows){
       <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center">${hoursCell}${discBadge}</td>
       <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center">${otCell}</td>
       <td style="padding:${TS_BYEMP_CELL_PAD};font-size:11px;color:var(--t2)">${escHTML(r.notes||'')}</td>
-      <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center"><button class="btn btn-sm btn-danger" style="font-size:9px;padding:2px 6px" onclick="deleteTimesheetDay('${empId}','${r.date}','${escHTML(empName)}')" title="Delete this entire day for this employee">🗑</button></td>
+      <td style="padding:${TS_BYEMP_CELL_PAD};text-align:center">${actionCell}</td>
     </tr>`;
   }).join('');
 
@@ -11449,7 +11505,11 @@ function renderTSDayBody(ds){
               ? `<span style="font-size:10px;color:var(--t3)">Public holiday — manage via Settings</span>`
               : String(r.s.id).startsWith('sk-')
                 ? `<span style="font-size:10px;color:var(--t3)">Sick day — manage via Sick Days</span>`
-                : `<button class="btn btn-sm btn-danger" onclick="deleteTimesheetDay('${empKey}','${dateKey}','${escHTML((r.emp?r.emp.first+' '+r.emp.last:'this employee'))}')">🗑 Delete day</button>`
+                : String(r.s.id).startsWith('lv-')
+                  ? (r.isLeave?.id
+                    ? `<button class="btn btn-sm btn-danger" onclick="deleteTSByEmpLeave('${r.isLeave.id}','${empKey}')">🗑 Cancel leave request</button>`
+                    : `<span style="font-size:10px;color:var(--t3)">Approved leave — manage via Leave &amp; Sick</span>`)
+                  : `<button class="btn btn-sm btn-danger" onclick="deleteTimesheetDay('${empKey}','${dateKey}','${escHTML((r.emp?r.emp.first+' '+r.emp.last:'this employee'))}')">🗑 Delete day</button>`
             }
           </div>
         </div>
@@ -11588,6 +11648,22 @@ function buildTSEmployeeRows(ws, we){
     days.push(FD(d));
   }
 
+  // buildTSRows synthesizes a placeholder shift (ids prefixed 'lv-'/'sk-'/
+  // 'ph-') for a day with no real roster shift — an approved full-day leave
+  // request, a sick day with nothing rostered, or an auto-applied public
+  // holiday. None of these have a real "shifts" row behind them, so
+  // "deleting the shift" is a no-op for them — the actual record to remove
+  // lives in leaveRequests/sickDays/publicHolidays instead (or, for a public
+  // holiday, nowhere per-employee at all). rowKind tells the UI which
+  // delete action (if any) actually does something for a given row.
+  const rowKindForShiftId = id => {
+    const s = String(id || '');
+    if(s.startsWith('lv-')) return 'leave-request';
+    if(s.startsWith('sk-')) return 'sick-noshift';
+    if(s.startsWith('ph-')) return 'public-holiday';
+    return 'shift';
+  };
+
   const cleanType = v => {
     const t = String(v || '').toLowerCase();
     if(t.includes('public holiday')) return 'Annual Leave (Public Holiday)';
@@ -11643,7 +11719,10 @@ function buildTSEmployeeRows(ws, we){
           start: otStart,
           end: otEnd,
           hrs: ROUND30(r.otHrs),
-          notes: (r.custom && r.custom.otOverride !== null && r.custom.otOverride !== undefined) ? 'OT manually set by manager' : ''
+          notes: (r.custom && r.custom.otOverride !== null && r.custom.otOverride !== undefined) ? 'OT manually set by manager' : '',
+          rowKind: 'ot',
+          empId,
+          otRequestId: r.approvedOT?.id || null
         });
       }
 
@@ -11691,7 +11770,10 @@ function buildTSEmployeeRows(ws, we){
           start: r.s?.start || '',
           end: r.s?.end || '',
           hrs: cappedHrs,
-          notes
+          notes,
+          rowKind: rowKindForShiftId(r.s?.id),
+          empId,
+          leaveRequestId: r.isLeave?.id || null
         });
         return;
       }
@@ -11721,7 +11803,10 @@ function buildTSEmployeeRows(ws, we){
           start: rosteredStart,
           end: splitPoint,
           hrs: excessHrs,
-          notes: 'Auto-split — hours above the ordinary hours/day setting'
+          notes: 'Auto-split — hours above the ordinary hours/day setting',
+          rowKind: 'shift',
+          empId,
+          shiftId: r.s?.id || ''
         });
         byEmp[empId].push({
           date: ds,
@@ -11731,7 +11816,10 @@ function buildTSEmployeeRows(ws, we){
           start: splitPoint,
           end: rosteredEnd,
           hrs: ordinaryHoursPerDay,
-          notes
+          notes,
+          rowKind: 'shift',
+          empId,
+          shiftId: r.s?.id || ''
         });
         return;
       }
@@ -11747,6 +11835,7 @@ function buildTSEmployeeRows(ws, we){
         rosteredHrs: ROUND30(Number(r.sHrs || 0)),
         notes,
         editable: true,
+        rowKind: rowKindForShiftId(r.s?.id),
         empId,
         shiftId: r.s?.id || '',
         customStart: r.custom?.customStart || '',
@@ -11776,7 +11865,10 @@ function buildTSEmployeeRows(ws, we){
       start: o.start || '',
       end: o.end || '',
       notes: '',
-      hrs
+      hrs,
+      rowKind: 'ot',
+      empId,
+      otRequestId: o.id || null
     });
   });
 

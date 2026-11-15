@@ -1244,21 +1244,32 @@ function isPublishedShift(shift){
       <div class="ph">
         <h2>Timesheets</h2>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+          <div style="display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden">
+            <button class="btn btn-sm" id="ts-view-day-btn" style="border:none;border-radius:0" onclick="setTSViewMode('day')">By Day</button>
+            <button class="btn btn-sm" id="ts-view-emp-btn" style="border:none;border-radius:0;border-left:1px solid var(--border)" onclick="setTSViewMode('employee')">By Employee</button>
+          </div>
           <select id="ts-week" style="width:auto;font-size:13px" onchange="renderTS()"></select>
           <button class="btn btn-primary" onclick="exportCSV()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export CSV</button>
         </div>
       </div>
       <div id="ts-summary" style="display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin-bottom:14px"></div>
-      <!-- Day tabs -->
-      <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0;overflow-x:auto" id="ts-day-tabs"></div>
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:10px 0" id="ts-approve-all-wrap">
-        <div id="ts-selected-date" style="font-family:var(--font-serif);font-size:19px;color:var(--text)"></div>
-        <button class="btn btn-sm btn-success" onclick="approveAllForDay()">✓ Approve all for this day</button>
+      <div id="ts-day-view-wrap">
+        <!-- Day tabs -->
+        <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:0;overflow-x:auto" id="ts-day-tabs"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:10px 0" id="ts-approve-all-wrap">
+          <div id="ts-selected-date" style="font-family:var(--font-serif);font-size:19px;color:var(--text)"></div>
+          <button class="btn btn-sm btn-success" onclick="approveAllForDay()">✓ Approve all for this day</button>
+        </div>
+        <!-- Per-day card list — one card per employee, essentials up front,
+             everything else tucked behind a "Details" toggle so this page
+             doesn't force horizontal scrolling through 20-odd columns. -->
+        <div id="ts-body" style="margin-top:0"></div>
       </div>
-      <!-- Per-day card list — one card per employee, essentials up front,
-           everything else tucked behind a "Details" toggle so this page
-           doesn't force horizontal scrolling through 20-odd columns. -->
-      <div id="ts-body" style="margin-top:0"></div>
+      <!-- Per-employee fortnight table — mirrors the exported CSV's layout
+           (Date/Day/Type/Start/End/Rostered Hrs/Hours/Notes + a TOTAL row
+           per employee) so what you see here matches what gets exported,
+           with the TOTAL row recalculating live as hours are edited. -->
+      <div id="ts-byemp-body" style="display:none;margin-top:6px"></div>
     </div>
 
     <!-- TEAM CALENDAR -->
@@ -9730,6 +9741,7 @@ function renderCalendar(){
 // TIMESHEETS
 // ── TIMESHEET DATA ─────────────────────────────────────────────
 let tsDayIndex = 0; // currently selected day tab (0=Mon...Sun across the selected 14-day cycle)
+let tsViewMode = 'day'; // 'day' = per-day card list, 'employee' = per-employee fortnight table (mirrors the CSV export)
 const PAY_CYCLE_ANCHOR = new Date(2026, 5, 1); // 01.06.2026 – 14.06.2026
 
 function getRollingPayCycleStart(date){
@@ -10939,6 +10951,140 @@ function renderTS(){
   const initialDs = days[tsDayIndex] || days[0];
   updateTSSelectedDateLabel(initialDs);
   renderTSDayBody(initialDs);
+
+  syncTSViewModeButtons();
+  if(tsViewMode === 'employee') renderTSByEmployee();
+}
+
+// Switches between the per-day card list and the per-employee fortnight
+// table. The employee view is rebuilt fresh from buildTSEmployeeRows each
+// time it's shown, so it always reflects the latest saved hours/approvals.
+function setTSViewMode(mode){
+  tsViewMode = mode;
+  syncTSViewModeButtons();
+  const dayWrap = document.getElementById('ts-day-view-wrap');
+  const empWrap = document.getElementById('ts-byemp-body');
+  if(dayWrap) dayWrap.style.display = mode === 'day' ? '' : 'none';
+  if(empWrap) empWrap.style.display = mode === 'employee' ? '' : 'none';
+  if(mode === 'employee') renderTSByEmployee();
+}
+
+function syncTSViewModeButtons(){
+  const dayBtn = document.getElementById('ts-view-day-btn');
+  const empBtn = document.getElementById('ts-view-emp-btn');
+  if(dayBtn) dayBtn.classList.toggle('btn-primary', tsViewMode === 'day');
+  if(empBtn) empBtn.classList.toggle('btn-primary', tsViewMode === 'employee');
+}
+
+// ── TIMESHEETS: BY-EMPLOYEE FORTNIGHT TABLE ────────────────────────────
+// Mirrors the CSV/XLSX export's layout exactly (same buildTSEmployeeRows
+// data) — Date/Day/Type/Start/End/Rostered Hrs/Hours/Notes per row, plus a
+// TOTAL row per employee that recalculates immediately when an Hours cell
+// is edited, so what's on screen always matches what gets exported.
+function currentTSRange(){
+  const sv = document.getElementById('ts-week')?.value;
+  if(!sv) return null;
+  const wkS = new Date(sv);
+  if(isNaN(wkS.getTime())) return null;
+  const wkE = new Date(wkS);
+  wkE.setDate(wkE.getDate() + 13);
+  return { ws: FD(wkS), we: FD(wkE) };
+}
+
+function tsByEmpSectionHTML(emp, empRows){
+  const empId = String(emp.id);
+  const rows = empRows.slice().sort((a,b)=>(a.date||'').localeCompare(b.date||'') || (a.start||'').localeCompare(b.start||''));
+
+  const rowsHTML = rows.map(r => {
+    const hoursCell = r.editable
+      ? `<input type="number" step="0.25" min="0" class="custom-hrs-input" style="width:64px;font-weight:700;text-align:center" value="${Number(r.hrs||0).toFixed(2)}" onchange="updateTSByEmpHours('${empId}','${r.date}',this.value)" title="Type an exact hours value directly">`
+      : `<span style="font-weight:700">${Number(r.hrs||0).toFixed(2)}</span>`;
+    const discBadge = r.hasHoursDiscrepancy
+      ? `<span class="review-badge" title="${escHTML(r.discrepancyReason||'')}" style="margin-left:6px">⚠</span>`
+      : '';
+    return `<tr style="${r.hasHoursDiscrepancy?'background:var(--rl)':''}">
+      <td style="padding:5px 8px">${r.date}</td>
+      <td style="padding:5px 8px">${r.day}</td>
+      <td style="padding:5px 8px">${r.type}</td>
+      <td style="padding:5px 8px">${r.start||'—'}</td>
+      <td style="padding:5px 8px">${r.end||'—'}</td>
+      <td style="padding:5px 8px;text-align:center">${r.rosteredHrs!==undefined?Number(r.rosteredHrs).toFixed(2):'—'}</td>
+      <td style="padding:5px 8px;text-align:center">${hoursCell}${discBadge}</td>
+      <td style="padding:5px 8px;font-size:11px;color:var(--t2)">${escHTML(r.notes||'')}</td>
+    </tr>`;
+  }).join('');
+
+  const ordinary = rows.filter(r=>r.summaryType === 'Ordinary').reduce((t,r)=>t+Number(r.hrs||0),0);
+  const weekend = rows.filter(r=>r.summaryType === 'Weekend').reduce((t,r)=>t+Number(r.hrs||0),0);
+  const ot = rows.filter(r=>r.summaryType === 'OT').reduce((t,r)=>t+Number(r.hrs||0),0);
+  const leave = rows.filter(r=>['Annual Leave','Annual Leave (Public Holiday)','Sick','Personal Leave','Unpaid Leave','Leave'].includes(r.summaryType)).reduce((t,r)=>t+Number(r.hrs||0),0);
+  const total = ordinary + weekend + ot + leave;
+  const discrepancyCount = rows.filter(r=>r.hasHoursDiscrepancy).length;
+
+  return `
+    <div class="staff-card" style="margin-bottom:14px;overflow:hidden">
+      <div style="padding:10px 14px;font-weight:700;font-size:14px;background:var(--s2);border-bottom:1px solid var(--border)">${emp.first} ${emp.last}</div>
+      ${rows.length ? `
+      <table class="ts-byemp-table" style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="background:var(--s1);text-align:left">
+            <th style="padding:6px 8px">Date</th>
+            <th style="padding:6px 8px">Day</th>
+            <th style="padding:6px 8px">Type</th>
+            <th style="padding:6px 8px">Start</th>
+            <th style="padding:6px 8px">End</th>
+            <th style="padding:6px 8px;text-align:center">Rostered Hrs</th>
+            <th style="padding:6px 8px;text-align:center">Hours</th>
+            <th style="padding:6px 8px">Notes</th>
+          </tr>
+        </thead>
+        <tbody>${rowsHTML}</tbody>
+        <tfoot>
+          <tr style="background:var(--s2);font-weight:700">
+            <td style="padding:6px 8px">TOTAL</td>
+            <td></td>
+            <td style="font-weight:600;font-size:11px" colspan="3">Ordinary ${ordinary.toFixed(2)}h | Weekend ${weekend.toFixed(2)}h | OT ${ot.toFixed(2)}h | Leave ${leave.toFixed(2)}h</td>
+            <td></td>
+            <td style="text-align:center" id="ts-byemp-total-${empId}">${total.toFixed(2)}</td>
+            <td style="font-size:11px;color:var(--rd)">${discrepancyCount?`⚠ ${discrepancyCount} day${discrepancyCount>1?'s':''} to review`:''}</td>
+          </tr>
+        </tfoot>
+      </table>
+      ` : `<div style="padding:16px;color:var(--t2);font-size:12px">No shifts this fortnight.</div>`}
+    </div>
+  `;
+}
+
+function renderTSByEmployee(){
+  const range = currentTSRange();
+  const body = document.getElementById('ts-byemp-body');
+  if(!range || !body) return;
+
+  const { staffAll, byEmp } = buildTSEmployeeRows(range.ws, range.we);
+
+  body.innerHTML = staffAll.map(emp =>
+    `<div id="ts-byemp-emp-${emp.id}">${tsByEmpSectionHTML(emp, byEmp[String(emp.id)] || [])}</div>`
+  ).join('');
+}
+
+// Rebuilds just one employee's table (and its TOTAL row) after an edit,
+// instead of re-rendering the whole fortnight — so the reconciled total
+// shows immediately without disturbing anyone else's in-progress edits.
+function renderTSByEmpSection(empId){
+  const range = currentTSRange();
+  const wrap = document.getElementById(`ts-byemp-emp-${empId}`);
+  if(!range || !wrap) return;
+
+  const { staffAll, byEmp } = buildTSEmployeeRows(range.ws, range.we);
+  const emp = staffAll.find(e => String(e.id) === String(empId));
+  if(!emp) return;
+
+  wrap.innerHTML = tsByEmpSectionHTML(emp, byEmp[String(empId)] || []);
+}
+
+async function updateTSByEmpHours(empId, date, val){
+  await updateCustomHrs(empId, date, val);
+  renderTSByEmpSection(empId);
 }
 
 // Big, unambiguous "which date am I looking at" label above the card list —
@@ -11207,37 +11353,12 @@ function viewPhoto(inPhoto,outPhoto){
   </div>`;OM('m-photo-view');
 }
 
-function exportCSV(){
-  const sv = document.getElementById('ts-week')?.value;
-
-  if(!sv){
-    alert('Please select the Monday starting the fortnight first.');
-    return;
-  }
-
-  if(typeof XLSX === 'undefined'){
-    alert('Excel export library has not loaded. Please refresh and try again.');
-    return;
-  }
-
-const wkS = new Date(sv);
-
-if(isNaN(wkS.getTime())){
-  alert('Invalid fortnight date selected. Please refresh the page and select the fortnight again.');
-  return;
-}
-
-const wkE = new Date(wkS);
-wkE.setDate(wkE.getDate() + 13);
-
-  const ws = FD(wkS);
-  const we = FD(wkE);
-
-  const shortDate = d =>
-    String(d.getDate()).padStart(2,'0') + '.' +
-    String(d.getMonth()+1).padStart(2,'0');
-
-  const fileLabel = `Dukasa Timesheet_${shortDate(wkS)} - ${shortDate(wkE)}`;
+// Shared row-building logic behind the "By Employee" fortnight table on the
+// Timesheets page and the CSV/XLSX export — both consume this exact same
+// data so what's shown on screen always matches what gets exported, with no
+// divergent logic to drift out of sync and cause discrepancies.
+function buildTSEmployeeRows(ws, we){
+  const wkS = new Date(ws);
 
   const exportSettings = DB.get('settings') || {};
   const ordinaryHoursPerDay = parseFloat(exportSettings.ordinaryHoursPerDay) || 7.5;
@@ -11257,12 +11378,12 @@ wkE.setDate(wkE.getDate() + 13);
   const staffById = {};
   staffAll.forEach(s => staffById[String(s.id)] = s);
 
-const days = [];
-for(let i = 0; i < 14; i++){
-  const d = new Date(wkS);
-  d.setDate(d.getDate() + i);
-  days.push(FD(d));
-}
+  const days = [];
+  for(let i = 0; i < 14; i++){
+    const d = new Date(wkS);
+    d.setDate(d.getDate() + i);
+    days.push(FD(d));
+  }
 
   const cleanType = v => {
     const t = String(v || '').toLowerCase();
@@ -11392,6 +11513,8 @@ for(let i = 0; i < 14; i++){
         hrs: rawHrs,
         rosteredHrs: ROUND30(Number(r.sHrs || 0)),
         notes,
+        editable: true,
+        empId,
         hasHoursDiscrepancy: !!r.hasHoursDiscrepancy,
         discrepancyReason: r.discrepancyReason || ''
       });
@@ -11417,6 +11540,43 @@ for(let i = 0; i < 14; i++){
       hrs
     });
   });
+
+  return { staffAll, staffById, byEmp, ordinaryHoursPerDay, cleanType, isWeekendDay, dayLabel };
+}
+
+function exportCSV(){
+  const sv = document.getElementById('ts-week')?.value;
+
+  if(!sv){
+    alert('Please select the Monday starting the fortnight first.');
+    return;
+  }
+
+  if(typeof XLSX === 'undefined'){
+    alert('Excel export library has not loaded. Please refresh and try again.');
+    return;
+  }
+
+const wkS = new Date(sv);
+
+if(isNaN(wkS.getTime())){
+  alert('Invalid fortnight date selected. Please refresh the page and select the fortnight again.');
+  return;
+}
+
+const wkE = new Date(wkS);
+wkE.setDate(wkE.getDate() + 13);
+
+  const ws = FD(wkS);
+  const we = FD(wkE);
+
+  const shortDate = d =>
+    String(d.getDate()).padStart(2,'0') + '.' +
+    String(d.getMonth()+1).padStart(2,'0');
+
+  const fileLabel = `Dukasa Timesheet_${shortDate(wkS)} - ${shortDate(wkE)}`;
+
+  const { staffAll, staffById, byEmp, ordinaryHoursPerDay, dayLabel } = buildTSEmployeeRows(ws, we);
 
   const aoa = [];
   const rowMeta = [];

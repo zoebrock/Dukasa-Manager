@@ -6029,17 +6029,32 @@ function openBulkOTModal(){
   OM('m-bulk-ot');
 }
 
+// Default OT window for a freshly-added row. A new row carries forward
+// whatever start/end the LAST existing row currently has (not always this
+// fixed default) — otherwise, adding another staff member after already
+// typing in a different time for the first row would silently reset back to
+// this default on every new row, which looked like "my entered hours aren't
+// being reflected" even though saveBulkOT does read each row's live value.
+const BULK_OT_DEFAULT_START='08:00';
+const BULK_OT_DEFAULT_END='09:00';
+
 function addBulkOTRow(){
   const staff=[...(DB.get('staff')||[])].sort((a,b)=>a.first.localeCompare(b.first)||a.last.localeCompare(b.last));
   const container=document.getElementById('bulk-ot-rows');
+
+  const existingRows=container.querySelectorAll('.bulk-ot-row');
+  const lastRow=existingRows[existingRows.length-1];
+  const startVal=lastRow?.querySelector('.bulk-ot-start')?.value || BULK_OT_DEFAULT_START;
+  const endVal=lastRow?.querySelector('.bulk-ot-end')?.value || BULK_OT_DEFAULT_END;
+
   const row=document.createElement('div');
   row.className='bulk-ot-row';
   row.style.cssText='display:grid;grid-template-columns:1.6fr 1fr 0.8fr 0.8fr auto;gap:6px;align-items:end;border:1px solid var(--border);border-radius:var(--rsm);padding:8px';
   row.innerHTML=`
     <div><label style="font-size:11px">Staff</label><select class="bulk-ot-emp">${staff.map(s=>`<option value="${s.id}">${escHTML(s.first+' '+s.last)}</option>`).join('')}</select></div>
     <div><label style="font-size:11px">Date</label><input type="date" class="bulk-ot-date" value="${FD(new Date())}"></div>
-    <div><label style="font-size:11px">Start</label><input type="time" class="bulk-ot-start" value="17:00"></div>
-    <div><label style="font-size:11px">End</label><input type="time" class="bulk-ot-end" value="19:00"></div>
+    <div><label style="font-size:11px">Start</label><input type="time" class="bulk-ot-start" value="${startVal}"></div>
+    <div><label style="font-size:11px">End</label><input type="time" class="bulk-ot-end" value="${endVal}"></div>
     <button class="btn btn-sm btn-danger" type="button" onclick="this.closest('.bulk-ot-row').remove()">✕</button>
   `;
   container.appendChild(row);

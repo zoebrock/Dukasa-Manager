@@ -3894,7 +3894,14 @@ function buildRosterDayHTML(emp,ds,dname,shifts,leaveReqs,sickDays,otReqs,unavai
         ? `${s.start}–${s.end} · OT added`
         : `${s.start}–${s.end}`;
     const otAnns=isPartialLeave?[]:((s.otAnnotations&&s.otAnnotations.length)?s.otAnnotations:(dayShifts.length===1?hasOT:[]));
-    const otBadge=otAnns.length?`<span class="chip chip-ot chip-small" style="margin-top:2px">+OT</span>`:'';
+    // One badge per approved OT slot — a shift with two separate OT windows
+    // (e.g. an early-morning slot and a late-finish slot) previously only
+    // ever showed a single generic "+OT" badge regardless of how many slots
+    // were actually approved, so a second slot was invisible on the roster
+    // even though it was correctly reflected in the shift popup.
+    const otBadge=otAnns.length
+      ? otAnns.map(a=>`<span class="chip chip-ot chip-small" style="margin-top:2px" title="Approved OT">OT ${a.start}–${a.end}</span>`).join('')
+      : '';
     const availabilityConflict=!isShiftWithinAvailability(emp,dname,s.start,s.end);
     const availabilityBadge=availabilityConflict?`<span class="chip chip-unavail chip-small" style="margin-top:2px">Outside availability</span>`:'';
     const anticipatedBadge=anticipated?`<span class="chip chip-anticipated chip-small" style="margin-top:2px" title="${anticipated.note?escHTML(anticipated.note):'Anticipated unavailability'}">⚠ Anticipated unavailable</span>`:'';

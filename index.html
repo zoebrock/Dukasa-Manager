@@ -1196,7 +1196,7 @@ function isPublishedShift(shift){
       <div class="ph">
         <h2>Leave &amp; Sick management</h2>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-sm" onclick="openALForecastModal()">📧 Weekly AL Forecast</button>
+          <button class="btn btn-sm" onclick="openALForecastModal()">📧 Weekly Leave Forecast</button>
           <button class="btn btn-primary btn-sm" onclick="openAddLeaveModal()">+ Add leave request</button>
         </div>
       </div>
@@ -1753,7 +1753,7 @@ function isPublishedShift(shift){
 
 <div class="modal-overlay" id="m-al-forecast">
   <div class="modal" style="max-width:680px">
-    <div class="mh"><h2>Weekly Annual Leave Forecast</h2><button class="xbtn" onclick="CM('m-al-forecast')">×</button></div>
+    <div class="mh"><h2>Weekly Leave Forecast</h2><button class="xbtn" onclick="CM('m-al-forecast')">×</button></div>
     <div class="fg">
       <div class="fr"><label>Week starting (Monday)</label><input type="date" id="al-forecast-week" onchange="renderALForecastPreview()"></div>
     </div>
@@ -1769,11 +1769,11 @@ function isPublishedShift(shift){
 <div class="modal-overlay" id="m-al-forecast-reminder">
   <div class="modal" style="max-width:480px;text-align:center;padding:36px 32px">
     <div style="font-size:42px;margin-bottom:10px">📧</div>
-    <h2 style="font-size:20px;margin-bottom:10px">Send this week's AL Forecast</h2>
-    <div style="font-size:13px;color:var(--t2);margin-bottom:22px;line-height:1.5">It's Monday morning — the Weekly Annual Leave Forecast for next week hasn't been sent yet. Helena, Antigone, Valerie and the Pharmacist inbox are expecting it.</div>
+    <h2 style="font-size:20px;margin-bottom:10px">Send this week's Leave Forecast</h2>
+    <div style="font-size:13px;color:var(--t2);margin-bottom:22px;line-height:1.5">It's Monday morning — the Weekly Leave Forecast for next week hasn't been sent yet. Helena, Antigone, Valerie and the Pharmacist inbox are expecting it.</div>
     <div style="display:flex;gap:8px;justify-content:center">
       <button class="btn" onclick="dismissALForecastReminder()">Dismiss for this week</button>
-      <button class="btn btn-primary" onclick="CM('m-al-forecast-reminder');openALForecastModal()">Open AL Forecast</button>
+      <button class="btn btn-primary" onclick="CM('m-al-forecast-reminder');openALForecastModal()">Open Leave Forecast</button>
     </div>
   </div>
 </div>
@@ -6658,6 +6658,7 @@ function buildWeeklyALForecastData_(weekStartDs){
   const staff = DB.get('staff') || [];
   const shifts = DB.get('shifts') || [];
   const leaveReqs = (DB.get('leaveRequests') || []).map(normaliseLeaveRequestRow);
+  const sickDays = DB.get('sickDays') || [];
   const otReqs = DB.get('otRequests') || [];
 
   const days = [];
@@ -6666,8 +6667,11 @@ function buildWeeklyALForecastData_(weekStartDs){
     const d = new Date(start); d.setDate(start.getDate() + i);
     const ds = FD(d);
 
-    const leaveToday = leaveReqs
-      .filter(l => l.type === 'Annual Leave' && l.status === 'approved' && l.from && l.to && l.from <= ds && l.to >= ds)
+    // All approved leave types count here, not just Annual Leave — Personal,
+    // Unpaid and Sick all take someone off the roster the same way, and the
+    // whole point of this forecast is to flag staffing gaps for the week.
+    const leaveFromRequests = leaveReqs
+      .filter(l => l.status === 'approved' && l.from && l.to && l.from <= ds && l.to >= ds)
       .map(l => {
         const emp = staff.find(s => s.id === l.empId);
         const isPartial = l.requestKind === 'partial_day' && l.partialStart && l.partialEnd;
@@ -6675,11 +6679,31 @@ function buildWeeklyALForecastData_(weekStartDs){
           empId: l.empId,
           name: emp ? (emp.first + ' ' + emp.last) : 'Unknown staff',
           role: emp ? emp.role : '',
+          leaveType: l.type || 'Annual Leave',
           isPartial,
           start: isPartial ? l.partialStart : null,
           end: isPartial ? l.partialEnd : null
         };
-      })
+      });
+
+    // Sick days are recorded separately from leaveRequests (no approval step
+    // of their own) — still someone off the roster, so still belongs here.
+    const leaveFromSick = sickDays
+      .filter(sk => sk.date === ds)
+      .map(sk => {
+        const emp = staff.find(s => s.id === sk.empId);
+        return {
+          empId: sk.empId,
+          name: emp ? (emp.first + ' ' + emp.last) : 'Unknown staff',
+          role: emp ? emp.role : '',
+          leaveType: 'Sick',
+          isPartial: false,
+          start: null,
+          end: null
+        };
+      });
+
+    const leaveToday = [...leaveFromRequests, ...leaveFromSick]
       .sort((a, b) => a.name.localeCompare(b.name));
 
     const dayShifts = shifts.filter(s => s.date === ds && s.published && !(s.entryType === 'leave' || s.entry_type === 'leave'));
@@ -6708,9 +6732,9 @@ function buildWeeklyALForecastData_(weekStartDs){
 }
 
 function alForecastImpactLine_(day){
-  if (!day.leaveToday.length) return 'No annual leave scheduled — full team expected.';
+  if (!day.leaveToday.length) return 'No leave scheduled — full team expected.';
   const parts = [];
-  parts.push(`${day.leaveToday.length} staff member${day.leaveToday.length > 1 ? 's' : ''} on approved annual leave.`);
+  parts.push(`${day.leaveToday.length} staff member${day.leaveToday.length > 1 ? 's' : ''} on approved leave.`);
   if (day.pharmacistsOnLeave.length) {
     if (day.pharmacistsRosteredCount === 0) {
       parts.push(`⚠ No Pharmacist currently rostered this day despite ${day.pharmacistsOnLeave.length} Pharmacist${day.pharmacistsOnLeave.length > 1 ? 's' : ''} on leave — needs cover.`);
@@ -6729,8 +6753,8 @@ function alForecastImpactLine_(day){
 function buildALForecastEmailHTML_(days, weekStartDs, weekEndDs){
   const dayBlocks = days.map(day => {
     const leaveRows = day.leaveToday.length ? day.leaveToday.map(l => `
-      <li>${escHTML(l.name)}${l.role ? ` (${escHTML(l.role)})` : ''} — ${l.isPartial ? `Partial day, ${escHTML(l.start)}–${escHTML(l.end)}` : 'Full day'}</li>
-    `).join('') : '<li style="color:#777">No annual leave scheduled</li>';
+      <li>${escHTML(l.name)}${l.role ? ` (${escHTML(l.role)})` : ''} — ${escHTML(l.leaveType || 'Annual Leave')}${l.isPartial ? `, partial day ${escHTML(l.start)}–${escHTML(l.end)}` : ' (full day)'}</li>
+    `).join('') : '<li style="color:#777">No leave scheduled</li>';
 
     const otRows = day.otToday.length ? day.otToday.map(o => `
       <li>${escHTML(o.name)} — ${escHTML(o.start || '')}–${escHTML(o.end || '')}${o.reason ? ` (${escHTML(o.reason)})` : ''}</li>
@@ -6740,7 +6764,7 @@ function buildALForecastEmailHTML_(days, weekStartDs, weekEndDs){
       <div style="margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #e2dcc9">
         <div style="font-size:15px;font-weight:700;color:#181816;margin-bottom:6px">${escHTML(day.dateLabel)}</div>
         <div style="font-size:12.5px;color:#58584e;margin-bottom:8px">${escHTML(alForecastImpactLine_(day))}</div>
-        <div style="font-size:12.5px;margin-bottom:6px"><strong>On annual leave:</strong><ul style="margin:4px 0 0 18px;padding:0">${leaveRows}</ul></div>
+        <div style="font-size:12.5px;margin-bottom:6px"><strong>On leave:</strong><ul style="margin:4px 0 0 18px;padding:0">${leaveRows}</ul></div>
         <div style="font-size:12.5px"><strong>OT scheduled:</strong><ul style="margin:4px 0 0 18px;padding:0">${otRows}</ul></div>
       </div>
     `;
@@ -6748,7 +6772,7 @@ function buildALForecastEmailHTML_(days, weekStartDs, weekEndDs){
 
   return `
     <div style="font-family:Georgia,serif;max-width:620px;margin:0 auto">
-      <h2 style="font-size:19px;color:#181816;margin-bottom:4px">Weekly Annual Leave Forecast</h2>
+      <h2 style="font-size:19px;color:#181816;margin-bottom:4px">Weekly Leave Forecast</h2>
       <div style="font-size:13px;color:#58584e;margin-bottom:18px">${escHTML(FDL(weekStartDs))} – ${escHTML(FDL(weekEndDs))}</div>
       ${dayBlocks}
       <div style="font-size:11px;color:#98988f;margin-top:10px">Generated automatically from the Dukasa Manager Portal roster, leave, and OT records.</div>
@@ -6774,7 +6798,7 @@ async function sendALForecastEmail(){
   const html = buildALForecastEmailHTML_(days, weekStartDs, weekEndDs);
   const totalOnLeave = days.reduce((sum, d) => sum + d.leaveToday.length, 0);
 
-  if (!confirm(`Send the Weekly Annual Leave Forecast (${FDS(weekStartDs)}–${FDS(weekEndDs)}) to helena@dukasa.com.au, antigone@dukasa.com.au, valerie@dukasa.com.au and pharmacist@dukasa.com.au?`)) return;
+  if (!confirm(`Send the Weekly Leave Forecast (${FDS(weekStartDs)}–${FDS(weekEndDs)}) to helena@dukasa.com.au, antigone@dukasa.com.au, valerie@dukasa.com.au and pharmacist@dukasa.com.au?`)) return;
 
   const btn = document.getElementById('al-forecast-send-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
@@ -6785,7 +6809,7 @@ async function sendALForecastEmail(){
       fn: 'sendWeeklyALForecastEmail',
       payload: {
         recipients: AL_FORECAST_RECIPIENTS,
-        subject: `Weekly Annual Leave Forecast — ${FDS(weekStartDs)} to ${FDS(weekEndDs)}`,
+        subject: `Weekly Leave Forecast — ${FDS(weekStartDs)} to ${FDS(weekEndDs)}`,
         html,
         weekStart: weekStartDs,
         weekEnd: weekEndDs,
@@ -6799,7 +6823,7 @@ async function sendALForecastEmail(){
 
     CM('m-al-forecast');
     CM('m-al-forecast-reminder');
-    toast('Weekly AL Forecast sent.', 'success');
+    toast('Weekly Leave Forecast sent.', 'success');
   } catch (err) {
     console.error('AL forecast email failed:', err);
     alert('Could not send the forecast email: ' + (err.message || err));

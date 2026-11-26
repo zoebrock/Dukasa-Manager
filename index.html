@@ -7494,6 +7494,7 @@ async function approveOT(id, opts = {}){
     return;
   }
   let shifts = DB.get('shifts') || [];
+  let duplicateCleanupFailed = false;
 
   // Normalise IDs to strings before comparison — Supabase can return numeric IDs
   // while the local cache may have them as strings, causing bare === to miss the match
@@ -7556,9 +7557,18 @@ if (shiftIdx >= 0) {
 
   // Remove any legacy standalone row for this OT now that it is represented on
   // the canonical ordinary shift. Otherwise the clock can see two shifts.
+  // This is tidy-up, not the point of approving — a leftover duplicate that
+  // fails to delete (e.g. an old row Supabase's delete policy won't allow)
+  // shouldn't abort the approval itself and leave otRequests/shifts out of
+  // sync with each other. Warn instead and let the approval go through.
   const duplicateOTRows = shifts.filter(x => x.isOT && String(x.otId ?? '') === String(id));
   for (const duplicate of duplicateOTRows) {
-    await deleteSupabaseRow('shifts', duplicate.id);
+    try {
+      await deleteSupabaseRow('shifts', duplicate.id);
+    } catch(cleanupErr) {
+      console.warn('Could not remove legacy standalone OT shift row', duplicate.id, cleanupErr);
+      duplicateCleanupFailed = true;
+    }
   }
   shifts = shifts.filter(x => !(x.isOT && String(x.otId ?? '') === String(id)));
   CACHE['rx3_shifts'] = shifts;
@@ -7627,6 +7637,9 @@ if (shiftIdx >= 0) {
   }
 }
   renderOT();renderRoster();renderDashboard();
+  if (duplicateCleanupFailed && typeof toast === 'function') {
+    toast('OT approved, but a leftover duplicate shift row could not be removed from the roster — may need manual cleanup.', 'error', 8000);
+  }
 if (opts.fromReconcile) return;
 notify('ot_decision', {
   sendToStaff: true,
@@ -7846,7 +7859,16 @@ async function reverseOTFromShift(otId, empId, date){
   );
 
   if(standalone){
-    await deleteSupabaseRow('shifts', standalone.id);
+    // Same reasoning as approveOT's duplicate-row cleanup — removing the
+    // standalone shift row is tidy-up for this reversal, not the point of
+    // it. A failure here (e.g. a restrictive delete policy on shifts)
+    // shouldn't block denying/deleting the OT request itself.
+    try {
+      await deleteSupabaseRow('shifts', standalone.id);
+    } catch(err) {
+      console.warn('Could not remove standalone OT shift row', standalone.id, err);
+      if(typeof toast === 'function') toast('OT reversed, but a leftover shift row could not be removed from the roster — may need manual cleanup.', 'error', 8000);
+    }
     shifts = shifts.filter(s => s.id !== standalone.id);
     CACHE['rx3_shifts'] = shifts;
     return;

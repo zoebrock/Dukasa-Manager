@@ -1723,9 +1723,12 @@ function isPublishedShift(shift){
     <div class="fr"><label>Reason / justification</label><textarea id="ot-reason" rows="2" placeholder="Why is OT required?"></textarea></div>
     <div class="fr"><label>Task / what they'll be doing</label><textarea id="ot-task" rows="2" placeholder="Describe the work..."></textarea></div>
     <div class="nr"><span style="font-size:12px">Availability confirmed?</span><button class="toggle" id="tog-ot-avail" onclick="this.classList.toggle('on')"></button></div>
-    <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">
-      <button class="btn" onclick="CM('m-ot')">Cancel</button>
-      <button class="btn btn-primary" onclick="saveOT()">Save OT request</button>
+    <div style="display:flex;gap:6px;justify-content:space-between;margin-top:12px">
+      <button class="btn btn-danger" id="ot-delete-btn" style="display:none" onclick="deleteOTFromModal()">Delete OT request</button>
+      <div style="display:flex;gap:6px;margin-left:auto">
+        <button class="btn" onclick="CM('m-ot')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveOT()">Save OT request</button>
+      </div>
     </div>
   </div>
 </div>
@@ -5982,6 +5985,8 @@ function openAddOTModal(id, prefillEmpId, prefillDate){
   const dateToRow = document.getElementById('ot-date-to-row');
   const addSlotBtn = document.getElementById('ot-add-slot-btn');
   document.getElementById('ot-slots').innerHTML='';
+  const delBtn = document.getElementById('ot-delete-btn');
+  if(delBtn) delBtn.style.display = id ? 'inline-flex' : 'none';
   if(id){
     const o=(DB.get('otRequests')||[]).find(x=>x.id===id);if(!o)return;
     document.getElementById('ot-modal-title').textContent='Edit OT request';
@@ -7764,6 +7769,20 @@ async function deleteOTFromDetail(){
   CM('m-ot-detail');
   viewingOTId = null;
 
+  await deleteOT(id);
+}
+
+// Lets an OT request be deleted straight from the Add/Edit OT modal — the
+// same modal opened both from the OT Tracker's "Edit" button and from the
+// roster's "Add or manage overtime", so this is the one place that now
+// covers deleting from either surface. Reuses deleteOT(), which already
+// confirms, reverses the shift if it was approved, and notifies the staff
+// member — works the same whether the request is pending, approved or denied.
+async function deleteOTFromModal(){
+  if(!editingOTId) return;
+  const id = editingOTId;
+  CM('m-ot');
+  editingOTId = null;
   await deleteOT(id);
 }
 

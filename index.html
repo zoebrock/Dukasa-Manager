@@ -4135,28 +4135,6 @@ document.addEventListener('keydown', function(event){
   }
 });
 
-  async function deleteSupabaseRow(k, id) {
-  const table = TABLE_MAP[k];
-  if (!table || !id) return;
-
-  _setSyncIndicator('saving');
-
-  try {
-    const { error } = await supabaseClient
-      .from(table)
-      .delete()
-      .eq('id', id);
-
-    if (error) throw error;
-
-    _setSyncIndicator('saved');
-  } catch (error) {
-    console.error('Supabase delete failed:', k, id, error);
-    _setSyncIndicator('error');
-    alert('Could not delete ' + k + ': ' + error.message);
-  }
-}
-  
 async function deleteShiftConfirm(shiftId) {
   viewingShiftId = shiftId;
   if (!confirm('Delete this shift? This cannot be undone.')) return;
@@ -5052,11 +5030,20 @@ async function deleteSupabaseRow(k, id) {
 
     if (error) throw error;
 
+    // A DELETE blocked by a Supabase RLS policy reports success with zero rows
+    // affected rather than an error, so the caller — and the optimistic local
+    // cache update right after it — has no idea the row is still there. Explicitly
+    // re-select it to catch that silently-blocked case instead of claiming success.
+    const verify = await supabaseClient.from(table).select('id').eq('id', id).maybeSingle();
+    if (verify.error && verify.error.code !== 'PGRST116') throw verify.error;
+    if (verify.data) throw new Error(`Supabase did not delete this ${k} record — check the delete policy on "${table}".`);
+
     _setSyncIndicator('saved');
   } catch (error) {
     console.error('Supabase delete failed:', k, id, error);
     _setSyncIndicator('error');
     alert('Could not delete ' + k + ': ' + error.message);
+    throw error;
   }
 }
 
@@ -7803,11 +7790,21 @@ async function deleteOT(id){
 
   const wasApproved = o.approved === true;
 
-  if(wasApproved){
-    await reverseOTFromShift(id, o.empId, o.date);
-  }
+  try{
+    if(wasApproved){
+      await reverseOTFromShift(id, o.empId, o.date);
+    }
 
-  await deleteSupabaseRow('otRequests', id);
+    // deleteSupabaseRow now verifies the row is actually gone (an RLS-blocked
+    // DELETE reports success with zero rows affected) and throws if not —
+    // without this try/catch, that left deleteOT updating the local cache and
+    // re-rendering as if the delete had worked, when the request would simply
+    // reappear on the next reload/sync because it was never actually removed.
+    await deleteSupabaseRow('otRequests', id);
+  } catch(err){
+    console.error('Delete OT failed:', err);
+    return;
+  }
 
   reqs = reqs.filter(x => x.id !== id);
   CACHE['rx3_otRequests'] = reqs;

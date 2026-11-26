@@ -5163,6 +5163,13 @@ async function deleteShift() {
         .eq('id', shiftIdToDelete);
 
       if (error) throw error;
+
+      // A delete blocked by an RLS policy reports success with zero rows
+      // affected rather than an error — verify the row is actually gone
+      // instead of taking a silent no-op as confirmation it worked.
+      const verify = await supabaseClient.from(table).select('id').eq('id', shiftIdToDelete).maybeSingle();
+      if (verify.error && verify.error.code !== 'PGRST116') throw verify.error;
+      if (verify.data) throw new Error(`Supabase did not delete this shift — check the delete policy on "${table}".`);
     }
 
     const shifts = (DB.get('shifts') || []).filter(
@@ -5270,6 +5277,19 @@ async function bulkDeleteShifts(ids, notifyStaff){
       .in('id', ids);
 
     if(error) throw error;
+
+    // Same RLS gotcha as deleteSupabaseRow — a delete blocked by policy reports
+    // success with zero rows affected, so without this check the shifts would
+    // look deleted here (and in CACHE) but reappear once the page re-syncs
+    // from Supabase, because they were never actually removed server-side.
+    const { data: stillThere, error: verifyError } = await supabaseClient
+      .from(TABLE_MAP['shifts'])
+      .select('id')
+      .in('id', ids);
+    if(verifyError) throw verifyError;
+    if(stillThere && stillThere.length){
+      throw new Error(`Supabase did not delete ${stillThere.length} of ${ids.length} shift(s) — check the delete policy on "${TABLE_MAP['shifts']}".`);
+    }
 
     const remaining = allShifts.filter(s => !strIds.includes(String(s.id)));
     CACHE['rx3_shifts'] = remaining;
